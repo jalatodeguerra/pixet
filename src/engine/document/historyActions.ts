@@ -45,6 +45,23 @@ export function performUndo(): void {
       return;
     }
   }
+  const nextKind = pixelEngine.undoCoordinator.peekUndo();
+  if (nextKind === "cells" || nextKind === "tileset") {
+    pixelEngine.undoCoordinator.popUndo();
+    const res = pixelEngine.tilemapHistory.undo(pixelEngine);
+    if (res) {
+      if (res.layerId !== undefined) store.selectLayer(res.layerId);
+      if (res.frameIndex !== undefined) store.setCurrentFrame(res.frameIndex);
+      store.bumpTilesetVersion();
+      pixelEngine.emitChange();
+      syncHistoryAndCelState();
+      store.setStatusMessage(`Undo: ${res.label}`);
+      return;
+    }
+  }
+  if (nextKind === "pixels") {
+    pixelEngine.undoCoordinator.popUndo();
+  }
   const res = pixelEngine.undo();
   if (!res) {
     syncRigHistoryFlags();
@@ -69,6 +86,23 @@ export function performRedo(): void {
       store.setStatusMessage(`Redo: ${label}`);
       return;
     }
+  }
+  const nextKind = pixelEngine.undoCoordinator.peekRedo();
+  if (nextKind === "cells" || nextKind === "tileset") {
+    pixelEngine.undoCoordinator.popRedo();
+    const res = pixelEngine.tilemapHistory.redo(pixelEngine);
+    if (res) {
+      if (res.layerId !== undefined) store.selectLayer(res.layerId);
+      if (res.frameIndex !== undefined) store.setCurrentFrame(res.frameIndex);
+      store.bumpTilesetVersion();
+      pixelEngine.emitChange();
+      syncHistoryAndCelState();
+      store.setStatusMessage(`Redo: ${res.label}`);
+      return;
+    }
+  }
+  if (nextKind === "pixels") {
+    pixelEngine.undoCoordinator.popRedo();
   }
   const res = pixelEngine.redo();
   if (!res) {

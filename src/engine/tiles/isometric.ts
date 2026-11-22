@@ -1,9 +1,11 @@
 import type { Point } from "../tools/pixelAlgos.ts";
 import {
   type BlendModeName,
-  compositeSourceOnto,
+  blitTileTransformed,
+  resolveTileFromSource,
   TilemapData,
   Tileset,
+  TilesetRegistry,
 } from "./TilemapEngine.ts";
 
 export function isoToScreen(
@@ -183,35 +185,40 @@ export function buildIsoGridSvgPath(
 
 export function renderIsometricTilemapToBuffer(
   tilemap: TilemapData,
-  tileset: Tileset,
+  tilesetOrRegistry: Tileset | TilesetRegistry,
   dst: Uint8ClampedArray,
   dstW: number,
   dstH: number,
   opacity: number,
   blendMode: BlendModeName
 ): void {
-  const tileW = tileset.tileWidth;
+  const baseTs =
+    tilesetOrRegistry instanceof TilesetRegistry
+      ? tilesetOrRegistry.get(0)
+      : tilesetOrRegistry;
+  const tileW = baseTs?.tileWidth ?? 16;
   const isoTileH = Math.max(4, Math.floor(tileW / 2));
   const { originX, originY } = getIsoOrigin(dstW, isoTileH);
 
   // Painter's back-to-front Z-depth order (row then col)
   for (let row = 0; row < tilemap.rows; row++) {
     for (let col = 0; col < tilemap.cols; col++) {
-      const tileId = tilemap.getCell(col, row);
-      if (tileId === 0) continue;
-      const tileBuf = tileset.getTile(tileId);
-      if (!tileBuf) continue;
+      const cell = tilemap.getCell(col, row);
+      if (cell === 0) continue;
+      const resolved = resolveTileFromSource(tilesetOrRegistry, cell);
+      if (!resolved) continue;
 
       const center = isoToScreen(col, row, tileW, isoTileH, originX, originY);
-      const offsetX = center.x - Math.floor(tileBuf.width / 2);
-      const offsetY = center.y - Math.floor(tileBuf.height / 2);
-      compositeSourceOnto(
+      const offsetX = center.x - Math.floor(resolved.buf.width / 2);
+      const offsetY = center.y - Math.floor(resolved.buf.height / 2);
+      blitTileTransformed(
         dst,
         dstW,
         dstH,
-        tileBuf,
+        resolved.buf,
         offsetX,
         offsetY,
+        resolved.flags,
         opacity,
         blendMode
       );

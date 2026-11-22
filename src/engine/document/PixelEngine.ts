@@ -1,18 +1,26 @@
 import { PixelBuffer, type RGBA } from "./PixelBuffer.ts";
 import { TileHistory } from "../history/TileHistory.ts";
+import { UndoCoordinator } from "../history/UndoCoordinator.ts";
 import {
   type AutoTileMode,
   type AutoTileRuleset,
   generate16TileAutoTileSet,
   paintAutoTileCell,
+  remapAutoTileRuleset,
 } from "../tiles/autoTile.ts";
+import { unpackCell } from "../tiles/cell.ts";
 import { renderIsometricTilemapToBuffer } from "../tiles/isometric.ts";
+import {
+  captureTilemapHistorySnapshot,
+  TilemapHistory,
+} from "../tiles/TilemapHistory.ts";
 import {
   type BlendModeName,
   compositeSourceOnto,
   renderTilemapToBuffer,
   TilemapData,
   Tileset,
+  TilesetRegistry,
 } from "../tiles/TilemapEngine.ts";
 import {
   type RigRenderOptions,
@@ -111,11 +119,17 @@ export class PixelEngine {
   height: number;
   readonly cels = new Map<string, PixelBuffer>();
   readonly celLinks = new Map<string, number>();
-  readonly tileset = new Tileset("tileset-default", "Main Tileset", 16, 16);
+  readonly tilesetRegistry = new TilesetRegistry();
   readonly tilemaps = new Map<string, TilemapData>();
   readonly rig = new RigState();
   readonly gameData = new GameDataState();
   readonly history = new TileHistory(100);
+  readonly tilemapHistory = new TilemapHistory(100, 50);
+  readonly undoCoordinator = new UndoCoordinator(200);
+
+  get tileset(): Tileset {
+    return this.tilesetRegistry.tilesets[0];
+  }
   compositeBuffer: Uint8ClampedArray;
   overlayBuffer: PixelBuffer;
   onionBuffer: Uint8ClampedArray;
@@ -139,6 +153,8 @@ export class PixelEngine {
     this.overlayBuffer = new PixelBuffer(width, height);
     this.onionBuffer = new Uint8ClampedArray(byteLen);
     this.onionScratch = new Uint8ClampedArray(byteLen);
+    this.history.onCommit = () => this.undoCoordinator.record("pixels");
+    this.tilemapHistory.onCommit = (kind) => this.undoCoordinator.record(kind);
     this.tileset.seedStarterTiles();
   }
 
@@ -153,9 +169,13 @@ export class PixelEngine {
     this.cels.clear();
     this.celLinks.clear();
     this.tilemaps.clear();
+    this.tilesetRegistry.resetDefault();
+    this.autoTileRuleset = null;
     this.rig.reset();
     this.gameData.reset();
     this.history.clear();
+    this.tilemapHistory.clear();
+    this.undoCoordinator.clear();
     this.rigDeformCache.clear();
     this.selection = null;
     this.floating = null;
@@ -390,21 +410,25 @@ export class PixelEngine {
     const ly = py % th;
 
     const tm = this.getOrCreateTilemap(layerId, frameIndex);
-    let cellTileId = tm.getCell(col, row);
+    const cellVal = tm.getCell(col, row);
+    const unpacked = unpackCell(cellVal);
+    let cellTileId = unpacked.localId;
+    const tsIndex = unpacked.localId > 0 ? unpacked.tilesetIndex : 0;
+    const ts = this.tilesetRegistry.get(tsIndex) ?? this.tileset;
 
     if (cellTileId === 0) {
       if (rgba[3] === 0) {
         return { tileId: 0, changed: false };
       }
-      if (activeTileId > 0 && this.tileset.getTile(activeTileId)) {
+      if (activeTileId > 0 && ts.getTile(activeTileId)) {
         cellTileId = activeTileId;
       } else {
-        cellTileId = this.tileset.addTile();
+        cellTileId = ts.addTile();
       }
       tm.setCell(col, row, cellTileId);
     }
 
-    const tileBuf = this.tileset.getTile(cellTileId);
+    const tileBuf = ts.getTile(cellTileId);
     if (!tileBuf) return { tileId: 0, changed: false };
 
     const changed = tileBuf.setPixel(
@@ -419,16 +443,46 @@ export class PixelEngine {
     return { tileId: cellTileId, changed };
   }
 
-  deleteTileFromTileset(tileId: number): boolean {
-    if (!this.tileset.deleteTile(tileId)) return false;
+  deleteTileFromTileset(tileId: number, tilesetIndex = 0): boolean {
+    const ts = this.tilesetRegistry.get(tilesetIndex);
+    if (!ts) return false;
+    const remap = ts.deleteTileWithRemap(tileId);
+    if (!remap) return false;
     for (const tm of this.tilemaps.values()) {
-      tm.replaceTileId(tileId);
+      tm.remapTileIds(tilesetIndex, remap);
     }
-    if (this.autoTileRuleset) {
-      this.autoTileRuleset = null;
+    if (tilesetIndex === 0 && this.autoTileRuleset) {
+      if (!remapAutoTileRuleset(this.autoTileRuleset, remap)) {
+        this.autoTileRuleset = null;
+      }
     }
     this.emitChange();
     return true;
+  }
+
+  reorderTilesInTileset(newOrder: number[], tilesetIndex = 0): boolean {
+    const ts = this.tilesetRegistry.get(tilesetIndex);
+    if (!ts) return false;
+    const remap = ts.reorderTiles(newOrder);
+    if (!remap) return false;
+    for (const tm of this.tilemaps.values()) {
+      tm.remapTileIds(tilesetIndex, remap);
+    }
+    if (tilesetIndex === 0 && this.autoTileRuleset) {
+      if (!remapAutoTileRuleset(this.autoTileRuleset, remap)) {
+        this.autoTileRuleset = null;
+      }
+    }
+    this.emitChange();
+    return true;
+  }
+
+  recordTilesetOp<T>(label: string, fn: () => T): T {
+    const before = captureTilemapHistorySnapshot(this);
+    const result = fn();
+    const after = captureTilemapHistorySnapshot(this);
+    this.tilemapHistory.pushTilesetSnapshot(label, before, after);
+    return result;
   }
 
   setTileProjection(proj: "orthogonal" | "isometric"): void {
@@ -667,7 +721,7 @@ export class PixelEngine {
           if (this.tileProjection === "isometric") {
             renderIsometricTilemapToBuffer(
               tm,
-              this.tileset,
+              this.tilesetRegistry,
               dst,
               this.width,
               this.height,
@@ -677,7 +731,7 @@ export class PixelEngine {
           } else {
             renderTilemapToBuffer(
               tm,
-              this.tileset,
+              this.tilesetRegistry,
               dst,
               this.width,
               this.height,
@@ -788,7 +842,7 @@ export class PixelEngine {
           if (this.tileProjection === "isometric") {
             renderIsometricTilemapToBuffer(
               tm,
-              this.tileset,
+              this.tilesetRegistry,
               dst,
               this.width,
               this.height,
@@ -798,7 +852,7 @@ export class PixelEngine {
           } else {
             renderTilemapToBuffer(
               tm,
-              this.tileset,
+              this.tilesetRegistry,
               dst,
               this.width,
               this.height,

@@ -12,7 +12,14 @@ import { pixelEngine } from "../document/PixelEngine.ts";
 import { commitFloatingSelection } from "../document/selectionActions.ts";
 import { syncTimelineCels } from "../document/timelineActions.ts";
 import { resetRigHistory } from "../rig/rigActions.ts";
-import { TilemapData } from "../tiles/TilemapEngine.ts";
+import {
+  deserializeAutoTileRuleset,
+  serializeAutoTileRuleset,
+} from "../tiles/autoTile.ts";
+import {
+  TilemapData,
+  type TilesetRegistryExtSnapshot,
+} from "../tiles/TilemapEngine.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
 export type PackMode = "grid" | "tight";
@@ -87,6 +94,11 @@ interface RustDocument {
   }[];
   tileset?: RustTilesetMeta | null;
   tile_projection?: "orthogonal" | "isometric";
+  tiles_version?: number;
+  tiles_ext?: {
+    registry?: TilesetRegistryExtSnapshot;
+    autoTileRuleset?: unknown;
+  };
   rig?: unknown;
   game_data?: unknown;
 }
@@ -263,6 +275,11 @@ export function serializeProjectTransfer(): ProjectTransfer {
       tile_count: tiles.length,
     },
     tile_projection: pixelEngine.tileProjection,
+    tiles_version: 2,
+    tiles_ext: {
+      registry: pixelEngine.tilesetRegistry.toExtSnapshot(),
+      autoTileRuleset: serializeAutoTileRuleset(pixelEngine.autoTileRuleset),
+    },
     rig:
       pixelEngine.rig.bones.length > 0
         ? pixelEngine.rig.toSnapshot()
@@ -320,6 +337,17 @@ export function hydrateProjectTransfer(
     useEditorStore.getState().setTileSize(tw, th);
   }
 
+  if ((doc.tiles_version ?? 1) >= 2 && doc.tiles_ext) {
+    if (doc.tiles_ext.registry) {
+      pixelEngine.tilesetRegistry.applyExtSnapshot(doc.tiles_ext.registry);
+    }
+    if (doc.tiles_ext.autoTileRuleset !== undefined) {
+      pixelEngine.autoTileRuleset = deserializeAutoTileRuleset(
+        doc.tiles_ext.autoTileRuleset
+      );
+    }
+  }
+
   const proj = doc.tile_projection ?? "orthogonal";
   pixelEngine.tileProjection = proj;
   useEditorStore.getState().setTileProjection(proj);
@@ -337,7 +365,7 @@ export function hydrateProjectTransfer(
       for (const [frameStr, grid] of Object.entries(layer.tilemaps)) {
         pixelEngine.tilemaps.set(
           `${layer.id}:${frameStr}`,
-          new TilemapData(grid.cols, grid.rows, new Uint16Array(grid.cells))
+          new TilemapData(grid.cols, grid.rows, new Uint32Array(grid.cells))
         );
       }
     }

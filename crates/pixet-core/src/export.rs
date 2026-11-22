@@ -847,8 +847,10 @@ pub fn generate_tiled_tilemap_json(
             let mr = map_rows.min(grid.rows);
             for r in 0..mr {
                 for c in 0..mc {
-                    let tile_id = grid.cells[(r * grid.cols + c) as usize];
-                    data[(r * map_cols + c) as usize] = tile_id as u32;
+                    let cell = grid.cells[(r * grid.cols + c) as usize];
+                    let local_id = cell & 0x000f_ffff;
+                    let flags = cell & 0xe000_0000;
+                    data[(r * map_cols + c) as usize] = if local_id == 0 { 0 } else { flags | local_id };
                 }
             }
         }

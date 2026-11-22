@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, Eraser, Grid2x2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { syncHistoryAndCelState } from "../engine/document/historyActions";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 import { useEditorStore } from "../store/editorStore";
@@ -71,41 +72,57 @@ export function TilesetPanel() {
   const tileIds = Array.from({ length: tileCount }, (_, i) => i + 1);
 
   const handleAddTile = () => {
-    const newId = pixelEngine.tileset.addTile();
+    const newId = pixelEngine.recordTilesetOp("Add Tile", () =>
+      pixelEngine.tileset.addTile()
+    );
     setActiveTileId(newId);
     bumpTilesetVersion();
+    syncHistoryAndCelState();
     pixelEngine.emitChange();
   };
 
   const handleDuplicateTile = () => {
-    const newId = pixelEngine.tileset.duplicateTile(activeTileId);
+    const newId = pixelEngine.recordTilesetOp("Duplicate Tile", () =>
+      pixelEngine.tileset.duplicateTile(activeTileId)
+    );
     if (newId !== null) {
       setActiveTileId(newId);
       bumpTilesetVersion();
+      syncHistoryAndCelState();
       pixelEngine.emitChange();
     }
   };
 
   const handleDeleteTile = () => {
     if (activeTileId <= 0 || tileCount <= 1) return;
-    if (pixelEngine.deleteTileFromTileset(activeTileId)) {
+    const deleted = pixelEngine.recordTilesetOp("Delete Tile", () =>
+      pixelEngine.deleteTileFromTileset(activeTileId)
+    );
+    if (deleted) {
       const nextId = Math.min(activeTileId, pixelEngine.tileset.count);
       setActiveTileId(nextId);
       bumpTilesetVersion();
+      syncHistoryAndCelState();
     }
   };
 
   const handleResizeTileset = (size: number) => {
-    pixelEngine.resizeTileset(size, size);
+    pixelEngine.recordTilesetOp("Resize Tileset", () => {
+      pixelEngine.resizeTileset(size, size);
+    });
     setTileSize(size, size);
     bumpTilesetVersion();
+    syncHistoryAndCelState();
   };
 
   const handleGenerateAutoTile = () => {
-    const ruleset = pixelEngine.generateAutoTileTerrain();
+    const ruleset = pixelEngine.recordTilesetOp("Generate 16-Tile Auto-Tile", () =>
+      pixelEngine.generateAutoTileTerrain()
+    );
     setActiveTileId(ruleset.fallbackTileId);
     setAutoTileEnabled(true);
     bumpTilesetVersion();
+    syncHistoryAndCelState();
     setActiveTool("tileStamp");
     setStatusMessage("Generated 16-tile auto-tile set · Stamp on a Tilemap layer");
   };

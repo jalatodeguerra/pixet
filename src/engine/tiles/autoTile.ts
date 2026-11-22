@@ -1,3 +1,4 @@
+import { unpackCell } from "./cell.ts";
 import { TilemapData, Tileset } from "./TilemapEngine.ts";
 
 export type AutoTileMode = "4bit" | "blob47";
@@ -23,7 +24,10 @@ export function computeAutoTileBitmask(
   terrainTileIds: Set<number>,
   mode: AutoTileMode
 ): number {
-  const has = (c: number, r: number) => terrainTileIds.has(tilemap.getCell(c, r));
+  const has = (c: number, r: number) => {
+    const u = unpackCell(tilemap.getCell(c, r));
+    return u.tilesetIndex === 0 && terrainTileIds.has(u.localId);
+  };
 
   const n = has(col, row - 1);
   const e = has(col + 1, row);
@@ -94,9 +98,12 @@ export function paintAutoTileCell(
   terrainIds.add(ruleset.fallbackTileId);
 
   let changed = 0;
+  const curUnpacked = unpackCell(tilemap.getCell(col, row));
+  const curIsTerrain =
+    curUnpacked.tilesetIndex === 0 && terrainIds.has(curUnpacked.localId);
   if (erase) {
     if (tilemap.setCell(col, row, 0)) changed++;
-  } else if (!terrainIds.has(tilemap.getCell(col, row))) {
+  } else if (!curIsTerrain) {
     if (tilemap.setCell(col, row, ruleset.fallbackTileId)) changed++;
   }
 
@@ -110,8 +117,9 @@ export function paintAutoTileCell(
         continue;
       }
       if (erase && nc === col && nr === row) continue;
-      const currentId = tilemap.getCell(nc, nr);
-      if (nc === col && nr === row ? !erase : terrainIds.has(currentId)) {
+      const u = unpackCell(tilemap.getCell(nc, nr));
+      const isTerrain = u.tilesetIndex === 0 && terrainIds.has(u.localId);
+      if (nc === col && nr === row ? !erase : isTerrain) {
         const mask = computeAutoTileBitmask(
           tilemap,
           nc,
@@ -185,6 +193,82 @@ export function generate16TileAutoTileSet(tileset: Tileset): AutoTileRuleset {
     name: "Auto-Tile 16",
     mode: "4bit",
     fallbackTileId: maskToTile.get(0) ?? 1,
+    maskToTile,
+  };
+}
+
+export function remapAutoTileRuleset(
+  ruleset: AutoTileRuleset,
+  remap: Map<number, number>
+): boolean {
+  const nextMap = new Map<number, number>();
+  for (const [mask, oldId] of ruleset.maskToTile.entries()) {
+    const mapped = remap.get(oldId) ?? oldId;
+    if (mapped > 0) {
+      nextMap.set(mask, mapped);
+    }
+  }
+  if (nextMap.size === 0) return false;
+  ruleset.maskToTile = nextMap;
+  const mappedFallback = remap.get(ruleset.fallbackTileId) ?? ruleset.fallbackTileId;
+  ruleset.fallbackTileId =
+    mappedFallback > 0
+      ? mappedFallback
+      : nextMap.values().next().value ?? 1;
+  return true;
+}
+
+export interface SerializedAutoTileRuleset {
+  id: string;
+  name: string;
+  mode: AutoTileMode;
+  fallbackTileId: number;
+  maskToTile: Array<[number, number]>;
+}
+
+export function serializeAutoTileRuleset(
+  ruleset: AutoTileRuleset | null
+): SerializedAutoTileRuleset | null {
+  if (!ruleset) return null;
+  return {
+    id: ruleset.id,
+    name: ruleset.name,
+    mode: ruleset.mode,
+    fallbackTileId: ruleset.fallbackTileId,
+    maskToTile: Array.from(ruleset.maskToTile.entries()),
+  };
+}
+
+export function deserializeAutoTileRuleset(
+  raw: unknown
+): AutoTileRuleset | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Partial<SerializedAutoTileRuleset>;
+  if (
+    typeof obj.id !== "string" ||
+    typeof obj.name !== "string" ||
+    (obj.mode !== "4bit" && obj.mode !== "blob47") ||
+    typeof obj.fallbackTileId !== "number" ||
+    !Array.isArray(obj.maskToTile)
+  ) {
+    return null;
+  }
+  const maskToTile = new Map<number, number>();
+  for (const pair of obj.maskToTile) {
+    if (
+      Array.isArray(pair) &&
+      pair.length === 2 &&
+      typeof pair[0] === "number" &&
+      typeof pair[1] === "number"
+    ) {
+      maskToTile.set(pair[0], pair[1]);
+    }
+  }
+  return {
+    id: obj.id,
+    name: obj.name,
+    mode: obj.mode,
+    fallbackTileId: obj.fallbackTileId,
     maskToTile,
   };
 }

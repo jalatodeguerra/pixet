@@ -59,7 +59,7 @@ pub struct TilesetMeta {
 pub struct TilemapGrid {
     pub cols: u32,
     pub rows: u32,
-    pub cells: Vec<u16>,
+    pub cells: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +111,10 @@ pub struct Palette {
     pub colors: Vec<String>,
 }
 
+fn default_tiles_version() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub schema_version: u32,
@@ -125,6 +129,10 @@ pub struct Document {
     pub tileset: Option<TilesetMeta>,
     #[serde(default)]
     pub tile_projection: TileProjection,
+    #[serde(default = "default_tiles_version")]
+    pub tiles_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiles_ext: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rig: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +201,8 @@ impl Document {
             }],
             tileset: None,
             tile_projection: TileProjection::Orthogonal,
+            tiles_version: 1,
+            tiles_ext: None,
             rig: None,
             game_data: None,
         }
@@ -240,5 +250,59 @@ mod tests {
                 serde_json::from_str(&serialized).expect("deserialize layer kind");
             assert_eq!(kind, deserialized);
         }
+    }
+
+    #[test]
+    fn tilemap_v1_u16_and_v2_u32_round_trip() {
+        let mut doc = Document::new_default(32, 32);
+        let mut tilemaps = BTreeMap::new();
+        tilemaps.insert(
+            0,
+            TilemapGrid {
+                cols: 2,
+                rows: 1,
+                cells: vec![1, 2],
+            },
+        );
+        doc.layers.push(Layer {
+            id: "tilemap-1".to_string(),
+            name: "Ground".to_string(),
+            kind: LayerKind::Tilemap,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            alpha_lock: false,
+            blend_mode: BlendMode::Normal,
+            parent_id: None,
+            cels: Vec::new(),
+            tilemaps,
+            map_role: None,
+        });
+
+        // Simulate legacy v1 JSON without tiles_version or tiles_ext
+        let mut v1_val = serde_json::to_value(&doc).expect("to_value");
+        v1_val.as_object_mut().unwrap().remove("tiles_version");
+        let v1_json = serde_json::to_string(&v1_val).expect("to_string");
+        let parsed_v1 = Document::from_json(&v1_json).expect("parse legacy v1");
+        assert_eq!(parsed_v1.tiles_version, 1);
+        assert_eq!(parsed_v1.tiles_ext, None);
+        assert_eq!(parsed_v1.layers[3].tilemaps[&0].cells, vec![1, 2]);
+
+        // v2 JSON with flagged u32 cell and tiles_ext
+        doc.tiles_version = 2;
+        doc.tiles_ext = Some(serde_json::json!({ "extraTilesets": [] }));
+        doc.layers[3]
+            .tilemaps
+            .get_mut(&0)
+            .unwrap()
+            .cells[1] = 0x8000_0002;
+        let v2_json = doc.to_json_pretty().expect("serialize v2");
+        let parsed_v2 = Document::from_json(&v2_json).expect("parse v2");
+        assert_eq!(parsed_v2.tiles_version, 2);
+        assert_eq!(
+            parsed_v2.layers[3].tilemaps[&0].cells,
+            vec![1, 0x8000_0002]
+        );
+        assert!(parsed_v2.tiles_ext.is_some());
     }
 }

@@ -82,6 +82,7 @@ export class TileHistory {
   private redoStack: HistoryEntry[] = [];
   private activeTx: ActiveTransaction | null = null;
   private readonly maxEntries: number;
+  onCommit?: () => void;
 
   constructor(maxEntries = 100) {
     this.maxEntries = maxEntries;
@@ -197,6 +198,7 @@ export class TileHistory {
     }
 
     this.redoStack.length = 0;
+    this.onCommit?.();
     return true;
   }
 

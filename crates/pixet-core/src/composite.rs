@@ -176,13 +176,14 @@ pub fn composite_frame(project: &ProjectData, frame_index: u32) -> Vec<u8> {
             for row in 0..grid.rows {
                 for col in 0..grid.cols {
                     let idx = (row * grid.cols + col) as usize;
-                    let Some(&tile_id) = grid.cells.get(idx) else {
+                    let Some(&cell) = grid.cells.get(idx) else {
                         continue;
                     };
-                    if tile_id == 0 {
+                    let local_id = (cell & 0x000f_ffff) as usize;
+                    if local_id == 0 {
                         continue;
                     }
-                    let Some(tile_rgba) = project.tiles.get((tile_id - 1) as usize) else {
+                    let Some(tile_rgba) = project.tiles.get(local_id - 1) else {
                         continue;
                     };
 

@@ -505,6 +505,8 @@ pub fn read_aseprite_bytes(bytes: &[u8]) -> Result<ProjectData, PixetError> {
         tags,
         tileset: None,
         tile_projection: TileProjection::Orthogonal,
+        tiles_version: 1,
+        tiles_ext: None,
         rig: None,
         game_data: None,
     };

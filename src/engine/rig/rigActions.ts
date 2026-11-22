@@ -17,17 +17,18 @@ function pushSnapshot(label: string): void {
  */
 export function syncRigHistoryFlags(): void {
   const store = useEditorStore.getState();
+  const canBaseUndo =
+    pixelEngine.history.canUndo || pixelEngine.tilemapHistory.canUndo;
+  const canBaseRedo =
+    pixelEngine.history.canRedo || pixelEngine.tilemapHistory.canRedo;
   if (store.workspaceMode === "rig") {
     store.setHistoryFlags(
-      rigHistory.canUndo || pixelEngine.history.canUndo,
-      rigHistory.canRedo || pixelEngine.history.canRedo
+      rigHistory.canUndo || canBaseUndo,
+      rigHistory.canRedo || canBaseRedo
     );
     return;
   }
-  store.setHistoryFlags(
-    pixelEngine.history.canUndo,
-    pixelEngine.history.canRedo
-  );
+  store.setHistoryFlags(canBaseUndo, canBaseRedo);
 }
 
 /**
