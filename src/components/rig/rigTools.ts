@@ -45,7 +45,6 @@ export const RIG_TOOL_DEFS: RigToolDef[] = [
     shortcut: "C",
     icon: Link2,
     setupOnly: true,
-    milestone: "R2",
   },
   { id: "ik", label: "IK Target", shortcut: "K", icon: Crosshair },
   {

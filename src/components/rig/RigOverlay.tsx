@@ -25,6 +25,7 @@ export function RigOverlay({
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const currentFrame = useEditorStore((s) => s.currentFrame);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
+  const selectedBoneIds = useEditorStore((s) => s.selectedBoneIds);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const zoom = useEditorStore((s) => s.zoom);
@@ -37,7 +38,8 @@ export function RigOverlay({
       currentFrame,
       rigMode,
       selectedBoneId,
-      hoveredBoneId
+      hoveredBoneId,
+      selectedBoneIds
     );
   }, [
     workspaceMode,
@@ -45,6 +47,7 @@ export function RigOverlay({
     currentFrame,
     rigMode,
     selectedBoneId,
+    selectedBoneIds,
     hoveredBoneId,
     rigVersion,
   ]);
@@ -54,7 +57,7 @@ export function RigOverlay({
   const safeZoom = Math.max(1, zoom);
   const ringRadius = GIZMO_RING_RADIUS_PX / safeZoom;
   const handleHalf = GIZMO_HANDLE_SIZE_PX / safeZoom / 2;
-  const selected = shapes.find((shape) => shape.selected && !shape.locked);
+  const selected = shapes.find((shape) => shape.primarySelected && !shape.locked);
 
   return (
     <svg
@@ -67,12 +70,14 @@ export function RigOverlay({
           <polygon
             className={`rig-bone-shape ${b.selected ? "selected" : ""} ${b.hovered ? "hovered" : ""} ${b.locked ? "locked" : ""}`}
             points={b.polygon}
+            style={!b.selected && b.color ? { stroke: b.color } : undefined}
           />
           <circle
             className={`rig-bone-joint ${b.selected ? "selected" : ""} ${b.hovered ? "hovered" : ""} ${b.keyed ? "keyed" : ""}`}
             cx={b.x}
             cy={b.y}
             r={0.85}
+            style={!b.selected && b.color ? { stroke: b.color } : undefined}
           />
           <circle
             className={`rig-bone-tip ${b.selected ? "selected" : ""} ${b.hovered ? "hovered" : ""}`}

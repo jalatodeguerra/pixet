@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import {
+  mirrorBoneName,
+  mirrorBones,
+  mirrorPose,
+  reparentBonePreserveWorld,
+  snapAngleDeg,
+} from "../src/engine/rig/skeletonTools.ts";
+
 import { PixelBuffer, hexToRgba } from "../src/engine/document/PixelBuffer.ts";
 import { PixelEngine } from "../src/engine/document/PixelEngine.ts";
 import { TileHistory } from "../src/engine/history/TileHistory.ts";
@@ -2272,4 +2280,154 @@ test("R6 rig skinning benchmark 128x128 with 10 bones (logs timing only)", () =>
       .length,
     128 * 128 * 4
   );
+});
+
+test("R2 reparentBonePreserveWorld preserves world transform and rejects cycles", () => {
+  const engine = new PixelEngine(64, 64);
+  const rig = engine.rig;
+  const parent = rig.addBone({
+    name: "Parent",
+    parentId: null,
+    localX: 10,
+    localY: 12,
+    length: 12,
+    rotationDeg: 35,
+    scaleX: 1.5,
+    scaleY: 0.75,
+  });
+  const child = rig.addBone({
+    name: "Child",
+    parentId: null,
+    localX: 28,
+    localY: 18,
+    length: 8,
+    rotationDeg: -50,
+    scaleX: 1.2,
+    scaleY: 1.1,
+  });
+
+  const before = rig.computeWorldTransforms(0, "rest", false).get(child.id)!;
+  assert.equal(reparentBonePreserveWorld(rig, child.id, parent.id), true);
+  const afterParent = rig.computeWorldTransforms(0, "rest", false).get(child.id)!;
+
+  assert.ok(Math.abs(afterParent.x - before.x) < 1e-4);
+  assert.ok(Math.abs(afterParent.y - before.y) < 1e-4);
+  assert.ok(
+    Math.abs(afterParent.worldRotationDeg - before.worldRotationDeg) < 1e-4
+  );
+  assert.ok(Math.abs(afterParent.worldScaleX - before.worldScaleX) < 1e-4);
+  assert.ok(Math.abs(afterParent.worldScaleY - before.worldScaleY) < 1e-4);
+
+  // Cycle rejected: cannot parent `parent` under its child `child`.
+  assert.equal(reparentBonePreserveWorld(rig, parent.id, child.id), false);
+  assert.equal(parent.parentId, null);
+
+  // Reparent back to root also preserves world transform.
+  assert.equal(reparentBonePreserveWorld(rig, child.id, null), true);
+  const afterRoot = rig.computeWorldTransforms(0, "rest", false).get(child.id)!;
+  assert.ok(Math.abs(afterRoot.x - before.x) < 1e-4);
+  assert.ok(Math.abs(afterRoot.y - before.y) < 1e-4);
+  assert.ok(
+    Math.abs(afterRoot.worldRotationDeg - before.worldRotationDeg) < 1e-4
+  );
+});
+
+test("R2 mirrorBoneName swaps L/R tokens and appends _M fallback", () => {
+  assert.equal(mirrorBoneName("Arm.L"), "Arm.R");
+  assert.equal(mirrorBoneName("Arm.R"), "Arm.L");
+  assert.equal(mirrorBoneName("leg_l"), "leg_r");
+  assert.equal(mirrorBoneName("LeftHand"), "RightHand");
+  assert.equal(mirrorBoneName("right_foot"), "left_foot");
+  assert.equal(mirrorBoneName("Spine"), "Spine_M");
+});
+
+test("R2 mirrorBones mirrors subtree positions, angles and keyframes", () => {
+  const engine = new PixelEngine(64, 64);
+  const rig = engine.rig;
+  const shoulder = rig.addBone({
+    name: "Shoulder.L",
+    parentId: null,
+    localX: 20,
+    localY: 16,
+    length: 10,
+    rotationDeg: 30,
+  });
+  const forearm = rig.addBone({
+    name: "Forearm.L",
+    parentId: shoulder.id,
+    localX: 10,
+    localY: 0,
+    length: 8,
+    rotationDeg: 45,
+  });
+  rig.setPoseOverride(shoulder.id, { rotationDeg: 55 }, 2);
+  rig.setKeyframe(shoulder.id, 2, "linear");
+  rig.setPoseOverride(forearm.id, { rotationDeg: 25 }, 2);
+  rig.setKeyframe(forearm.id, 2, "linear");
+
+  const { createdIds, idMap } = mirrorBones(rig, [shoulder.id], 32, {
+    mirrorKeyframes: true,
+  });
+  assert.equal(createdIds.length, 2);
+
+  const mShoulder = rig.bones.find((b) => b.id === idMap.get(shoulder.id))!;
+  const mForearm = rig.bones.find((b) => b.id === idMap.get(forearm.id))!;
+  assert.equal(mShoulder.name, "Shoulder.R");
+  assert.equal(mForearm.name, "Forearm.R");
+  assert.equal(mForearm.parentId, mShoulder.id);
+
+  const rest = rig.computeWorldTransforms(0, "rest", false);
+  const wShoulder = rest.get(mShoulder.id)!;
+  assert.ok(Math.abs(wShoulder.x - 44) < 1e-4);
+  assert.ok(Math.abs(wShoulder.y - 16) < 1e-4);
+  assert.ok(Math.abs(wShoulder.worldRotationDeg - 150) < 1e-4);
+
+  const poseAt2 = rig.computeWorldTransforms(2, "pose", false);
+  const origShoulderPose = poseAt2.get(shoulder.id)!;
+  const mirShoulderPose = poseAt2.get(mShoulder.id)!;
+  assert.ok(
+    Math.abs(
+      mirShoulderPose.worldRotationDeg -
+        (180 - origShoulderPose.worldRotationDeg)
+    ) < 1e-3 ||
+      Math.abs(
+        Math.abs(
+          mirShoulderPose.worldRotationDeg -
+            (180 - origShoulderPose.worldRotationDeg)
+        ) - 360
+      ) < 1e-3
+  );
+});
+
+test("R2 mirrorPose copies mirrored pose to L/R counterpart", () => {
+  const engine = new PixelEngine(64, 64);
+  const rig = engine.rig;
+  const leftArm = rig.addBone({
+    name: "Arm.L",
+    parentId: null,
+    localX: 20,
+    localY: 20,
+    length: 10,
+    rotationDeg: 30,
+  });
+  const rightArm = rig.addBone({
+    name: "Arm.R",
+    parentId: null,
+    localX: 44,
+    localY: 20,
+    length: 10,
+    rotationDeg: 150,
+  });
+
+  rig.setPoseOverride(leftArm.id, { rotationDeg: 40 }, 0);
+  const updated = mirrorPose(rig, [leftArm.id], 0);
+  assert.equal(updated, 1);
+  const rightPose = rig.getBonePoseAtFrame(rightArm.id, 0, true);
+  assert.ok(Math.abs(rightPose.rotationDeg - 140) < 1e-4);
+});
+
+test("R2 snapAngleDeg snaps to 22.5-degree increments", () => {
+  assert.equal(snapAngleDeg(20), 22.5);
+  assert.equal(snapAngleDeg(44), 45);
+  assert.equal(snapAngleDeg(-88), -90);
 });

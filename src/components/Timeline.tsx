@@ -54,6 +54,7 @@ export function Timeline() {
   const rigMode = useEditorStore((s) => s.rigMode);
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
+  const selectedBoneIds = useEditorStore((s) => s.selectedBoneIds);
   const setSelectedBoneId = useEditorStore((s) => s.setSelectedBoneId);
 
   const setCurrentFrame = useEditorStore((s) => s.setCurrentFrame);
@@ -487,7 +488,8 @@ export function Timeline() {
             rigMode === "animate" &&
             pixelEngine.rig.bones.map((bone, boneIdx) => {
               const [r, g, b] = getBoneInfluenceColor(boneIdx);
-              const isBoneSelected = bone.id === selectedBoneId;
+              const isBoneSelected =
+                bone.id === selectedBoneId || selectedBoneIds.includes(bone.id);
               return (
                 <div
                   key={`rig-${bone.id}-${rigVersion}`}

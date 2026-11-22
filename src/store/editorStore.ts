@@ -159,6 +159,7 @@ interface EditorState {
   rigTool: RigTool;
   rigMode: RigMode;
   selectedBoneId: string | null;
+  selectedBoneIds: string[];
   rigPixelSnap: boolean;
   rigRotSprite: boolean;
   rigShowBones: boolean;
@@ -321,6 +322,8 @@ interface EditorState {
   setRigTool: (tool: RigTool) => void;
   setRigMode: (mode: RigMode) => void;
   setSelectedBoneId: (boneId: string | null) => void;
+  setSelectedBoneIds: (boneIds: string[], primaryId?: string | null) => void;
+  toggleBoneSelection: (boneId: string) => void;
   toggleRigPixelSnap: () => void;
   toggleRigRotSprite: () => void;
   toggleRigShowBones: () => void;
@@ -435,6 +438,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigTool: "select",
   rigMode: "setup",
   selectedBoneId: null,
+  selectedBoneIds: [],
   rigPixelSnap: true,
   rigRotSprite: true,
   rigShowBones: true,
@@ -1242,7 +1246,40 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           ? "select"
           : s.rigTool,
     })),
-  setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
+  setSelectedBoneId: (selectedBoneId) =>
+    set({
+      selectedBoneId,
+      selectedBoneIds: selectedBoneId ? [selectedBoneId] : [],
+    }),
+  setSelectedBoneIds: (boneIds, primaryId) => {
+    const unique = Array.from(new Set(boneIds));
+    const nextPrimary =
+      primaryId !== undefined
+        ? primaryId
+        : unique.length > 0
+          ? unique[unique.length - 1]
+          : null;
+    set({
+      selectedBoneIds: unique,
+      selectedBoneId: nextPrimary,
+    });
+  },
+  toggleBoneSelection: (boneId) =>
+    set((s) => {
+      const exists = s.selectedBoneIds.includes(boneId);
+      const nextIds = exists
+        ? s.selectedBoneIds.filter((id) => id !== boneId)
+        : [...s.selectedBoneIds, boneId];
+      const nextPrimary = exists
+        ? s.selectedBoneId === boneId
+          ? (nextIds[nextIds.length - 1] ?? null)
+          : s.selectedBoneId
+        : boneId;
+      return {
+        selectedBoneIds: nextIds,
+        selectedBoneId: nextPrimary,
+      };
+    }),
   toggleRigPixelSnap: () => set((s) => ({ rigPixelSnap: !s.rigPixelSnap })),
   toggleRigRotSprite: () => set((s) => ({ rigRotSprite: !s.rigRotSprite })),
   toggleRigShowBones: () => set((s) => ({ rigShowBones: !s.rigShowBones })),
@@ -1304,6 +1341,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       canRedo: false,
       hasSelection: false,
       selectedBoneId: null,
+      selectedBoneIds: [],
       rigMode: "setup",
       rigTool: "select",
     }),

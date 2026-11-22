@@ -19,9 +19,11 @@ export interface RigBoneShape {
   length: number;
   polygon: string;
   selected: boolean;
+  primarySelected: boolean;
   hovered: boolean;
   keyed: boolean;
   locked: boolean;
+  color?: string;
 }
 
 export type RigGizmoHitKind = "translate" | "rotate" | "scale" | "body";
@@ -49,13 +51,15 @@ export function buildRigBoneShapes(
   frame: number,
   rigMode: RigMode,
   selectedBoneId: string | null,
-  hoveredBoneId: string | null
+  hoveredBoneId: string | null,
+  selectedBoneIds: readonly string[] = []
 ): RigBoneShape[] {
   const transforms = rig.computeWorldTransforms(
     frame,
     rigMode === "setup" ? "rest" : "pose",
     true
   );
+  const selectedSet = new Set(selectedBoneIds);
   const shapes: RigBoneShape[] = [];
   for (const bone of rig.bones) {
     if (bone.hidden) continue;
@@ -71,6 +75,7 @@ export function buildRigBoneShapes(
     const b1y = t.y + ny * halfBase;
     const b2x = t.x - nx * halfBase;
     const b2y = t.y - ny * halfBase;
+    const isPrimary = bone.id === selectedBoneId;
     shapes.push({
       id: bone.id,
       name: bone.name,
@@ -80,10 +85,12 @@ export function buildRigBoneShapes(
       tipY: t.tipY,
       length: t.length,
       polygon: `${t.x},${t.y} ${b1x},${b1y} ${t.tipX},${t.tipY} ${b2x},${b2y}`,
-      selected: bone.id === selectedBoneId,
+      selected: isPrimary || selectedSet.has(bone.id),
+      primarySelected: isPrimary,
       hovered: bone.id === hoveredBoneId,
       keyed: rigMode === "animate" && rig.hasKeyframe(bone.id, frame),
       locked: Boolean(bone.locked),
+      color: bone.color,
     });
   }
   return shapes;
@@ -128,7 +135,7 @@ export function hitTestRigGizmo(
   const handleRadius = GIZMO_HANDLE_HIT_PX / safeZoom;
 
   const selected = includeHandles
-    ? shapes.find((shape) => shape.selected && !shape.locked)
+    ? shapes.find((shape) => shape.primarySelected && !shape.locked)
     : undefined;
   if (selected) {
     if (distance(x, y, selected.tipX, selected.tipY) <= handleRadius) {

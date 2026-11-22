@@ -1862,7 +1862,8 @@ export function Viewport() {
     e.preventDefault();
     e.stopPropagation();
     const state = useEditorStore.getState();
-    if (state.workspaceMode === "rig" && state.rigTool === "weightPaint") {
+    if (state.workspaceMode === "rig") {
+      rigPointer.onContextMenu(e, canvasRef.current);
       return;
     }
     const hasClip = Boolean(pixelEngine.clipboard);

@@ -813,11 +813,20 @@ export class RigState {
     if (patch.boundLayerId !== undefined) bone.boundLayerId = patch.boundLayerId;
     if (patch.scaleX !== undefined) bone.scaleX = patch.scaleX;
     if (patch.scaleY !== undefined) bone.scaleY = patch.scaleY;
-    if (patch.color !== undefined) bone.color = patch.color;
+    if ("color" in patch) {
+      if (patch.color === undefined) delete bone.color;
+      else bone.color = patch.color;
+    }
     if (patch.hidden !== undefined) bone.hidden = patch.hidden;
     if (patch.locked !== undefined) bone.locked = patch.locked;
-    if (patch.minAngleDeg !== undefined) bone.minAngleDeg = patch.minAngleDeg;
-    if (patch.maxAngleDeg !== undefined) bone.maxAngleDeg = patch.maxAngleDeg;
+    if ("minAngleDeg" in patch) {
+      if (patch.minAngleDeg === undefined) delete bone.minAngleDeg;
+      else bone.minAngleDeg = patch.minAngleDeg;
+    }
+    if ("maxAngleDeg" in patch) {
+      if (patch.maxAngleDeg === undefined) delete bone.maxAngleDeg;
+      else bone.maxAngleDeg = patch.maxAngleDeg;
+    }
     this.invalidateEvaluation();
   }
 

@@ -1621,6 +1621,91 @@
   color: var(--text-primary);
 }
 
+.rig-bone-row.drag-over-before {
+  border-top: 2px solid var(--accent);
+}
+
+.rig-bone-row.drag-over-after {
+  border-bottom: 2px solid var(--accent);
+}
+
+.rig-bone-row.drag-over-inside {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+}
+
+.rig-tree-chevron {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.rig-tree-chevron:hover {
+  color: var(--text-primary);
+}
+
+.rig-tree-search {
+  width: 100%;
+  height: 22px;
+  padding: 0 6px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-root);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.rig-mirror-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.rig-num-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.rig-num-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.rig-num-field > span {
+  min-width: 14px;
+  color: var(--text-muted);
+}
+
+.rig-num-input {
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-root);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
 .rig-bone-name {
   flex: 1;
   min-width: 0;
