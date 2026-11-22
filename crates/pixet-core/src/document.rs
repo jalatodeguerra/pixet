@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Current schema version for `.pixet` document manifests.
@@ -36,6 +38,30 @@ pub enum LayerKind {
     Data,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TileProjection {
+    #[default]
+    Orthogonal,
+    Isometric,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TilesetMeta {
+    pub id: String,
+    pub name: String,
+    pub tile_width: u32,
+    pub tile_height: u32,
+    pub tile_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TilemapGrid {
+    pub cols: u32,
+    pub rows: u32,
+    pub cells: Vec<u16>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cel {
     pub id: String,
@@ -57,6 +83,8 @@ pub struct Layer {
     pub blend_mode: BlendMode,
     pub parent_id: Option<String>,
     pub cels: Vec<Cel>,
+    #[serde(default)]
+    pub tilemaps: BTreeMap<u32, TilemapGrid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +119,10 @@ pub struct Document {
     pub layers: Vec<Layer>,
     pub frames: Vec<Frame>,
     pub tags: Vec<AnimationTag>,
+    #[serde(default)]
+    pub tileset: Option<TilesetMeta>,
+    #[serde(default)]
+    pub tile_projection: TileProjection,
 }
 
 impl Document {
@@ -120,6 +152,7 @@ impl Document {
                 linked_to: None,
                 linked_frame: None,
             }],
+            tilemaps: BTreeMap::new(),
         };
 
         Self {
@@ -151,6 +184,8 @@ impl Document {
                 to_frame: 3,
                 color: "#5b8cff".to_string(),
             }],
+            tileset: None,
+            tile_projection: TileProjection::Orthogonal,
         }
     }
 

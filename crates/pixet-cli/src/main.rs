@@ -53,6 +53,8 @@ enum Commands {
 enum CliExportFormat {
     Json,
     Godot,
+    GodotTileset,
+    Tiled,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -76,6 +78,12 @@ fn run() -> Result<(), String> {
             println!("Layers:       {}", doc.layers.len());
             println!("Frames:       {}", doc.frames.len());
             println!("Cels stored:  {}", project.cels.len());
+            if let Some(ts) = &doc.tileset {
+                println!(
+                    "Tileset:      {} ({}x{}, {} tiles, {:?})",
+                    ts.name, ts.tile_width, ts.tile_height, project.tiles.len(), doc.tile_projection
+                );
+            }
             if doc.tags.is_empty() {
                 println!("Tags:         (none)");
             } else {
@@ -112,6 +120,8 @@ fn run() -> Result<(), String> {
                 format: match format {
                     CliExportFormat::Json => pixet_core::ExportFormat::Json,
                     CliExportFormat::Godot => pixet_core::ExportFormat::Godot,
+                    CliExportFormat::GodotTileset => pixet_core::ExportFormat::GodotTileset,
+                    CliExportFormat::Tiled => pixet_core::ExportFormat::Tiled,
                 },
                 pack: match pack {
                     CliPackMode::Grid => pixet_core::PackMode::Grid,

@@ -92,6 +92,8 @@ export function ExportModal() {
             >
               <option value="json">Generic PNG + JSON (Aseprite schema)</option>
               <option value="godot">Godot 4 SpriteFrames (.tres + PNG)</option>
+              <option value="godot_tileset">Godot 4 TileSet (.tres + Atlas PNG)</option>
+              <option value="tiled">Tiled Map &amp; Tileset (.tmj + .tsj + PNG)</option>
             </select>
           </label>
 

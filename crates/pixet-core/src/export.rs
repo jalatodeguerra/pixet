@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::composite::composite_frame;
+use crate::document::{LayerKind, TileProjection};
 use crate::io::{encode_rgba_png, PixetError, ProjectData};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +20,8 @@ pub enum PackMode {
 pub enum ExportFormat {
     Json,
     Godot,
+    GodotTileset,
+    Tiled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -661,12 +664,241 @@ pub fn generate_godot_spriteframes(
     out
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TilesetAtlas {
+    pub width: u32,
+    pub height: u32,
+    pub cols: u32,
+    pub rows: u32,
+    pub tile_width: u32,
+    pub tile_height: u32,
+    pub tile_count: u32,
+    pub extrude: u32,
+    pub padding: u32,
+    pub rgba: Vec<u8>,
+}
+
+pub fn build_tileset_atlas(
+    project: &ProjectData,
+    padding: u32,
+    extrude: u32,
+) -> Result<TilesetAtlas, PixetError> {
+    let ts = project.document.tileset.as_ref().ok_or_else(|| {
+        PixetError::InvalidProject("Project has no tileset to export".to_string())
+    })?;
+    if project.tiles.is_empty() {
+        return Err(PixetError::InvalidProject(
+            "Project has no tiles to export".to_string(),
+        ));
+    }
+
+    let n = project.tiles.len() as u32;
+    let cols = (n as f64).sqrt().ceil() as u32;
+    let rows = n.div_ceil(cols);
+    let cell_w = ts.tile_width + 2 * extrude;
+    let cell_h = ts.tile_height + 2 * extrude;
+    let atlas_w = cols * cell_w + cols.saturating_sub(1) * padding;
+    let atlas_h = rows * cell_h + rows.saturating_sub(1) * padding;
+
+    let mut rgba = vec![0u8; (atlas_w * atlas_h * 4) as usize];
+    for (i, tile_rgba) in project.tiles.iter().enumerate() {
+        let col = (i as u32) % cols;
+        let row = (i as u32) / cols;
+        let dst_x = col * (cell_w + padding) + extrude;
+        let dst_y = row * (cell_h + padding) + extrude;
+        if tile_rgba.len() == (ts.tile_width * ts.tile_height * 4) as usize {
+            blit_with_extrude(
+                &mut rgba,
+                atlas_w,
+                tile_rgba,
+                dst_x,
+                dst_y,
+                ts.tile_width,
+                ts.tile_height,
+                extrude,
+            );
+        }
+    }
+
+    Ok(TilesetAtlas {
+        width: atlas_w,
+        height: atlas_h,
+        cols,
+        rows,
+        tile_width: ts.tile_width,
+        tile_height: ts.tile_height,
+        tile_count: n,
+        extrude,
+        padding,
+        rgba,
+    })
+}
+
+pub fn generate_godot_tileset(
+    project: &ProjectData,
+    atlas: &TilesetAtlas,
+    png_filename: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str("[gd_resource type=\"TileSet\" load_steps=3 format=3]\n\n");
+    out.push_str(&format!(
+        "[ext_resource type=\"Texture2D\" path=\"res://{png_filename}\" id=\"1_tex\"]\n\n"
+    ));
+    out.push_str("[sub_resource type=\"TileSetAtlasSource\" id=\"TileSetAtlasSource_1\"]\n");
+    out.push_str("texture = ExtResource(\"1_tex\")\n");
+    if atlas.extrude > 0 {
+        out.push_str(&format!(
+            "margins = Vector2i({}, {})\n",
+            atlas.extrude, atlas.extrude
+        ));
+    }
+    let sep = atlas.padding + 2 * atlas.extrude;
+    if sep > 0 {
+        out.push_str(&format!("separation = Vector2i({sep}, {sep})\n"));
+    }
+    out.push_str(&format!(
+        "texture_region_size = Vector2i({}, {})\n",
+        atlas.tile_width, atlas.tile_height
+    ));
+
+    for i in 0..atlas.tile_count {
+        let col = i % atlas.cols;
+        let row = i / atlas.cols;
+        out.push_str(&format!("{col}:{row}/0 = 0\n"));
+    }
+
+    out.push_str("\n[resource]\n");
+    let effective_h = match project.document.tile_projection {
+        TileProjection::Isometric => {
+            out.push_str("tile_shape = 1\n");
+            (atlas.tile_width / 2).max(4)
+        }
+        TileProjection::Orthogonal => atlas.tile_height,
+    };
+    out.push_str(&format!(
+        "tile_size = Vector2i({}, {})\n",
+        atlas.tile_width, effective_h
+    ));
+    out.push_str("sources/0 = SubResource(\"TileSetAtlasSource_1\")\n");
+    out
+}
+
+pub fn generate_tiled_tileset_json(
+    project: &ProjectData,
+    atlas: &TilesetAtlas,
+    png_filename: &str,
+) -> String {
+    let ts_name = project
+        .document
+        .tileset
+        .as_ref()
+        .map(|t| t.name.as_str())
+        .unwrap_or("Pixet Tileset");
+
+    let root = json!({
+        "columns": atlas.cols,
+        "image": png_filename,
+        "imageheight": atlas.height,
+        "imagewidth": atlas.width,
+        "margin": atlas.extrude,
+        "name": ts_name,
+        "spacing": atlas.padding + 2 * atlas.extrude,
+        "tilecount": atlas.tile_count,
+        "tiledversion": "1.10.2",
+        "tileheight": atlas.tile_height,
+        "tilewidth": atlas.tile_width,
+        "type": "tileset",
+        "version": "1.10"
+    });
+    serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn generate_tiled_tilemap_json(
+    project: &ProjectData,
+    atlas: &TilesetAtlas,
+    tsj_filename: &str,
+) -> String {
+    let default_cols = (project.document.size.width / atlas.tile_width.max(1)).max(1);
+    let default_rows = (project.document.size.height / atlas.tile_height.max(1)).max(1);
+
+    let mut map_cols = default_cols;
+    let mut map_rows = default_rows;
+
+    let tilemap_layers: Vec<_> = project
+        .document
+        .layers
+        .iter()
+        .rev()
+        .filter(|l| l.kind == LayerKind::Tilemap)
+        .collect();
+
+    for l in &tilemap_layers {
+        if let Some(grid) = l.tilemaps.get(&0).or_else(|| l.tilemaps.values().next()) {
+            map_cols = map_cols.max(grid.cols);
+            map_rows = map_rows.max(grid.rows);
+        }
+    }
+
+    let mut tiled_layers = Vec::new();
+    for (idx, layer) in tilemap_layers.iter().enumerate() {
+        let mut data = vec![0u32; (map_cols * map_rows) as usize];
+        if let Some(grid) = layer.tilemaps.get(&0).or_else(|| layer.tilemaps.values().next()) {
+            let mc = map_cols.min(grid.cols);
+            let mr = map_rows.min(grid.rows);
+            for r in 0..mr {
+                for c in 0..mc {
+                    let tile_id = grid.cells[(r * grid.cols + c) as usize];
+                    data[(r * map_cols + c) as usize] = tile_id as u32;
+                }
+            }
+        }
+        tiled_layers.push(json!({
+            "data": data,
+            "height": map_rows,
+            "id": idx + 1,
+            "name": layer.name,
+            "opacity": layer.opacity,
+            "type": "tilelayer",
+            "visible": layer.visible,
+            "width": map_cols,
+            "x": 0,
+            "y": 0
+        }));
+    }
+
+    let (orientation, cell_h) = match project.document.tile_projection {
+        TileProjection::Isometric => ("isometric", (atlas.tile_width / 2).max(4)),
+        TileProjection::Orthogonal => ("orthogonal", atlas.tile_height),
+    };
+
+    let root = json!({
+        "compressionlevel": -1,
+        "height": map_rows,
+        "infinite": false,
+        "layers": tiled_layers,
+        "nextlayerid": tiled_layers.len() + 1,
+        "nextobjectid": 1,
+        "orientation": orientation,
+        "renderorder": "right-down",
+        "tiledversion": "1.10.2",
+        "tileheight": cell_h,
+        "tilesets": [{
+            "firstgid": 1,
+            "source": tsj_filename
+        }],
+        "tilewidth": atlas.tile_width,
+        "type": "map",
+        "version": "1.10",
+        "width": map_cols
+    });
+    serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string())
+}
+
 pub fn export_project(
     project: &ProjectData,
     out_dir: impl AsRef<Path>,
     opts: &ExportOptions,
 ) -> Result<ExportResult, PixetError> {
-    let sheet = pack_spritesheet(project, opts)?;
     let out_dir = out_dir.as_ref();
     fs::create_dir_all(out_dir)?;
 
@@ -676,6 +908,58 @@ pub fn export_project(
         opts.sheet_name.trim()
     };
 
+    match opts.format {
+        ExportFormat::GodotTileset => {
+            let atlas = build_tileset_atlas(project, opts.padding, opts.extrude)?;
+            let png_filename = format!("{clean_name}_tileset.png");
+            let png_path = out_dir.join(&png_filename);
+            let png_bytes = encode_rgba_png(atlas.width, atlas.height, &atlas.rgba)?;
+            fs::write(&png_path, png_bytes)?;
+
+            let tres = generate_godot_tileset(project, &atlas, &png_filename);
+            let metadata_path = out_dir.join(format!("{clean_name}_tileset.tres"));
+            fs::write(&metadata_path, tres)?;
+
+            return Ok(ExportResult {
+                png_path,
+                metadata_path,
+                sheet_width: atlas.width,
+                sheet_height: atlas.height,
+                frame_count: atlas.tile_count as usize,
+            });
+        }
+        ExportFormat::Tiled => {
+            let atlas = build_tileset_atlas(project, opts.padding, opts.extrude)?;
+            let png_filename = format!("{clean_name}_tileset.png");
+            let png_path = out_dir.join(&png_filename);
+            let png_bytes = encode_rgba_png(atlas.width, atlas.height, &atlas.rgba)?;
+            fs::write(&png_path, png_bytes)?;
+
+            let tsj_filename = format!("{clean_name}.tsj");
+            let tsj_path = out_dir.join(&tsj_filename);
+            fs::write(
+                &tsj_path,
+                generate_tiled_tileset_json(project, &atlas, &png_filename),
+            )?;
+
+            let tmj_path = out_dir.join(format!("{clean_name}.tmj"));
+            fs::write(
+                &tmj_path,
+                generate_tiled_tilemap_json(project, &atlas, &tsj_filename),
+            )?;
+
+            return Ok(ExportResult {
+                png_path,
+                metadata_path: tmj_path,
+                sheet_width: atlas.width,
+                sheet_height: atlas.height,
+                frame_count: atlas.tile_count as usize,
+            });
+        }
+        ExportFormat::Json | ExportFormat::Godot => {}
+    }
+
+    let sheet = pack_spritesheet(project, opts)?;
     let png_filename = format!("{clean_name}.png");
     let png_path = out_dir.join(&png_filename);
     let png_bytes = encode_rgba_png(sheet.width, sheet.height, &sheet.rgba)?;
@@ -690,6 +974,7 @@ pub fn export_project(
             "tres",
             generate_godot_spriteframes(project, &sheet, &png_filename),
         ),
+        ExportFormat::GodotTileset | ExportFormat::Tiled => unreachable!(),
     };
 
     let metadata_path = out_dir.join(format!("{clean_name}.{ext}"));
@@ -733,7 +1018,11 @@ mod tests {
             cels.insert(cel_key("layer-base", f), base);
         }
 
-        ProjectData { document: doc, cels }
+        ProjectData {
+            document: doc,
+            cels,
+            tiles: Vec::new(),
+        }
     }
 
     #[test]
@@ -823,5 +1112,88 @@ mod tests {
         assert!(tres.contains("[sub_resource type=\"AtlasTexture\" id=\"AtlasTexture_0\"]"));
         assert!(tres.contains("\"name\": &\"idle\""));
         assert!(tres.contains("margin = Rect2("));
+    }
+
+    #[test]
+    fn tileset_zip_round_trip_and_godot_tiled_exports() {
+        use crate::document::{Layer, TilemapGrid, TilesetMeta};
+        use std::collections::BTreeMap;
+
+        let mut project = make_sample_project();
+        project.document.size = crate::document::CanvasSize {
+            width: 16,
+            height: 8,
+        };
+        project.document.tile_projection = TileProjection::Isometric;
+        project.document.tileset = Some(TilesetMeta {
+            id: "ts-1".to_string(),
+            name: "IsoTerrain".to_string(),
+            tile_width: 8,
+            tile_height: 8,
+            tile_count: 2,
+        });
+        // Tile 1 = solid red, Tile 2 = solid green
+        let tile1 = vec![255, 0, 0, 255].repeat(8 * 8);
+        let tile2 = vec![0, 255, 0, 255].repeat(8 * 8);
+        project.tiles = vec![tile1, tile2];
+
+        let mut tilemaps = BTreeMap::new();
+        tilemaps.insert(
+            0,
+            TilemapGrid {
+                cols: 2,
+                rows: 2,
+                cells: vec![1, 2, 0, 1],
+            },
+        );
+        project.document.layers.insert(
+            0,
+            Layer {
+                id: "tilemap-1".to_string(),
+                name: "Ground".to_string(),
+                kind: LayerKind::Tilemap,
+                visible: true,
+                locked: false,
+                opacity: 1.0,
+                alpha_lock: false,
+                blend_mode: crate::document::BlendMode::Normal,
+                parent_id: None,
+                cels: Vec::new(),
+                tilemaps,
+            },
+        );
+        project.cels.clear();
+
+        // Round-trip ZIP with tileset PNGs and TilemapGrid
+        let zip_bytes = write_pixet_bytes(&project).expect("write .pixet with tiles");
+        let loaded = read_pixet_bytes(&zip_bytes).expect("read .pixet with tiles");
+        assert_eq!(loaded.tiles.len(), 2);
+        assert_eq!(loaded.document.tileset, project.document.tileset);
+        assert_eq!(
+            loaded.document.tile_projection,
+            TileProjection::Isometric
+        );
+
+        // Headless composite renders isometric tilemap
+        let comp = composite_frame(&loaded, 0);
+        assert!(comp.chunks_exact(4).any(|px| px == [255, 0, 0, 255]));
+
+        // Godot 4 TileSet (.tres)
+        let atlas = build_tileset_atlas(&loaded, 1, 1).expect("atlas");
+        let godot_ts = generate_godot_tileset(&loaded, &atlas, "terrain_tileset.png");
+        assert!(godot_ts.contains("[gd_resource type=\"TileSet\" load_steps=3 format=3]"));
+        assert!(godot_ts.contains("tile_shape = 1"));
+        assert!(godot_ts.contains("0:0/0 = 0"));
+        assert!(godot_ts.contains("1:0/0 = 0"));
+
+        // Tiled (.tsj + .tmj)
+        let tsj = generate_tiled_tileset_json(&loaded, &atlas, "terrain_tileset.png");
+        let tsj_val: serde_json::Value = serde_json::from_str(&tsj).expect("valid tsj");
+        assert_eq!(tsj_val["tilecount"], 2);
+
+        let tmj = generate_tiled_tilemap_json(&loaded, &atlas, "terrain.tsj");
+        let tmj_val: serde_json::Value = serde_json::from_str(&tmj).expect("valid tmj");
+        assert_eq!(tmj_val["orientation"], "isometric");
+        assert_eq!(tmj_val["layers"][0]["data"], json!([1, 2, 0, 1]));
     }
 }

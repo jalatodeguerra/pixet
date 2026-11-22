@@ -15,6 +15,8 @@ pub struct AppInfo {
 pub struct ProjectTransfer {
     pub document: pixet_core::Document,
     pub cels: HashMap<String, String>,
+    #[serde(default)]
+    pub tiles: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,9 +48,17 @@ fn transfer_to_project(payload: ProjectTransfer) -> Result<pixet_core::ProjectDa
             .map_err(|e| format!("Invalid base64 cel `{key}`: {e}"))?;
         cels.insert(key, raw);
     }
+    let mut tiles = Vec::with_capacity(payload.tiles.len());
+    for (idx, b64) in payload.tiles.into_iter().enumerate() {
+        let raw = BASE64
+            .decode(b64)
+            .map_err(|e| format!("Invalid base64 tile #{}: {e}", idx + 1))?;
+        tiles.push(raw);
+    }
     Ok(pixet_core::ProjectData {
         document: payload.document,
         cels,
+        tiles,
     })
 }
 
@@ -57,9 +67,11 @@ fn project_to_transfer(project: pixet_core::ProjectData) -> ProjectTransfer {
     for (key, raw) in project.cels {
         cels.insert(key, BASE64.encode(raw));
     }
+    let tiles = project.tiles.into_iter().map(|raw| BASE64.encode(raw)).collect();
     ProjectTransfer {
         document: project.document,
         cels,
+        tiles,
     }
 }
 

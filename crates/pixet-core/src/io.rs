@@ -30,6 +30,8 @@ pub struct ProjectData {
     pub document: Document,
     /// Raw RGBA bytes keyed by `"{layer_id}:{frame_index}"`.
     pub cels: HashMap<String, Vec<u8>>,
+    /// Raw RGBA bytes for tileset tiles `1..=N` stored at indices `0..N`.
+    pub tiles: Vec<Vec<u8>>,
 }
 
 pub fn cel_key(layer_id: &str, frame_index: u32) -> String {
@@ -133,6 +135,15 @@ pub fn write_pixet_bytes(project: &ProjectData) -> Result<Vec<u8>, PixetError> {
             zip.write_all(&png_bytes)?;
         }
 
+        if let Some(ts) = &project.document.tileset {
+            for (idx, tile_rgba) in project.tiles.iter().enumerate() {
+                let png_bytes = encode_rgba_png(ts.tile_width, ts.tile_height, tile_rgba)?;
+                let entry_name = format!("tilesets/{}/tile_{}.png", ts.id, idx + 1);
+                zip.start_file(entry_name, options)?;
+                zip.write_all(&png_bytes)?;
+            }
+        }
+
         zip.finish()?;
     }
     Ok(cursor.into_inner())
@@ -151,9 +162,12 @@ pub fn read_pixet_bytes(bytes: &[u8]) -> Result<ProjectData, PixetError> {
     };
 
     let mut cels = HashMap::new();
+    let mut indexed_tiles: Vec<(usize, Vec<u8>)> = Vec::new();
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let name = file.name().to_string();
+
         if let Some(stem) = name
             .strip_prefix("cels/")
             .and_then(|rest| rest.strip_suffix(".png"))
@@ -172,10 +186,42 @@ pub fn read_pixet_bytes(bytes: &[u8]) -> Result<ProjectData, PixetError> {
                     cels.insert(cel_key(layer_id, frame_index), rgba);
                 }
             }
+            continue;
+        }
+
+        if let Some(rest) = name.strip_prefix("tilesets/") {
+            if let Some((_, file_part)) = rest.rsplit_once('/') {
+                if let Some(idx_str) = file_part
+                    .strip_prefix("tile_")
+                    .and_then(|s| s.strip_suffix(".png"))
+                {
+                    if let Ok(tile_idx) = idx_str.parse::<usize>() {
+                        let mut png_bytes = Vec::new();
+                        file.read_to_end(&mut png_bytes)?;
+                        let (w, h, rgba) = decode_rgba_png(&png_bytes)?;
+                        if let Some(ts) = &document.tileset {
+                            if w != ts.tile_width || h != ts.tile_height {
+                                return Err(PixetError::InvalidProject(format!(
+                                    "Tile #{tile_idx} dimensions {w}x{h} do not match tileset {}x{}",
+                                    ts.tile_width, ts.tile_height
+                                )));
+                            }
+                        }
+                        indexed_tiles.push((tile_idx, rgba));
+                    }
+                }
+            }
         }
     }
 
-    Ok(ProjectData { document, cels })
+    indexed_tiles.sort_by_key(|(idx, _)| *idx);
+    let tiles = indexed_tiles.into_iter().map(|(_, rgba)| rgba).collect();
+
+    Ok(ProjectData {
+        document,
+        cels,
+        tiles,
+    })
 }
 
 pub fn save_pixet(

@@ -10,8 +10,9 @@ import { PixelBuffer } from "../document/PixelBuffer.ts";
 import { pixelEngine } from "../document/PixelEngine.ts";
 import { commitFloatingSelection } from "../document/selectionActions.ts";
 import { syncTimelineCels } from "../document/timelineActions.ts";
+import { TilemapData } from "../tiles/TilemapEngine.ts";
 
-export type ExportFormat = "json" | "godot";
+export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
 export type PackMode = "grid" | "tight";
 
 export interface ExportOptionsDto {
@@ -38,6 +39,20 @@ interface RustCel {
   linked_frame?: number | null;
 }
 
+interface RustTilemapGrid {
+  cols: number;
+  rows: number;
+  cells: number[];
+}
+
+interface RustTilesetMeta {
+  id: string;
+  name: string;
+  tile_width: number;
+  tile_height: number;
+  tile_count: number;
+}
+
 interface RustLayer {
   id: string;
   name: string;
@@ -49,6 +64,7 @@ interface RustLayer {
   blend_mode: "normal" | "multiply" | "screen" | "overlay" | "add";
   parent_id: string | null;
   cels: RustCel[];
+  tilemaps?: Record<string, RustTilemapGrid>;
 }
 
 interface RustDocument {
@@ -66,11 +82,14 @@ interface RustDocument {
     to_frame: number;
     color: string;
   }[];
+  tileset?: RustTilesetMeta | null;
+  tile_projection?: "orthogonal" | "isometric";
 }
 
 export interface ProjectTransfer {
   document: RustDocument;
   cels: Record<string, string>;
+  tiles?: string[];
 }
 
 export function isTauriRuntime(): boolean {
@@ -144,8 +163,21 @@ export function serializeProjectTransfer(): ProjectTransfer {
   const celsMap: Record<string, string> = {};
   const layers: RustLayer[] = state.layers.map((layer) => {
     const rustCels: RustCel[] = [];
+    const tilemaps: Record<string, RustTilemapGrid> = {};
 
-    if (layer.kind !== "group") {
+    if (layer.kind === "tilemap") {
+      for (const frame of state.frames) {
+        const key = `${layer.id}:${frame.index}`;
+        const tm = pixelEngine.tilemaps.get(key);
+        if (tm) {
+          tilemaps[String(frame.index)] = {
+            cols: tm.cols,
+            rows: tm.rows,
+            cells: Array.from(tm.grid),
+          };
+        }
+      }
+    } else if (layer.kind !== "group") {
       for (const frame of state.frames) {
         const key = `${layer.id}:${frame.index}`;
         const linkedTarget = pixelEngine.celLinks.get(key);
@@ -183,8 +215,14 @@ export function serializeProjectTransfer(): ProjectTransfer {
       blend_mode: toRustBlend(layer.blendMode),
       parent_id: layer.parentId,
       cels: rustCels,
+      tilemaps,
     };
   });
+
+  const tiles: string[] = [];
+  for (let i = 1; i < pixelEngine.tileset.tiles.length; i++) {
+    tiles.push(bytesToBase64(pixelEngine.tileset.tiles[i].data));
+  }
 
   const document: RustDocument = {
     schema_version: 1,
@@ -208,9 +246,17 @@ export function serializeProjectTransfer(): ProjectTransfer {
       to_frame: t.toFrame,
       color: t.color,
     })),
+    tileset: {
+      id: pixelEngine.tileset.id,
+      name: pixelEngine.tileset.name,
+      tile_width: pixelEngine.tileset.tileWidth,
+      tile_height: pixelEngine.tileset.tileHeight,
+      tile_count: tiles.length,
+    },
+    tile_projection: pixelEngine.tileProjection,
   };
 
-  return { document, cels: celsMap };
+  return { document, cels: celsMap, tiles };
 }
 
 export function hydrateProjectTransfer(
@@ -230,12 +276,42 @@ export function hydrateProjectTransfer(
     }
   }
 
+  if (doc.tileset) {
+    const tw = doc.tileset.tile_width;
+    const th = doc.tileset.tile_height;
+    pixelEngine.tileset.name = doc.tileset.name;
+    pixelEngine.tileset.tileWidth = tw;
+    pixelEngine.tileset.tileHeight = th;
+    pixelEngine.tileset.tiles = [new PixelBuffer(tw, th)];
+    if (transfer.tiles && transfer.tiles.length > 0) {
+      for (const b64 of transfer.tiles) {
+        const raw = base64ToBytes(b64);
+        if (raw.length === tw * th * 4) {
+          pixelEngine.tileset.tiles.push(new PixelBuffer(tw, th, raw));
+        }
+      }
+    }
+    useEditorStore.getState().setTileSize(tw, th);
+  }
+
+  const proj = doc.tile_projection ?? "orthogonal";
+  pixelEngine.tileProjection = proj;
+  useEditorStore.getState().setTileProjection(proj);
+
   for (const layer of doc.layers) {
     for (const cel of layer.cels) {
       if (cel.linked_frame !== undefined && cel.linked_frame !== null) {
         pixelEngine.celLinks.set(
           `${layer.id}:${cel.frame_index}`,
           cel.linked_frame
+        );
+      }
+    }
+    if (layer.tilemaps) {
+      for (const [frameStr, grid] of Object.entries(layer.tilemaps)) {
+        pixelEngine.tilemaps.set(
+          `${layer.id}:${frameStr}`,
+          new TilemapData(grid.cols, grid.rows, new Uint16Array(grid.cells))
         );
       }
     }
@@ -279,6 +355,7 @@ export function hydrateProjectTransfer(
   });
 
   syncTimelineCels();
+  useEditorStore.getState().bumpTilesetVersion();
   pixelEngine.emitChange();
 }
 
