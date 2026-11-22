@@ -137,6 +137,66 @@ export class PixelEngine {
     this.floating = null;
   }
 
+  resizeCanvas(
+    newWidth: number,
+    newHeight: number,
+    anchorX: 0 | 1 | 2 = 1,
+    anchorY: 0 | 1 | 2 = 1
+  ): void {
+    const w = Math.max(1, Math.min(1024, Math.round(newWidth)));
+    const h = Math.max(1, Math.min(1024, Math.round(newHeight)));
+    if (w === this.width && h === this.height) return;
+
+    const dx =
+      anchorX === 0
+        ? 0
+        : anchorX === 1
+          ? Math.floor((w - this.width) / 2)
+          : w - this.width;
+    const dy =
+      anchorY === 0
+        ? 0
+        : anchorY === 1
+          ? Math.floor((h - this.height) / 2)
+          : h - this.height;
+
+    for (const [key, oldCel] of this.cels.entries()) {
+      const nextCel = new PixelBuffer(w, h);
+      for (let sy = 0; sy < oldCel.height; sy++) {
+        const ty = sy + dy;
+        if (ty < 0 || ty >= h) continue;
+        for (let sx = 0; sx < oldCel.width; sx++) {
+          const tx = sx + dx;
+          if (tx < 0 || tx >= w) continue;
+          const [r, g, b, a] = oldCel.getPixel(sx, sy);
+          if (a > 0) {
+            nextCel.setPixel(tx, ty, r, g, b, a);
+          }
+        }
+      }
+      nextCel.markAllDirty();
+      this.cels.set(key, nextCel);
+    }
+
+    const cols = Math.max(1, Math.ceil(w / this.tileset.tileWidth));
+    const rows = Math.max(1, Math.ceil(h / this.tileset.tileHeight));
+    for (const tm of this.tilemaps.values()) {
+      tm.resize(cols, rows);
+    }
+
+    this.width = w;
+    this.height = h;
+    const byteLen = w * h * 4;
+    this.compositeBuffer = new Uint8ClampedArray(byteLen);
+    this.overlayBuffer = new PixelBuffer(w, h);
+    this.onionBuffer = new Uint8ClampedArray(byteLen);
+    this.onionScratch = new Uint8ClampedArray(byteLen);
+    this.selection = null;
+    this.floating = null;
+    this.history.clear();
+    this.emitChange();
+  }
+
   private celKey(layerId: string, frameIndex: number): string {
     return `${layerId}:${frameIndex}`;
   }

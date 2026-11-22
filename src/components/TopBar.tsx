@@ -58,6 +58,8 @@ export function TopBar() {
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
   const setRotate3dModalOpen = useEditorStore((s) => s.setRotate3dModalOpen);
+  const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
+  const setCanvasSizeModalOpen = useEditorStore((s) => s.setCanvasSizeModalOpen);
 
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
   const menuStripRef = useRef<HTMLDivElement>(null);
@@ -72,14 +74,9 @@ export function TopBar() {
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, []);
 
-  const notifyMilestone = (label: string, milestone: string) => {
-    setStatusMessage(`${label} will be wired in ${milestone}`);
-    setOpenMenu(null);
-  };
-
   const menus: Record<MenuKey, MenuItem[]> = {
     File: [
-      { label: "New Sprite...", shortcut: "Ctrl+N", action: () => notifyMilestone("New Sprite dialog", "Phase 2") },
+      { label: "New Sprite...", shortcut: "Ctrl+N", action: () => { setOpenMenu(null); setNewSpriteModalOpen(true); } },
       { label: "Open .pixet...", shortcut: "Ctrl+O", action: () => { setOpenMenu(null); void openProjectAction(); } },
       {
         label: "Import Image...",
@@ -128,7 +125,7 @@ export function TopBar() {
       { label: "New Frame", action: () => { addEmptyFrameAction(); setOpenMenu(null); } },
       { label: "Duplicate Frame", action: () => { duplicateCurrentFrameAction(); setOpenMenu(null); } },
       { label: "3D Rotate & Turntable...", shortcut: "Ctrl+3", action: () => { setOpenMenu(null); setRotate3dModalOpen(true); } },
-      { label: "Canvas Size...", action: () => notifyMilestone("Canvas Resize", "Milestone 1.2") },
+      { label: "Canvas Size...", action: () => { setOpenMenu(null); setCanvasSizeModalOpen(true); } },
     ],
   };
 

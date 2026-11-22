@@ -133,6 +133,8 @@ interface EditorState {
   colorMode: "RGBA" | "Indexed";
   exportModalOpen: boolean;
   rotate3dModalOpen: boolean;
+  newSpriteModalOpen: boolean;
+  canvasSizeModalOpen: boolean;
   pendingImportImage: PendingImageImport | null;
   contextMenu: ContextMenuState | null;
 
@@ -253,6 +255,9 @@ interface EditorState {
   setDocumentName: (name: string) => void;
   setExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
+  setNewSpriteModalOpen: (open: boolean) => void;
+  setCanvasSizeModalOpen: (open: boolean) => void;
+  setCanvasSize: (w: number, h: number) => void;
   setPendingImportImage: (img: PendingImageImport | null) => void;
   openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
   closeContextMenu: () => void;
@@ -339,6 +344,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   colorMode: "RGBA",
   exportModalOpen: false,
   rotate3dModalOpen: false,
+  newSpriteModalOpen: false,
+  canvasSizeModalOpen: false,
   pendingImportImage: null,
   contextMenu: null,
 
@@ -944,6 +951,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setDocumentName: (documentName) => set({ documentName }),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
   setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
+  setNewSpriteModalOpen: (newSpriteModalOpen) => set({ newSpriteModalOpen }),
+  setCanvasSizeModalOpen: (canvasSizeModalOpen) => set({ canvasSizeModalOpen }),
+  setCanvasSize: (canvasWidth, canvasHeight) => set({ canvasWidth, canvasHeight }),
   setPendingImportImage: (pendingImportImage) => set({ pendingImportImage }),
   openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
   closeContextMenu: () => set({ contextMenu: null }),

@@ -961,3 +961,25 @@ test("cut selection to new layer preserves exact pixel offsets and layer reorder
   assert.deepEqual(reorder(["A", "B", "C"], 2, 0, "before"), ["C", "A", "B"]);
   assert.deepEqual(reorder(["A", "B", "C"], 2, 0, "after"), ["A", "C", "B"]);
 });
+
+test("PixelEngine.resizeCanvas expands centered and crops anchored cleanly", () => {
+  const engine = new PixelEngine(4, 4);
+  const cel = engine.getOrCreateCel("layer-1", 0);
+  cel.setPixel(1, 1, 200, 100, 50, 255);
+  cel.setPixel(0, 0, 10, 20, 30, 255);
+
+  // Center-anchored expand 4x4 -> 8x8 shifts pixels by (+2, +2)
+  engine.resizeCanvas(8, 8, 1, 1);
+  assert.equal(engine.width, 8);
+  assert.equal(engine.height, 8);
+  const expanded = engine.getCel("layer-1", 0)!;
+  assert.deepEqual(expanded.getPixel(3, 3), [200, 100, 50, 255]);
+  assert.deepEqual(expanded.getPixel(2, 2), [10, 20, 30, 255]);
+
+  // Top-left anchored crop 8x8 -> 4x4 keeps (0..3, 0..3)
+  engine.resizeCanvas(4, 4, 0, 0);
+  const cropped = engine.getCel("layer-1", 0)!;
+  assert.equal(cropped.width, 4);
+  assert.equal(cropped.height, 4);
+  assert.deepEqual(cropped.getPixel(3, 3), [200, 100, 50, 255]);
+});

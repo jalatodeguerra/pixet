@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { CanvasSizeModal } from "./components/CanvasSizeModal";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportModal } from "./components/ExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
+import { NewSpriteModal } from "./components/NewSpriteModal";
 import { RightSidebar } from "./components/RightSidebar";
 import { Rotate3DModal } from "./components/Rotate3DModal";
 import { StatusBar } from "./components/StatusBar";
@@ -149,6 +151,11 @@ export function App() {
         if (ctrlKey === "s") {
           e.preventDefault();
           void saveProjectAction(e.shiftKey);
+          return;
+        }
+        if (ctrlKey === "n") {
+          e.preventDefault();
+          useEditorStore.getState().setNewSpriteModalOpen(true);
           return;
         }
         if (ctrlKey === "o") {
@@ -391,6 +398,8 @@ export function App() {
       <ExportModal />
       <Rotate3DModal />
       <ImportImageModal />
+      <NewSpriteModal />
+      <CanvasSizeModal />
       <ContextMenu />
       {isDragOver && (
         <div className="dropzone-overlay">
