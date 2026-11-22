@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Copy,
   Layers,
@@ -30,9 +31,21 @@ import {
   toggleLinkCelAction,
 } from "../engine/document/timelineActions";
 import { pixelEngine } from "../engine/document/PixelEngine";
-import { getBoneInfluenceColor } from "../engine/rig/RigEngine";
+import {
+  getBoneInfluenceColor,
+  type EasingMode,
+} from "../engine/rig/RigEngine";
+import {
+  copyKeyframes,
+  pasteKeyframes,
+  retimeKeyframes,
+  setKeyframeEasing,
+  type CopiedRigKeyframe,
+  type RigKeyRef,
+} from "../engine/rig/animationTools";
 import { mutateRig } from "../engine/rig/rigActions";
 import { useEditorStore } from "../store/editorStore";
+import { CurveEditor } from "./rig/CurveEditor";
 
 export function Timeline() {
   const frames = useEditorStore((s) => s.frames);
@@ -56,6 +69,9 @@ export function Timeline() {
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
   const selectedBoneIds = useEditorStore((s) => s.selectedBoneIds);
   const setSelectedBoneId = useEditorStore((s) => s.setSelectedBoneId);
+  const rigTimelineView = useEditorStore((s) => s.rigTimelineView);
+  const setRigTimelineView = useEditorStore((s) => s.setRigTimelineView);
+  const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
   const setCurrentFrame = useEditorStore((s) => s.setCurrentFrame);
   const prevFrame = useEditorStore((s) => s.prevFrame);
@@ -77,6 +93,12 @@ export function Timeline() {
 
   const [dragFrameIdx, setDragFrameIdx] = useState<number | null>(null);
   const [dragOverFrameIdx, setDragOverFrameIdx] = useState<number | null>(null);
+  const [expandedBoneIds, setExpandedBoneIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [selectedKeys, setSelectedKeys] = useState<RigKeyRef[]>([]);
+  const [copiedKeys, setCopiedKeys] = useState<CopiedRigKeyframe[]>([]);
+  const [retimeDragFrom, setRetimeDragFrom] = useState<number | null>(null);
   const [showTagForm, setShowTagForm] = useState(false);
   const [tagName, setTagName] = useState("run");
   const [tagFrom, setTagFrom] = useState(1);
@@ -198,6 +220,26 @@ export function Timeline() {
           >
             <Copy size={12} />
           </button>
+
+          {workspaceMode === "rig" && rigMode === "animate" && (
+            <>
+              <div className="option-divider" />
+              <button
+                type="button"
+                className={`toggle-chip ${rigTimelineView === "dope" ? "active" : ""}`}
+                onClick={() => setRigTimelineView("dope")}
+              >
+                <span>Dope</span>
+              </button>
+              <button
+                type="button"
+                className={`toggle-chip ${rigTimelineView === "curves" ? "active" : ""}`}
+                onClick={() => setRigTimelineView("curves")}
+              >
+                <span>Curves</span>
+              </button>
+            </>
+          )}
 
           <button
             type="button"
@@ -371,8 +413,63 @@ export function Timeline() {
         </div>
       </div>
 
-      {!timelineCollapsed && (
-        <div className="timeline-grid-wrap">
+      {!timelineCollapsed &&
+        workspaceMode === "rig" &&
+        rigMode === "animate" &&
+        rigTimelineView === "curves" && (
+          <div className="timeline-grid-wrap" style={{ flex: 1 }}>
+            <CurveEditor />
+          </div>
+        )}
+
+      {!timelineCollapsed &&
+        !(
+          workspaceMode === "rig" &&
+          rigMode === "animate" &&
+          rigTimelineView === "curves"
+        ) && (
+        <div
+          className="timeline-grid-wrap"
+          tabIndex={0}
+          onPointerUp={() => setRetimeDragFrom(null)}
+          onKeyDown={(e) => {
+            if (workspaceMode !== "rig" || rigMode !== "animate") return;
+            const mod = e.ctrlKey || e.metaKey;
+            const clip = pixelEngine.rig.getActiveClip();
+            if (mod && e.key.toLowerCase() === "c" && selectedKeys.length > 0) {
+              e.preventDefault();
+              e.stopPropagation();
+              const copied = copyKeyframes(clip, selectedKeys);
+              setCopiedKeys(copied);
+              setStatusMessage(`Copied ${copied.length} keyframe(s)`);
+              return;
+            }
+            if (mod && e.key.toLowerCase() === "v" && copiedKeys.length > 0) {
+              e.preventDefault();
+              e.stopPropagation();
+              const pasted = mutateRig("Paste keyframes", () => {
+                const count = pasteKeyframes(clip, copiedKeys, currentFrame);
+                pixelEngine.rig.invalidateEvaluation();
+                return count;
+              });
+              setStatusMessage(`Pasted ${pasted} keyframe(s)`);
+              return;
+            }
+            if (
+              (e.key === "Delete" || e.key === "Backspace") &&
+              selectedKeys.length > 0
+            ) {
+              e.preventDefault();
+              e.stopPropagation();
+              mutateRig("Delete keyframes", () => {
+                for (const ref of selectedKeys) {
+                  pixelEngine.rig.deleteKeyframe(ref.boneId, ref.frame);
+                }
+              });
+              setSelectedKeys([]);
+            }
+          }}
+        >
           {tags.length > 0 && (
             <div className="timeline-tag-bar-row">
               <div
@@ -490,90 +587,368 @@ export function Timeline() {
               const [r, g, b] = getBoneInfluenceColor(boneIdx);
               const isBoneSelected =
                 bone.id === selectedBoneId || selectedBoneIds.includes(bone.id);
-              return (
-                <div
-                  key={`rig-${bone.id}-${rigVersion}`}
-                  className={`timeline-rig-row ${isBoneSelected ? "active" : ""}`}
-                >
-                  <button
-                    type="button"
-                    className="timeline-label-col"
-                    title={`Bone: ${bone.name}`}
-                    onClick={() => setSelectedBoneId(bone.id)}
-                  >
-                    <span
-                      className="rig-bone-swatch"
-                      style={{ backgroundColor: `rgb(${r}, ${g}, ${b})` }}
-                    />
-                    <span className="layer-name" style={{ textAlign: "left" }}>
-                      {bone.name}
-                    </span>
-                  </button>
+              const isExpanded = expandedBoneIds.has(bone.id);
+              const clip = pixelEngine.rig.getActiveClip();
+              const track = clip.tracks[bone.id] ?? [];
 
+              const setEasingAction = (frameIdx: number, easing: EasingMode) => {
+                mutateRig("Set key easing", () => {
+                  setKeyframeEasing(clip, bone.id, frameIdx, easing);
+                  pixelEngine.rig.invalidateEvaluation();
+                });
+              };
+
+              return (
+                <div key={`rig-${bone.id}-${rigVersion}`}>
+                  <div
+                    className={`timeline-rig-row ${isBoneSelected ? "active" : ""}`}
+                  >
+                    <button
+                      type="button"
+                      className="timeline-label-col"
+                      title={`Bone: ${bone.name}`}
+                      onClick={() => setSelectedBoneId(bone.id)}
+                    >
+                      <span
+                        className="rig-tree-chevron"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedBoneIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(bone.id)) next.delete(bone.id);
+                            else next.add(bone.id);
+                            return next;
+                          });
+                        }}
+                      >
+                        {isExpanded ? (
+                          <ChevronDown size={10} />
+                        ) : (
+                          <ChevronRight size={10} />
+                        )}
+                      </span>
+                      <span
+                        className="rig-bone-swatch"
+                        style={{ backgroundColor: `rgb(${r}, ${g}, ${b})` }}
+                      />
+                      <span className="layer-name" style={{ textAlign: "left" }}>
+                        {bone.name}
+                      </span>
+                    </button>
+
+                    {frames.map((frame) => {
+                      const hasKey = pixelEngine.rig.hasKeyframe(
+                        bone.id,
+                        frame.index
+                      );
+                      const isKeySelected = selectedKeys.some(
+                        (k) => k.boneId === bone.id && k.frame === frame.index
+                      );
+                      const activeCol = frame.index === currentFrame;
+                      return (
+                        <button
+                          key={`rig-${bone.id}-${frame.id}`}
+                          type="button"
+                          className={`rig-dope-cell ${activeCol ? "active-col" : ""} ${isKeySelected ? "active" : ""}`}
+                          style={
+                            isKeySelected
+                              ? { outline: "1px solid var(--accent)" }
+                              : undefined
+                          }
+                          title={`${bone.name} · Frame ${frame.index + 1}${hasKey ? " (Keyframed · Drag to retime)" : " (Double-click to set keyframe)"}`}
+                          onPointerDown={(e) => {
+                            if (e.button !== 0 || !hasKey) return;
+                            if (isKeySelected) {
+                              setRetimeDragFrom(frame.index);
+                            }
+                          }}
+                          onPointerEnter={() => {
+                            if (
+                              retimeDragFrom === null ||
+                              retimeDragFrom === frame.index ||
+                              selectedKeys.length === 0
+                            ) {
+                              return;
+                            }
+                            const delta = frame.index - retimeDragFrom;
+                            const moves = selectedKeys.map((k) => ({
+                              boneId: k.boneId,
+                              fromFrame: k.frame,
+                              toFrame: Math.max(0, k.frame + delta),
+                            }));
+                            mutateRig("Retime keyframes", () => {
+                              retimeKeyframes(clip, moves);
+                              pixelEngine.rig.invalidateEvaluation();
+                            });
+                            setSelectedKeys(
+                              moves.map((m) => ({
+                                boneId: m.boneId,
+                                frame: m.toFrame,
+                              }))
+                            );
+                            setRetimeDragFrom(frame.index);
+                          }}
+                          onClick={(e) => {
+                            setSelectedBoneId(bone.id);
+                            setCurrentFrame(frame.index);
+                            if (!hasKey) {
+                              if (!e.ctrlKey && !e.metaKey) setSelectedKeys([]);
+                              return;
+                            }
+                            if (e.ctrlKey || e.metaKey) {
+                              setSelectedKeys((prev) =>
+                                prev.some(
+                                  (k) =>
+                                    k.boneId === bone.id &&
+                                    k.frame === frame.index
+                                )
+                                  ? prev.filter(
+                                      (k) =>
+                                        !(
+                                          k.boneId === bone.id &&
+                                          k.frame === frame.index
+                                        )
+                                    )
+                                  : [
+                                      ...prev,
+                                      { boneId: bone.id, frame: frame.index },
+                                    ]
+                              );
+                            } else if (e.shiftKey && selectedKeys.length > 0) {
+                              const last = selectedKeys[selectedKeys.length - 1];
+                              if (last.boneId === bone.id) {
+                                const [lo, hi] =
+                                  last.frame <= frame.index
+                                    ? [last.frame, frame.index]
+                                    : [frame.index, last.frame];
+                                const range = track
+                                  .filter((k) => k.frame >= lo && k.frame <= hi)
+                                  .map((k) => ({
+                                    boneId: bone.id,
+                                    frame: k.frame,
+                                  }));
+                                setSelectedKeys(range);
+                                return;
+                              }
+                              setSelectedKeys([
+                                { boneId: bone.id, frame: frame.index },
+                              ]);
+                            } else {
+                              setSelectedKeys([
+                                { boneId: bone.id, frame: frame.index },
+                              ]);
+                            }
+                          }}
+                          onDoubleClick={() => {
+                            setSelectedBoneId(bone.id);
+                            setCurrentFrame(frame.index);
+                            if (hasKey) {
+                              mutateRig("Delete keyframe", () =>
+                                pixelEngine.rig.deleteKeyframe(
+                                  bone.id,
+                                  frame.index
+                                )
+                              );
+                            } else {
+                              mutateRig("Set keyframe", () =>
+                                pixelEngine.rig.setKeyframe(
+                                  bone.id,
+                                  frame.index
+                                )
+                              );
+                            }
+                          }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedBoneId(bone.id);
+                            setCurrentFrame(frame.index);
+                            openContextMenu(e.clientX, e.clientY, [
+                              {
+                                kind: "item",
+                                label: "Set Keyframe",
+                                action: () => {
+                                  mutateRig("Set keyframe", () =>
+                                    pixelEngine.rig.setKeyframe(
+                                      bone.id,
+                                      frame.index
+                                    )
+                                  );
+                                },
+                              },
+                              {
+                                kind: "item",
+                                label: "Delete Keyframe",
+                                disabled: !hasKey,
+                                danger: true,
+                                action: () => {
+                                  mutateRig("Delete keyframe", () =>
+                                    pixelEngine.rig.deleteKeyframe(
+                                      bone.id,
+                                      frame.index
+                                    )
+                                  );
+                                },
+                              },
+                              { kind: "separator" },
+                              {
+                                kind: "item",
+                                label: "Easing: Linear",
+                                disabled: !hasKey,
+                                action: () =>
+                                  setEasingAction(frame.index, "linear"),
+                              },
+                              {
+                                kind: "item",
+                                label: "Easing: Step",
+                                disabled: !hasKey,
+                                action: () =>
+                                  setEasingAction(frame.index, "step"),
+                              },
+                              {
+                                kind: "item",
+                                label: "Easing: Ease In",
+                                disabled: !hasKey,
+                                action: () =>
+                                  setEasingAction(frame.index, "easeIn"),
+                              },
+                              {
+                                kind: "item",
+                                label: "Easing: Ease Out",
+                                disabled: !hasKey,
+                                action: () =>
+                                  setEasingAction(frame.index, "easeOut"),
+                              },
+                              {
+                                kind: "item",
+                                label: "Easing: Ease In-Out",
+                                disabled: !hasKey,
+                                action: () =>
+                                  setEasingAction(frame.index, "easeInOut"),
+                              },
+                              {
+                                kind: "item",
+                                label: "Easing: Bezier",
+                                disabled: !hasKey,
+                                action: () =>
+                                  setEasingAction(frame.index, "bezier"),
+                              },
+                            ]);
+                          }}
+                        >
+                          <span
+                            className={`rig-dope-diamond ${hasKey ? "keyed" : ""}`}
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {isExpanded &&
+                    (
+                      [
+                        { key: "rot", label: "Rotation" },
+                        { key: "pos", label: "Position" },
+                        { key: "scale", label: "Scale" },
+                        { key: "attach", label: "Attach" },
+                      ] as const
+                    ).map((ch) => (
+                      <div
+                        key={`rig-${bone.id}-${ch.key}`}
+                        className="timeline-rig-row"
+                        style={{ height: 18, opacity: 0.85 }}
+                      >
+                        <div
+                          className="timeline-label-col"
+                          style={{
+                            paddingLeft: 26,
+                            fontSize: 10,
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          {ch.label}
+                        </div>
+                        {frames.map((frame) => {
+                          const kf = track.find((k) => k.frame === frame.index);
+                          const hasChannel = Boolean(
+                            kf &&
+                              (ch.key === "rot" ||
+                                (ch.key === "pos" &&
+                                  (kf.localX !== undefined ||
+                                    kf.localY !== undefined)) ||
+                                (ch.key === "scale" &&
+                                  (kf.scaleX !== undefined ||
+                                    kf.scaleY !== undefined)) ||
+                                (ch.key === "attach" &&
+                                  kf.attachment !== undefined))
+                          );
+                          return (
+                            <div
+                              key={`rig-${bone.id}-${ch.key}-${frame.id}`}
+                              className={`rig-dope-cell ${frame.index === currentFrame ? "active-col" : ""}`}
+                            >
+                              {hasChannel && (
+                                <span
+                                  className="rig-dope-diamond keyed"
+                                  style={{ width: 5, height: 5 }}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                </div>
+              );
+            })}
+
+          {workspaceMode === "rig" &&
+            rigMode === "animate" &&
+            pixelEngine.rig.constraints
+              .filter((c) => c.type === "ik" || c.type === "aim")
+              .map((c) => (
+                <div
+                  key={`rig-c-${c.id}-${rigVersion}`}
+                  className="timeline-rig-row"
+                >
+                  <div
+                    className="timeline-label-col"
+                    style={{ fontSize: 10, color: "#eab308" }}
+                    title={`Constraint Target: ${c.name}`}
+                  >
+                    <Link2 size={10} />
+                    <span className="layer-name" style={{ textAlign: "left" }}>
+                      {c.name}
+                    </span>
+                  </div>
                   {frames.map((frame) => {
-                    const hasKey = pixelEngine.rig.hasKeyframe(
-                      bone.id,
-                      frame.index
-                    );
-                    const activeCol = frame.index === currentFrame;
+                    const hasKey =
+                      pixelEngine.rig.hasConstraintTargetKeyframe(
+                        c.id,
+                        frame.index
+                      );
                     return (
                       <button
-                        key={`rig-${bone.id}-${frame.id}`}
+                        key={`rig-c-${c.id}-${frame.id}`}
                         type="button"
-                        className={`rig-dope-cell ${activeCol ? "active-col" : ""}`}
-                        title={`${bone.name} · Frame ${frame.index + 1}${hasKey ? " (Keyframed · Double-click to delete)" : " (Double-click to set keyframe)"}`}
-                        onClick={() => {
-                          setSelectedBoneId(bone.id);
-                          setCurrentFrame(frame.index);
-                        }}
+                        className={`rig-dope-cell ${frame.index === currentFrame ? "active-col" : ""}`}
+                        title={`${c.name} Target · F${frame.index + 1}`}
+                        onClick={() => setCurrentFrame(frame.index)}
                         onDoubleClick={() => {
-                          setSelectedBoneId(bone.id);
-                          setCurrentFrame(frame.index);
                           if (hasKey) {
-                            mutateRig("Delete keyframe", () =>
-                              pixelEngine.rig.deleteKeyframe(
-                                bone.id,
+                            mutateRig("Delete target key", () =>
+                              pixelEngine.rig.deleteConstraintTargetKeyframe(
+                                c.id,
                                 frame.index
                               )
                             );
                           } else {
-                            mutateRig("Set keyframe", () =>
-                              pixelEngine.rig.setKeyframe(bone.id, frame.index)
+                            mutateRig("Key target", () =>
+                              pixelEngine.rig.setConstraintTargetKeyframe(
+                                c.id,
+                                frame.index
+                              )
                             );
                           }
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setSelectedBoneId(bone.id);
-                          setCurrentFrame(frame.index);
-                          openContextMenu(e.clientX, e.clientY, [
-                            {
-                              kind: "item",
-                              label: "Set Keyframe",
-                              action: () => {
-                                mutateRig("Set keyframe", () =>
-                                  pixelEngine.rig.setKeyframe(
-                                    bone.id,
-                                    frame.index
-                                  )
-                                );
-                              },
-                            },
-                            {
-                              kind: "item",
-                              label: "Delete Keyframe",
-                              disabled: !hasKey,
-                              danger: true,
-                              action: () => {
-                                mutateRig("Delete keyframe", () =>
-                                  pixelEngine.rig.deleteKeyframe(
-                                    bone.id,
-                                    frame.index
-                                  )
-                                );
-                              },
-                            },
-                          ]);
                         }}
                       >
                         <span
@@ -583,8 +958,7 @@ export function Timeline() {
                     );
                   })}
                 </div>
-              );
-            })}
+              ))}
 
           {layers.map((layer) => {
             const isLayerActive = layer.id === activeLayerId;

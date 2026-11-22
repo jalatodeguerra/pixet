@@ -2,6 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyPose,
+  capturePose,
+  copyKeyframes,
+  pasteKeyframes,
+  retimeKeyframes,
+} from "../src/engine/rig/animationTools.ts";
+import {
   computeAimLocalAngleDeg,
   detectIkChainForBone,
   solveFabrik,
@@ -2522,4 +2529,104 @@ test("R3 computeAimLocalAngleDeg and detectIkChainForBone", () => {
   assert.equal(rig.hasConstraintTargetKeyframe(c.id, 0), false);
   rig.removeConstraint(c.id);
   assert.equal(rig.constraints.length, 0);
+});
+
+test("R4 evaluateEasing bezier endpoints and monotonicity", () => {
+  const handles: [number, number, number, number] = [0.25, 0.1, 0.25, 1];
+  assert.equal(evaluateEasing(0, "bezier", handles), 0);
+  assert.equal(evaluateEasing(1, "bezier", handles), 1);
+  let prev = 0;
+  for (let i = 1; i <= 10; i++) {
+    const val = evaluateEasing(i / 10, "bezier", handles);
+    assert.ok(val >= prev - 1e-6);
+    prev = val;
+  }
+});
+
+test("R4 RigState.autoKeyBone writes only touched channels", () => {
+  const engine = new PixelEngine(64, 64);
+  const rig = engine.rig;
+  const bone = rig.addBone({
+    name: "Arm",
+    parentId: null,
+    localX: 10,
+    localY: 12,
+    length: 10,
+    rotationDeg: 20,
+  });
+
+  rig.autoKeyBone(bone.id, 1, { rotationDeg: 45 });
+  const clip = rig.getActiveClip();
+  const kf1 = clip.tracks[bone.id][0];
+  assert.equal(kf1.rotationDeg, 45);
+  assert.equal(kf1.localX, undefined);
+  assert.equal(kf1.scaleX, undefined);
+
+  rig.autoKeyBone(bone.id, 1, { localX: 16 });
+  const kf1After = clip.tracks[bone.id][0];
+  assert.equal(kf1After.rotationDeg, 45);
+  assert.equal(kf1After.localX, 16);
+  assert.equal(kf1After.localY, undefined);
+});
+
+test("R4 capturePose, applyPose blend, retimeKeyframes, copy/paste and clip CRUD", () => {
+  const engine = new PixelEngine(64, 64);
+  const rig = engine.rig;
+  const bone = rig.addBone({
+    name: "Spine",
+    parentId: null,
+    localX: 10,
+    localY: 10,
+    length: 10,
+    rotationDeg: 0,
+  });
+
+  rig.setPoseOverride(bone.id, { rotationDeg: 60, localX: 20 }, 0);
+  const pose = capturePose(rig, "Lean", 0);
+  rig.setPoseOverride(bone.id, { rotationDeg: 0, localX: 10 }, 0);
+  applyPose(rig, pose, 0, 0.5, false);
+  const blended = rig.getBonePoseAtFrame(bone.id, 0, true);
+  assert.ok(Math.abs(blended.rotationDeg - 30) < 1e-4);
+  assert.ok(Math.abs(blended.localX - 15) < 1e-4);
+
+  // Keyframe retime & copy/paste
+  rig.setPoseOverride(bone.id, { rotationDeg: 10 }, 0);
+  rig.setKeyframe(bone.id, 0);
+  rig.setPoseOverride(bone.id, { rotationDeg: 50 }, 2);
+  rig.setKeyframe(bone.id, 2);
+
+  const clip = rig.getActiveClip();
+  const copied = copyKeyframes(clip, [
+    { boneId: bone.id, frame: 0 },
+    { boneId: bone.id, frame: 2 },
+  ]);
+  assert.equal(copied.length, 2);
+
+  assert.equal(
+    retimeKeyframes(clip, [
+      { boneId: bone.id, fromFrame: 0, toFrame: 1 },
+      { boneId: bone.id, fromFrame: 2, toFrame: 3 },
+    ]),
+    true
+  );
+  assert.deepEqual(
+    clip.tracks[bone.id].map((k) => k.frame),
+    [1, 3]
+  );
+
+  assert.equal(pasteKeyframes(clip, copied, 4), 2);
+  assert.deepEqual(
+    clip.tracks[bone.id].map((k) => k.frame),
+    [1, 3, 4, 6]
+  );
+
+  // Clip CRUD
+  const c2 = rig.addClip("run", 6, true);
+  assert.equal(rig.getActiveClip().id, c2.id);
+  const c3 = rig.duplicateClip(c2.id)!;
+  assert.equal(rig.clips.length, 3);
+  rig.setActiveClip("clip-idle");
+  assert.equal(rig.getActiveClip().id, "clip-idle");
+  assert.equal(rig.removeClip(c3.id), true);
+  assert.equal(rig.clips.length, 2);
 });

@@ -715,6 +715,8 @@ export class RigState {
   private nextBoneNum = 1;
   private nextMeshNum = 1;
   private nextConstraintNum = 1;
+  private nextClipNum = 1;
+  private nextPoseNum = 1;
   private revision = 0;
   private springCache = new Map<string, number[]>();
   private cachedWeights: BoneWeights | null = null;
@@ -742,6 +744,8 @@ export class RigState {
     this.nextBoneNum = 1;
     this.nextMeshNum = 1;
     this.nextConstraintNum = 1;
+    this.nextClipNum = 1;
+    this.nextPoseNum = 1;
     this.springCache.clear();
     this.cachedWeights = null;
     this.cachedWeightsRevision = -1;
@@ -759,6 +763,130 @@ export class RigState {
     return (
       this.clips.find((c) => c.id === this.activeClipId) ?? this.clips[0]
     );
+  }
+
+  addClip(name: string, frameCount = 4, loop = true): RigClip {
+    const num = this.nextClipNum++;
+    const clip: RigClip = {
+      id: `clip-${num}`,
+      name: name.trim() || `clip-${num}`,
+      frameCount: Math.max(1, Math.round(frameCount)),
+      tracks: {},
+      loop,
+    };
+    this.clips.push(clip);
+    this.activeClipId = clip.id;
+    this.currentPoseOverrides.clear();
+    this.invalidateEvaluation();
+    return clip;
+  }
+
+  updateClip(
+    clipId: string,
+    patch: { name?: string; frameCount?: number; loop?: boolean }
+  ): void {
+    const clip = this.clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    if (patch.name !== undefined) {
+      clip.name = patch.name.trim() || clip.name;
+    }
+    if (patch.frameCount !== undefined) {
+      clip.frameCount = Math.max(1, Math.round(patch.frameCount));
+    }
+    if (patch.loop !== undefined) {
+      clip.loop = patch.loop;
+    }
+    this.invalidateEvaluation();
+  }
+
+  duplicateClip(clipId: string): RigClip | null {
+    const source = this.clips.find((c) => c.id === clipId);
+    if (!source) return null;
+    const num = this.nextClipNum++;
+    const copy: RigClip = {
+      id: `clip-${num}`,
+      name: `${source.name} copy`,
+      frameCount: source.frameCount,
+      loop: source.loop,
+      tracks: Object.fromEntries(
+        Object.entries(source.tracks).map(([boneId, kfs]) => [
+          boneId,
+          kfs.map((kf) => ({
+            ...kf,
+            curve: kf.curve
+              ? ([...kf.curve] as CubicBezierHandles)
+              : undefined,
+          })),
+        ])
+      ),
+      ...(source.constraintTracks
+        ? {
+            constraintTracks: Object.fromEntries(
+              Object.entries(source.constraintTracks).map(([cid, kfs]) => [
+                cid,
+                kfs.map((kf) => ({ ...kf })),
+              ])
+            ),
+          }
+        : {}),
+      ...(source.meshTracks
+        ? {
+            meshTracks: Object.fromEntries(
+              Object.entries(source.meshTracks).map(([mid, kfs]) => [
+                mid,
+                kfs.map((kf) => ({
+                  ...kf,
+                  offsets: kf.offsets.map(
+                    ([dx, dy]) => [dx, dy] as [number, number]
+                  ),
+                })),
+              ])
+            ),
+          }
+        : {}),
+    };
+    this.clips.push(copy);
+    this.activeClipId = copy.id;
+    this.currentPoseOverrides.clear();
+    this.invalidateEvaluation();
+    return copy;
+  }
+
+  removeClip(clipId: string): boolean {
+    if (this.clips.length <= 1) return false;
+    const next = this.clips.filter((c) => c.id !== clipId);
+    if (next.length === this.clips.length) return false;
+    this.clips = next;
+    if (this.activeClipId === clipId) {
+      this.activeClipId = this.clips[0].id;
+      this.currentPoseOverrides.clear();
+    }
+    this.invalidateEvaluation();
+    return true;
+  }
+
+  setActiveClip(clipId: string): void {
+    if (!this.clips.some((c) => c.id === clipId)) return;
+    this.activeClipId = clipId;
+    this.currentPoseOverrides.clear();
+    this.invalidateEvaluation();
+  }
+
+  addPose(pose: RigPose): RigPose {
+    const id = pose.id || `pose-${this.nextPoseNum++}`;
+    const saved: RigPose = {
+      id,
+      name: pose.name.trim() || `Pose ${this.nextPoseNum}`,
+      bones: Object.fromEntries(
+        Object.entries(pose.bones).map(([k, v]) => [k, { ...v }])
+      ),
+    };
+    this.poses.push(saved);
+    return saved;
+  }
+
+  removePose(poseId: string): void {
+    this.poses = this.poses.filter((p) => p.id !== poseId);
   }
 
   addBone(partial: {
@@ -2001,6 +2129,58 @@ export class RigState {
     return Boolean(clip.tracks[boneId]?.some((k) => k.frame === frame));
   }
 
+  /**
+   * Auto-keys only the touched channels on `frame`, preserving any untouched
+   * channels on an existing keyframe at `frame`.
+   */
+  autoKeyBone(
+    boneId: string,
+    frame: number,
+    touched: Partial<BonePose>,
+    easing: EasingMode = "easeInOut"
+  ): void {
+    const clip = this.getActiveClip();
+    if (!clip.tracks[boneId]) clip.tracks[boneId] = [];
+    const track = clip.tracks[boneId];
+    const existing = track.find((k) => k.frame === frame);
+    const currentPose = this.getBonePoseAtFrame(boneId, frame, true);
+
+    const nextKey: BoneKeyframe = existing
+      ? {
+          ...existing,
+          curve: existing.curve
+            ? ([...existing.curve] as CubicBezierHandles)
+            : undefined,
+        }
+      : {
+          frame,
+          rotationDeg: normalizeAngleDeg(currentPose.rotationDeg),
+          easing,
+        };
+
+    if (touched.rotationDeg !== undefined) {
+      nextKey.rotationDeg = normalizeAngleDeg(touched.rotationDeg);
+    }
+    if (touched.localX !== undefined) nextKey.localX = touched.localX;
+    if (touched.localY !== undefined) nextKey.localY = touched.localY;
+    if (touched.scaleX !== undefined) nextKey.scaleX = touched.scaleX;
+    if (touched.scaleY !== undefined) nextKey.scaleY = touched.scaleY;
+    if (touched.attachment !== undefined) {
+      nextKey.attachment = touched.attachment;
+    }
+
+    const existingIdx = track.findIndex((k) => k.frame === frame);
+    if (existingIdx >= 0) track[existingIdx] = nextKey;
+    else {
+      track.push(nextKey);
+      track.sort((a, b) => a.frame - b.frame);
+    }
+    if (frame + 1 > clip.frameCount) {
+      clip.frameCount = frame + 1;
+    }
+    this.invalidateEvaluation();
+  }
+
   applyTwoBoneIK(
     childBoneId: string,
     targetX: number,
@@ -2301,6 +2481,18 @@ export class RigState {
             ])
           ),
         }));
+      for (const pose of this.poses) {
+        const match = /(\d+)$/.exec(pose.id);
+        if (match) {
+          this.nextPoseNum = Math.max(this.nextPoseNum, Number(match[1]) + 1);
+        }
+      }
+    }
+    for (const clip of this.clips) {
+      const match = /(\d+)$/.exec(clip.id);
+      if (match) {
+        this.nextClipNum = Math.max(this.nextClipNum, Number(match[1]) + 1);
+      }
     }
 
     if (Array.isArray(raw.meshes)) {

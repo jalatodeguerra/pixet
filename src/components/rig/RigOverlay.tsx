@@ -30,6 +30,10 @@ export function RigOverlay({
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const zoom = useEditorStore((s) => s.zoom);
+  const onionSkin = useEditorStore((s) => s.onionSkin);
+  const onionPrevFrames = useEditorStore((s) => s.onionPrevFrames);
+  const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
+  const frames = useEditorStore((s) => s.frames);
 
   const shapes = useMemo(() => {
     void rigVersion;
@@ -53,6 +57,60 @@ export function RigOverlay({
     rigVersion,
   ]);
 
+  const onionGhosts = useMemo(() => {
+    void rigVersion;
+    if (
+      workspaceMode !== "rig" ||
+      !rigShowBones ||
+      !onionSkin ||
+      rigMode !== "animate"
+    ) {
+      return [];
+    }
+    const total = Math.max(frames.length, pixelEngine.rig.getActiveClip().frameCount);
+    const ghosts: Array<{
+      key: string;
+      fill: string;
+      stroke: string;
+      polygons: string[];
+    }> = [];
+    for (let d = 1; d <= onionPrevFrames; d++) {
+      const f = currentFrame - d;
+      if (f < 0) continue;
+      const alpha = Math.max(0.12, 0.35 - (d - 1) * 0.1);
+      const list = buildRigBoneShapes(pixelEngine.rig, f, "animate", null, null);
+      ghosts.push({
+        key: `prev-${d}`,
+        fill: `rgba(239, 68, 68, ${alpha * 0.45})`,
+        stroke: `rgba(239, 68, 68, ${alpha})`,
+        polygons: list.map((s) => s.polygon),
+      });
+    }
+    for (let d = 1; d <= onionNextFrames; d++) {
+      const f = currentFrame + d;
+      if (f >= total) continue;
+      const alpha = Math.max(0.12, 0.35 - (d - 1) * 0.1);
+      const list = buildRigBoneShapes(pixelEngine.rig, f, "animate", null, null);
+      ghosts.push({
+        key: `next-${d}`,
+        fill: `rgba(59, 130, 246, ${alpha * 0.45})`,
+        stroke: `rgba(59, 130, 246, ${alpha})`,
+        polygons: list.map((s) => s.polygon),
+      });
+    }
+    return ghosts;
+  }, [
+    workspaceMode,
+    rigShowBones,
+    onionSkin,
+    onionPrevFrames,
+    onionNextFrames,
+    rigMode,
+    currentFrame,
+    frames.length,
+    rigVersion,
+  ]);
+
   const constraintTargets = useMemo(() => {
     void rigVersion;
     if (workspaceMode !== "rig" || !rigShowBones) return [];
@@ -72,6 +130,20 @@ export function RigOverlay({
       viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
       preserveAspectRatio="none"
     >
+      {onionGhosts.map((ghost) => (
+        <g key={ghost.key} style={{ pointerEvents: "none" }}>
+          {ghost.polygons.map((poly, idx) => (
+            <polygon
+              key={`${ghost.key}-${idx}`}
+              points={poly}
+              fill={ghost.fill}
+              stroke={ghost.stroke}
+              strokeWidth={0.22}
+            />
+          ))}
+        </g>
+      ))}
+
       {shapes.map((b) => (
         <g key={b.id}>
           <polygon

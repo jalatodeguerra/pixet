@@ -21,6 +21,7 @@ function round2(n: number): number {
 export function BonePropertiesPanel() {
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const rigMode = useEditorStore((s) => s.rigMode);
+  const rigAutoKey = useEditorStore((s) => s.rigAutoKey);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
   const currentFrame = useEditorStore((s) => s.currentFrame);
   const frames = useEditorStore((s) => s.frames);
@@ -104,9 +105,12 @@ export function BonePropertiesPanel() {
         pixelEngine.rig.updateBone(selectedBone.id, patch)
       );
     } else {
-      mutateRig("Pose bone", () =>
-        pixelEngine.rig.setPoseOverride(selectedBone.id, patch, currentFrame)
-      );
+      mutateRig("Pose bone", () => {
+        pixelEngine.rig.setPoseOverride(selectedBone.id, patch, currentFrame);
+        if (rigAutoKey) {
+          pixelEngine.rig.autoKeyBone(selectedBone.id, currentFrame, patch);
+        }
+      });
     }
   };
 

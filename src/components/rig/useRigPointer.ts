@@ -217,7 +217,16 @@ function applyIk(boneId: string, targetX: number, targetY: number): void {
   }
 
   mutateRig("IK pose", () => {
-    rig.applyTwoBoneIK(boneId, targetX, targetY, state.currentFrame);
+    if (rig.applyTwoBoneIK(boneId, targetX, targetY, state.currentFrame) && state.rigAutoKey) {
+      const parentPose = rig.getBonePoseAtFrame(parent.id, state.currentFrame, true);
+      const childPose = rig.getBonePoseAtFrame(child.id, state.currentFrame, true);
+      rig.autoKeyBone(parent.id, state.currentFrame, {
+        rotationDeg: parentPose.rotationDeg,
+      });
+      rig.autoKeyBone(child.id, state.currentFrame, {
+        rotationDeg: childPose.rotationDeg,
+      });
+    }
   });
 }
 
@@ -803,13 +812,18 @@ export function useRigPointer({
           rig.updateBone(drag.boneId, { rotationDeg: localDeg })
         );
       } else {
-        mutateRig("Rotate bone", () =>
+        mutateRig("Rotate bone", () => {
           rig.setPoseOverride(
             drag.boneId,
             { rotationDeg: localDeg },
             state.currentFrame
-          )
-        );
+          );
+          if (state.rigAutoKey) {
+            rig.autoKeyBone(drag.boneId, state.currentFrame, {
+              rotationDeg: localDeg,
+            });
+          }
+        });
       }
       return true;
     }
@@ -839,13 +853,19 @@ export function useRigPointer({
           rig.updateBone(drag.boneId, { localX, localY })
         );
       } else {
-        mutateRig("Move bone", () =>
+        mutateRig("Move bone", () => {
           rig.setPoseOverride(
             drag.boneId,
             { localX, localY },
             state.currentFrame
-          )
-        );
+          );
+          if (state.rigAutoKey) {
+            rig.autoKeyBone(drag.boneId, state.currentFrame, {
+              localX,
+              localY,
+            });
+          }
+        });
       }
       return true;
     }
@@ -866,13 +886,19 @@ export function useRigPointer({
     } else {
       const nextScaleX = Math.max(0.05, Math.min(20, drag.origScaleX * ratio));
       const nextScaleY = Math.max(0.05, Math.min(20, drag.origScaleY * ratio));
-      mutateRig("Scale bone", () =>
+      mutateRig("Scale bone", () => {
         rig.setPoseOverride(
           drag.boneId,
           { scaleX: nextScaleX, scaleY: nextScaleY },
           state.currentFrame
-        )
-      );
+        );
+        if (state.rigAutoKey) {
+          rig.autoKeyBone(drag.boneId, state.currentFrame, {
+            scaleX: nextScaleX,
+            scaleY: nextScaleY,
+          });
+        }
+      });
     }
     return true;
   };

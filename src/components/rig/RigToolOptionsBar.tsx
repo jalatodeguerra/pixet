@@ -15,6 +15,8 @@ export function RigToolOptionsBar() {
   const toggleRigShowBones = useEditorStore((s) => s.toggleRigShowBones);
   const rigShowInfluence = useEditorStore((s) => s.rigShowInfluence);
   const toggleRigShowInfluence = useEditorStore((s) => s.toggleRigShowInfluence);
+  const rigAutoKey = useEditorStore((s) => s.rigAutoKey);
+  const toggleRigAutoKey = useEditorStore((s) => s.toggleRigAutoKey);
 
   const tool = RIG_TOOL_BY_ID.get(rigTool);
   const setupMode = rigMode === "setup";
@@ -89,6 +91,16 @@ export function RigToolOptionsBar() {
         >
           <span>Influence</span>
         </button>
+        {!setupMode && (
+          <button
+            type="button"
+            className={`toggle-chip ${rigAutoKey ? "active" : ""}`}
+            title="Auto-Key: automatically keyframe pose changes in Animate mode"
+            onClick={toggleRigAutoKey}
+          >
+            <span>Auto-Key</span>
+          </button>
+        )}
       </div>
 
       <div className="mode-hint">
