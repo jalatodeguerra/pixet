@@ -41,6 +41,12 @@ import {
   plotIsoLine,
   screenToIso,
 } from "../src/engine/tiles/isometric.ts";
+import {
+  applyPixelOutline,
+  bakeTurntableFrames,
+  render25DSprite,
+  renderSpriteStack,
+} from "../src/engine/tools/rotate3d.ts";
 
 test("plotBresenhamLine produces connected endpoints", () => {
   const pts = plotBresenhamLine(0, 0, 4, 2);
@@ -527,4 +533,153 @@ test("isometric coordinates, 2:1 iso line, diamond, and shaded box", () => {
   assert.ok(box.top.length > 0);
   assert.ok(box.left.length > 0);
   assert.ok(box.right.length > 0);
+});
+
+function countOpaquePixels(buf: PixelBuffer): number {
+  let count = 0;
+  for (let i = 3; i < buf.data.length; i += 4) {
+    if (buf.data[i] > 0) count++;
+  }
+  return count;
+}
+
+test("render25DSprite preserves identity and expands extruded depth silhouette", () => {
+  const src = new PixelBuffer(16, 16);
+  for (let y = 5; y <= 10; y++) {
+    for (let x = 5; x <= 10; x++) {
+      src.setPixel(x, y, 220, 90, 60, 255);
+    }
+  }
+
+  const identity = render25DSprite(src, {
+    pitchDeg: 0,
+    yawDeg: 0,
+    rollDeg: 0,
+    extrudeDepth: 0,
+    perspective: 0,
+    shadeDepth: true,
+    supersample: false,
+    outlineColor: null,
+  });
+  assert.deepEqual(identity.data, src.data);
+
+  const flatRotated = render25DSprite(src, {
+    pitchDeg: 15,
+    yawDeg: 35,
+    rollDeg: 0,
+    extrudeDepth: 0,
+    perspective: 0.35,
+    shadeDepth: true,
+    supersample: true,
+    outlineColor: null,
+  });
+  const extruded = render25DSprite(src, {
+    pitchDeg: 15,
+    yawDeg: 35,
+    rollDeg: 0,
+    extrudeDepth: 6,
+    perspective: 0.35,
+    shadeDepth: true,
+    supersample: true,
+    outlineColor: null,
+  });
+
+  assert.ok(countOpaquePixels(flatRotated) > 0);
+  assert.ok(countOpaquePixels(extruded) > countOpaquePixels(flatRotated));
+});
+
+test("applyPixelOutline adds 4-connected border around sprite", () => {
+  const src = new PixelBuffer(8, 8);
+  src.setPixel(3, 3, 255, 255, 255, 255);
+  src.setPixel(4, 3, 255, 255, 255, 255);
+  src.setPixel(3, 4, 255, 255, 255, 255);
+  src.setPixel(4, 4, 255, 255, 255, 255);
+
+  const outlined = applyPixelOutline(src, [0, 0, 0, 255]);
+  // 2x2 center (4) + 8 4-neighbor perimeter pixels = 12 opaque pixels
+  assert.equal(countOpaquePixels(outlined), 12);
+  assert.deepEqual(outlined.getPixel(2, 3), [0, 0, 0, 255]);
+  assert.deepEqual(outlined.getPixel(2, 2), [0, 0, 0, 0]);
+});
+
+test("renderSpriteStack shifts upper layers upward and bakeTurntableFrames produces N frames", () => {
+  const makeLayer = (r: number, g: number, b: number) => {
+    const buf = new PixelBuffer(16, 16);
+    buf.setPixel(8, 8, r, g, b, 255);
+    return buf;
+  };
+
+  const bottom = makeLayer(200, 40, 40);
+  const middle = makeLayer(40, 200, 40);
+  const top = makeLayer(40, 40, 220);
+
+  const stacked = renderSpriteStack([bottom, middle, top], {
+    yawDeg: 0,
+    pitchDeg: 45,
+    sliceSpacing: 2,
+    depthShading: true,
+    outlineColor: null,
+  });
+
+  let minRedY = 16;
+  let minBlueY = 16;
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const [r, , b, a] = stacked.getPixel(x, y);
+      if (a > 0 && r > 100 && y < minRedY) minRedY = y;
+      if (a > 0 && b > 100 && y < minBlueY) minBlueY = y;
+    }
+  }
+  // Top blue layer should appear above (smaller Y) than bottom red layer
+  assert.ok(minBlueY < minRedY);
+
+  const baked25d = bakeTurntableFrames({
+    mode: "extruded",
+    frameCount: 8,
+    spinAxis: "yaw",
+    source: bottom,
+    opts25d: {
+      pitchDeg: 15,
+      yawDeg: 0,
+      rollDeg: 0,
+      extrudeDepth: 4,
+      perspective: 0.3,
+      shadeDepth: true,
+      supersample: true,
+      outlineColor: null,
+    },
+    optsStack: {
+      yawDeg: 0,
+      pitchDeg: 45,
+      sliceSpacing: 2,
+      depthShading: true,
+      outlineColor: null,
+    },
+  });
+  assert.equal(baked25d.length, 8);
+
+  const bakedStack = bakeTurntableFrames({
+    mode: "stack",
+    frameCount: 6,
+    spinAxis: "yaw",
+    slices: [bottom, middle, top],
+    opts25d: {
+      pitchDeg: 0,
+      yawDeg: 0,
+      rollDeg: 0,
+      extrudeDepth: 0,
+      perspective: 0,
+      shadeDepth: true,
+      supersample: true,
+      outlineColor: null,
+    },
+    optsStack: {
+      yawDeg: 0,
+      pitchDeg: 45,
+      sliceSpacing: 2,
+      depthShading: true,
+      outlineColor: null,
+    },
+  });
+  assert.equal(bakedStack.length, 6);
 });

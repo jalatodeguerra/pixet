@@ -113,6 +113,7 @@ interface EditorState {
   canvasHeight: number;
   colorMode: "RGBA" | "Indexed";
   exportModalOpen: boolean;
+  rotate3dModalOpen: boolean;
 
   layers: LayerItem[];
   activeLayerId: string;
@@ -176,6 +177,7 @@ interface EditorState {
   setLayerOpacity: (id: string, opacity: number) => void;
   setLayerBlendMode: (id: string, blendMode: BlendMode) => void;
   addLayer: () => void;
+  addNamedLayer: (name: string) => string;
   addGroupLayer: () => void;
   addTilemapLayer: () => void;
   deleteActiveLayer: () => void;
@@ -189,6 +191,7 @@ interface EditorState {
   prevFrame: () => void;
   nextFrame: () => void;
   togglePlaying: () => void;
+  setIsPlaying: (playing: boolean) => void;
   toggleLoopPlayback: () => void;
   setFps: (fps: number) => void;
   toggleOnionSkin: () => void;
@@ -219,6 +222,7 @@ interface EditorState {
   setCurrentFilePath: (path: string | null) => void;
   setDocumentName: (name: string) => void;
   setExportModalOpen: (open: boolean) => void;
+  setRotate3dModalOpen: (open: boolean) => void;
   loadProjectState: (payload: {
     documentName: string;
     filePath: string | null;
@@ -293,6 +297,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   canvasHeight: 32,
   colorMode: "RGBA",
   exportModalOpen: false,
+  rotate3dModalOpen: false,
 
   layers: [
     {
@@ -494,6 +499,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         activeLayerId: id,
       };
     }),
+  addNamedLayer: (name) => {
+    const id = `layer-${layerCounter++}`;
+    set((s) => {
+      const newLayer: LayerItem = {
+        id,
+        name,
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        cels: { [s.currentFrame]: false },
+      };
+      return {
+        layers: [newLayer, ...s.layers],
+        activeLayerId: id,
+      };
+    });
+    return id;
+  },
   addGroupLayer: () =>
     set((s) => {
       const id = `group-${layerCounter++}`;
@@ -661,6 +688,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return { currentFrame: s.currentFrame + 1 };
     }),
   togglePlaying: () => set((s) => ({ isPlaying: !s.isPlaying })),
+  setIsPlaying: (isPlaying) => set({ isPlaying }),
   toggleLoopPlayback: () => set((s) => ({ loopPlayback: !s.loopPlayback })),
   setFps: (fps) =>
     set((s) => {
@@ -863,6 +891,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setCurrentFilePath: (currentFilePath) => set({ currentFilePath }),
   setDocumentName: (documentName) => set({ documentName }),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
+  setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
   loadProjectState: (payload) =>
     set({
       documentName: payload.documentName,

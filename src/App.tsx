@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ExportModal } from "./components/ExportModal";
 import { RightSidebar } from "./components/RightSidebar";
+import { Rotate3DModal } from "./components/Rotate3DModal";
 import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
 import { ToolOptionsBar } from "./components/ToolOptionsBar";
@@ -137,6 +138,12 @@ export function App() {
         if (ctrlKey === "e") {
           e.preventDefault();
           useEditorStore.getState().setExportModalOpen(true);
+          return;
+        }
+        if (ctrlKey === "3") {
+          e.preventDefault();
+          const st = useEditorStore.getState();
+          st.setRotate3dModalOpen(!st.rotate3dModalOpen);
           return;
         }
         return;
@@ -296,6 +303,7 @@ export function App() {
 
       <StatusBar />
       <ExportModal />
+      <Rotate3DModal />
     </div>
   );
 }

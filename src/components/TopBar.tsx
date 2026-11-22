@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Bone,
+  Box,
   Download,
   LayoutGrid,
   PanelRightClose,
@@ -53,6 +54,7 @@ export function TopBar() {
   const addLayer = useEditorStore((s) => s.addLayer);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
+  const setRotate3dModalOpen = useEditorStore((s) => s.setRotate3dModalOpen);
 
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
   const menuStripRef = useRef<HTMLDivElement>(null);
@@ -106,6 +108,7 @@ export function TopBar() {
       { label: "New Layer", action: () => { addLayer(); setOpenMenu(null); } },
       { label: "New Frame", action: () => { addEmptyFrameAction(); setOpenMenu(null); } },
       { label: "Duplicate Frame", action: () => { duplicateCurrentFrameAction(); setOpenMenu(null); } },
+      { label: "3D Rotate & Turntable...", shortcut: "Ctrl+3", action: () => { setOpenMenu(null); setRotate3dModalOpen(true); } },
       { label: "Canvas Size...", action: () => notifyMilestone("Canvas Resize", "Milestone 1.2") },
     ],
   };
@@ -173,6 +176,16 @@ export function TopBar() {
       </div>
 
       <div className="topbar-right">
+        <button
+          type="button"
+          className="mini-btn"
+          title="3D Rotate & Turntable (Ctrl+3)"
+          onClick={() => setRotate3dModalOpen(true)}
+        >
+          <Box size={13} />
+          <span>3D Spin</span>
+        </button>
+
         <button
           type="button"
           className={`icon-action-btn ${panelsCollapsed ? "active" : ""}`}

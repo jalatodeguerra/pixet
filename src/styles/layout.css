@@ -1331,3 +1331,176 @@
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
+
+/* 3D Rotate & Turntable Modal */
+.rotate3d-modal-card {
+  width: 620px;
+}
+
+.rotate3d-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.rotate3d-tab {
+  height: 26px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+}
+
+.rotate3d-tab:hover {
+  color: var(--text-primary);
+}
+
+.rotate3d-tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+
+.rotate3d-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.rotate3d-preview-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rotate3d-preview-stage {
+  height: 244px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background-color: #15151a;
+  background-image:
+    linear-gradient(45deg, #1d1d24 25%, transparent 25%),
+    linear-gradient(-45deg, #1d1d24 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1d1d24 75%),
+    linear-gradient(-45deg, transparent 75%, #1d1d24 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  display: grid;
+  place-items: center;
+  cursor: grab;
+  user-select: none;
+  overflow: hidden;
+}
+
+.rotate3d-preview-stage:active {
+  cursor: grabbing;
+}
+
+.rotate3d-canvas {
+  image-rendering: pixelated;
+  display: block;
+}
+
+.rotate3d-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rotate3d-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.rotate3d-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.rotate3d-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.rotate3d-stack-note {
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.rotate3d-slider-row {
+  display: grid;
+  grid-template-columns: 78px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.rotate3d-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.rotate3d-val {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.rotate3d-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding-top: 2px;
+}
+
+.rotate3d-outline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rotate3d-color-input {
+  width: 24px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.rotate3d-bake-box {
+  margin-top: 2px;
+  padding: 9px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.rotate3d-bake-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
