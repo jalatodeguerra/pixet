@@ -19,6 +19,7 @@ import {
   type WeightedCell,
 } from "../../engine/tiles/mapTools";
 import { screenToTileCell } from "../../engine/tiles/overlayGeometry";
+import { paintTerrainCell } from "../../engine/tiles/terrain";
 import { useEditorStore } from "../../store/editorStore";
 
 interface UseTilePointerOptions {
@@ -123,6 +124,28 @@ export function useTilePointer({ getPixelCoords }: UseTilePointerOptions) {
   ) => {
     const state = useEditorStore.getState();
     const tm = pixelEngine.getOrCreateTilemap(layerId, frameIndex);
+
+    const activeSet =
+      pixelEngine.terrainSets.find((s) => s.id === state.activeTerrainSetId) ??
+      pixelEngine.terrainSets[0];
+    if (activeSet) {
+      const terrainId = erase
+        ? null
+        : (state.activeTerrainId ?? activeSet.terrains[0]?.id ?? null);
+      const ts = pixelEngine.tilesetRegistry.get(activeSet.tilesetIndex);
+      const changes = paintTerrainCell(
+        tm,
+        col,
+        row,
+        activeSet,
+        terrainId,
+        ts,
+        state.tileRandomSeed
+      );
+      applyCellChanges(tm, changes, pixelEngine.tilemapHistory);
+      return;
+    }
+
     const before = new Map<string, number>();
     for (let dr = -1; dr <= 1; dr++) {
       for (let dc = -1; dc <= 1; dc++) {
@@ -311,9 +334,15 @@ export function useTilePointer({ getPixelCoords }: UseTilePointerOptions) {
 
     const useAutoTile =
       tool === "terrain" ||
-      (state.autoTileEnabled && pixelEngine.autoTileRuleset !== null && !erase);
+      (state.autoTileEnabled &&
+        (pixelEngine.terrainSets.length > 0 ||
+          pixelEngine.autoTileRuleset !== null) &&
+        !erase);
 
-    if (useAutoTile && pixelEngine.autoTileRuleset) {
+    if (
+      useAutoTile &&
+      (pixelEngine.terrainSets.length > 0 || pixelEngine.autoTileRuleset)
+    ) {
       pixelEngine.tilemapHistory.beginCells(
         "Paint Terrain",
         activeLayer.id,

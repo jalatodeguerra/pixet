@@ -13,8 +13,15 @@ import {
 import { syncHistoryAndCelState } from "../../engine/document/historyActions";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import { packCell } from "../../engine/tiles/cell";
+import {
+  createEmptyPeering,
+  getActivePeeringIndices,
+} from "../../engine/tiles/terrain";
 import { Tileset } from "../../engine/tiles/Tileset";
 import { useEditorStore } from "../../store/editorStore";
+
+// 3x3 cell index -> peering bit index (-1 = center)
+const GRID_TO_PEERING_BIT = [7, 0, 1, 6, -1, 2, 5, 4, 3] as const;
 
 function TileThumbnail({
   tilesetIndex,
@@ -85,6 +92,9 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
   );
   const tileBrush = useEditorStore((s) => s.tileBrush);
   const setTileBrush = useEditorStore((s) => s.setTileBrush);
+  const terrainEditMode = useEditorStore((s) => s.terrainEditMode);
+  const activeTerrainSetId = useEditorStore((s) => s.activeTerrainSetId);
+  const activeTerrainId = useEditorStore((s) => s.activeTerrainId);
 
   const [collapsed, setCollapsed] = useState(false);
   const [draggedTileId, setDraggedTileId] = useState<number | null>(null);
@@ -262,6 +272,33 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
       if (c > 0) brushSelectedIds.add(c & 0x000fffff);
     }
   }
+
+  const activeTerrainSet = terrainEditMode
+    ? (pixelEngine.terrainSets.find((s) => s.id === activeTerrainSetId) ??
+      pixelEngine.terrainSets[0] ??
+      null)
+    : null;
+  const showPeeringOverlay =
+    terrainEditMode &&
+    activeTerrainSet !== null &&
+    activeTerrainSet.tilesetIndex === safeTsIndex;
+  const editingTerrainId =
+    activeTerrainId ?? activeTerrainSet?.terrains[0]?.id ?? null;
+  const activePeeringSet = activeTerrainSet
+    ? new Set(getActivePeeringIndices(activeTerrainSet.mode))
+    : null;
+
+  const togglePeeringBit = (tileId: number, bitIdx: number) => {
+    if (!activeTerrainSet || !editingTerrainId || bitIdx < 0) return;
+    pixelEngine.recordTilesetOp("Edit Terrain Peering", () => {
+      const cur = activeTerrainSet.peering[tileId] ?? createEmptyPeering();
+      const next = [...cur] as typeof cur;
+      next[bitIdx] = next[bitIdx] === editingTerrainId ? null : editingTerrainId;
+      activeTerrainSet.peering[tileId] = next;
+    });
+    bumpTilesetVersion();
+    syncHistoryAndCelState();
+  };
 
   return (
     <section className="panel-section">
@@ -442,6 +479,36 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
                     scale={tilesetBrowserZoom}
                     tilesetVersion={tilesetVersion}
                   />
+                  {showPeeringOverlay && activeTerrainSet && activePeeringSet && (
+                    <div
+                      className="tiles-peering-grid"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {GRID_TO_PEERING_BIT.map((bitIdx, cellIdx) => {
+                        const idx: number = bitIdx;
+                        if (idx < 0 || !activePeeringSet.has(idx)) {
+                          return <span key={cellIdx} className="tiles-peering-empty" />;
+                        }
+                        const tid = activeTerrainSet.peering[id]?.[idx] ?? null;
+                        const tColor = tid
+                          ? activeTerrainSet.terrains.find((t) => t.id === tid)?.color
+                          : undefined;
+                        return (
+                          <span
+                            key={cellIdx}
+                            className="tiles-peering-cell"
+                            style={{
+                              backgroundColor: tColor ?? "transparent",
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              togglePeeringBit(id, idx);
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
                   <span className="tileset-id-badge">{id}</span>
                 </button>
               );

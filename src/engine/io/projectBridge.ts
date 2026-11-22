@@ -16,6 +16,8 @@ import {
   deserializeAutoTileRuleset,
   serializeAutoTileRuleset,
 } from "../tiles/autoTile.ts";
+import { type AutoMapRule, cloneAutoMapRules } from "../tiles/automap.ts";
+import { cloneTerrainSets, type TerrainSet } from "../tiles/terrain.ts";
 import {
   TilemapData,
   type TilesetRegistryExtSnapshot,
@@ -98,6 +100,8 @@ interface RustDocument {
   tiles_ext?: {
     registry?: TilesetRegistryExtSnapshot;
     autoTileRuleset?: unknown;
+    terrainSets?: TerrainSet[];
+    autoMapRules?: AutoMapRule[];
   };
   rig?: unknown;
   game_data?: unknown;
@@ -279,6 +283,8 @@ export function serializeProjectTransfer(): ProjectTransfer {
     tiles_ext: {
       registry: pixelEngine.tilesetRegistry.toExtSnapshot(),
       autoTileRuleset: serializeAutoTileRuleset(pixelEngine.autoTileRuleset),
+      terrainSets: cloneTerrainSets(pixelEngine.terrainSets),
+      autoMapRules: cloneAutoMapRules(pixelEngine.autoMapRules),
     },
     rig:
       pixelEngine.rig.bones.length > 0
@@ -345,6 +351,12 @@ export function hydrateProjectTransfer(
       pixelEngine.autoTileRuleset = deserializeAutoTileRuleset(
         doc.tiles_ext.autoTileRuleset
       );
+    }
+    if (Array.isArray(doc.tiles_ext.terrainSets)) {
+      pixelEngine.terrainSets = cloneTerrainSets(doc.tiles_ext.terrainSets);
+    }
+    if (Array.isArray(doc.tiles_ext.autoMapRules)) {
+      pixelEngine.autoMapRules = cloneAutoMapRules(doc.tiles_ext.autoMapRules);
     }
   }
 

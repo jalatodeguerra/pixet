@@ -4,6 +4,8 @@ import {
   type SerializedAutoTileRuleset,
   serializeAutoTileRuleset,
 } from "./autoTile.ts";
+import { type AutoMapRule, cloneAutoMapRules } from "./automap.ts";
+import { cloneTerrainSets, type TerrainSet } from "./terrain.ts";
 import { TilemapData } from "./TilemapEngine.ts";
 import {
   TilesetRegistry,
@@ -34,6 +36,8 @@ export interface TilemapHistorySnapshot {
     cells: number[];
   }>;
   autoTileRuleset: SerializedAutoTileRuleset | null;
+  terrainSets: TerrainSet[];
+  autoMapRules: AutoMapRule[];
 }
 
 export interface TilesetSnapshotEntry {
@@ -49,6 +53,8 @@ export interface TilemapHistoryTarget {
   readonly tilesetRegistry: TilesetRegistry;
   readonly tilemaps: Map<string, TilemapData>;
   autoTileRuleset: AutoTileRuleset | null;
+  terrainSets: TerrainSet[];
+  autoMapRules: AutoMapRule[];
   getOrCreateTilemap(layerId: string, frameIndex: number): TilemapData;
 }
 
@@ -68,6 +74,8 @@ export function captureTilemapHistorySnapshot(
     registry: target.tilesetRegistry.toSnapshot(),
     tilemaps,
     autoTileRuleset: serializeAutoTileRuleset(target.autoTileRuleset),
+    terrainSets: cloneTerrainSets(target.terrainSets),
+    autoMapRules: cloneAutoMapRules(target.autoMapRules),
   };
 }
 
@@ -84,6 +92,8 @@ export function restoreTilemapHistorySnapshot(
     );
   }
   target.autoTileRuleset = deserializeAutoTileRuleset(snap.autoTileRuleset);
+  target.terrainSets = cloneTerrainSets(snap.terrainSets ?? []);
+  target.autoMapRules = cloneAutoMapRules(snap.autoMapRules ?? []);
 }
 
 interface ActiveCellTransaction {

@@ -8,8 +8,14 @@ import {
   paintAutoTileCell,
   remapAutoTileRuleset,
 } from "../tiles/autoTile.ts";
+import { type AutoMapRule } from "../tiles/automap.ts";
 import { unpackCell } from "../tiles/cell.ts";
 import { renderIsometricTilemapToBuffer } from "../tiles/isometric.ts";
+import {
+  generateBlob47AutoTileSet,
+  remapTerrainSets,
+  type TerrainSet,
+} from "../tiles/terrain.ts";
 import {
   captureTilemapHistorySnapshot,
   TilemapHistory,
@@ -139,6 +145,8 @@ export class PixelEngine {
   floating: FloatingSelection | null = null;
   clipboard: PixelBuffer | null = null;
   autoTileRuleset: AutoTileRuleset | null = null;
+  terrainSets: TerrainSet[] = [];
+  autoMapRules: AutoMapRule[] = [];
   tileProjection: "orthogonal" | "isometric" = "orthogonal";
 
   private listeners = new Set<() => void>();
@@ -171,6 +179,8 @@ export class PixelEngine {
     this.tilemaps.clear();
     this.tilesetRegistry.resetDefault();
     this.autoTileRuleset = null;
+    this.terrainSets = [];
+    this.autoMapRules = [];
     this.rig.reset();
     this.gameData.reset();
     this.history.clear();
@@ -456,6 +466,7 @@ export class PixelEngine {
         this.autoTileRuleset = null;
       }
     }
+    remapTerrainSets(this.terrainSets, tilesetIndex, remap);
     this.emitChange();
     return true;
   }
@@ -473,6 +484,7 @@ export class PixelEngine {
         this.autoTileRuleset = null;
       }
     }
+    remapTerrainSets(this.terrainSets, tilesetIndex, remap);
     this.emitChange();
     return true;
   }
@@ -495,6 +507,14 @@ export class PixelEngine {
     this.autoTileRuleset = ruleset;
     this.emitChange();
     return ruleset;
+  }
+
+  generateBlob47Terrain(tilesetIndex = 0): TerrainSet {
+    const ts = this.tilesetRegistry.get(tilesetIndex) ?? this.tileset;
+    const set = generateBlob47AutoTileSet(ts, tilesetIndex);
+    this.terrainSets.push(set);
+    this.emitChange();
+    return set;
   }
 
   paintAutoTileAtCell(

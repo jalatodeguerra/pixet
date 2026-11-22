@@ -47,6 +47,21 @@ import {
   snapCellLine45,
   type TileBrush,
 } from "../src/engine/tiles/mapTools.ts";
+import {
+  type AutoMapRule,
+  evaluateAutoMapRules,
+} from "../src/engine/tiles/automap.ts";
+import {
+  BLOB47_MASKS,
+  createEmptyPeering,
+  generateBlob47AutoTileSet,
+  getMissingTerrainMasks,
+  paintTerrainCell,
+  peeringFromMask,
+  remapTerrainSets,
+  resolveTerrainTile,
+  type TerrainSet,
+} from "../src/engine/tiles/terrain.ts";
 
 test("cell pack/unpack, flip, and rotate dihedral identities", () => {
   assert.equal(packCell(0, 0), 0);
@@ -448,4 +463,114 @@ test("mapTools brush transforms, rect/flood/line/eraser/random/selection tools",
   applyCellChanges(tmSel, clearChanges);
   assert.equal(tmSel.getCell(1, 1), 0);
   assert.equal(tmSel.getCell(2, 1), 0);
+});
+
+test("terrain v2 blob47 generator, solver, multi-terrain transitions, remap, and automap", () => {
+  assert.equal(BLOB47_MASKS.length, 47);
+
+  const ts = new Tileset("ts-blob", "Blob", 16, 16);
+  const blobSet = generateBlob47AutoTileSet(ts, 0);
+  assert.equal(ts.count, 47);
+  assert.deepEqual(getMissingTerrainMasks(blobSet, "terrain-1"), []);
+
+  // Exact match vs best-match fallback
+  const isolatedDesired = createEmptyPeering();
+  const isolatedId = resolveTerrainTile(blobSet, isolatedDesired, ts);
+  assert.equal(isolatedId, 1); // mask 0 is first tile
+
+  const partialDesired = peeringFromMask(1 | 4, "terrain-1", "blob47");
+  assert.equal(
+    resolveTerrainTile(blobSet, partialDesired, ts),
+    Object.entries(blobSet.peering).find(
+      ([, bits]) => bits[0] === "terrain-1" && bits[2] === "terrain-1" && bits[4] === null && bits[6] === null
+    )?.[0]
+      ? Number(
+          Object.entries(blobSet.peering).find(
+            ([, bits]) =>
+              bits[0] === "terrain-1" &&
+              bits[2] === "terrain-1" &&
+              bits[4] === null &&
+              bits[6] === null &&
+              bits[1] === null
+          )?.[0]
+        )
+      : 0
+  );
+
+  // Paint + erase neighborhood update
+  const tm = new TilemapData(4, 4);
+  const c1 = paintTerrainCell(tm, 1, 1, blobSet, "terrain-1", ts);
+  applyCellChanges(tm, c1);
+  assert.equal(tm.getCell(1, 1), packCell(0, 1)); // isolated (mask 0)
+
+  const c2 = paintTerrainCell(tm, 2, 1, blobSet, "terrain-1", ts);
+  applyCellChanges(tm, c2);
+  // (1,1) should now have E=terrain-1 and (2,1) should have W=terrain-1
+  assert.equal(blobSet.peering[unpackCell(tm.getCell(1, 1)).localId][2], "terrain-1");
+  assert.equal(blobSet.peering[unpackCell(tm.getCell(2, 1)).localId][6], "terrain-1");
+
+  const cErase = paintTerrainCell(tm, 2, 1, blobSet, null, ts);
+  applyCellChanges(tm, cErase);
+  assert.equal(tm.getCell(2, 1), 0);
+  assert.equal(tm.getCell(1, 1), packCell(0, 1)); // reverted to isolated
+
+  // Multi-terrain transition pick (water <-> sand)
+  const multiSet: TerrainSet = {
+    id: "multi",
+    name: "Multi",
+    mode: "edges4",
+    tilesetIndex: 0,
+    terrains: [
+      { id: "water", name: "Water", color: "#4c8bf5" },
+      { id: "sand", name: "Sand", color: "#eab308" },
+    ],
+    peering: {
+      1: ["water", null, "water", null, "water", null, "water", null], // pure water
+      2: ["sand", null, "sand", null, "sand", null, "sand", null], // pure sand
+      3: ["water", null, "sand", null, "water", null, "water", null], // water with sand to East
+    },
+  };
+  const desiredTrans = createEmptyPeering();
+  desiredTrans[0] = "water";
+  desiredTrans[2] = "sand";
+  desiredTrans[4] = "water";
+  desiredTrans[6] = "water";
+  assert.equal(resolveTerrainTile(multiSet, desiredTrans), 3);
+
+  // Remap terrain sets
+  const remap = new Map<number, number>([
+    [1, 10],
+    [2, 0],
+    [3, 30],
+  ]);
+  remapTerrainSets([multiSet], 0, remap);
+  assert.ok(multiSet.peering[10]);
+  assert.equal(multiSet.peering[2], undefined);
+  assert.ok(multiSet.peering[30]);
+
+  // Auto-map rules with tile, empty, not, any, terrain, and region
+  const autoTm = new TilemapData(4, 3);
+  autoTm.setCell(1, 0, packCell(0, 2)); // wall above (1,1)
+  autoTm.setCell(2, 0, packCell(0, 2)); // wall above (2,1)
+  const rules: AutoMapRule[] = [
+    {
+      id: "r1",
+      name: "Shadow under wall",
+      enabled: true,
+      match: [
+        { dx: 0, dy: -1, match: { kind: "tile", localId: 2 } },
+        { dx: 0, dy: 0, match: { kind: "empty" } },
+        { dx: 0, dy: 1, match: { kind: "not", inner: { kind: "tile", localId: 2 } } },
+      ],
+      output: { cols: 1, rows: 1, cells: [packCell(0, 3)] },
+      probability: 1,
+    },
+  ];
+  const autoChanges = evaluateAutoMapRules(autoTm, autoTm, rules, [], {
+    region: new Set(["1,1"]),
+  });
+  assert.equal(autoChanges.length, 1);
+  assert.equal(autoChanges[0].col, 1);
+  assert.equal(autoChanges[0].row, 1);
+  assert.equal(autoChanges[0].after, packCell(0, 3));
 });
