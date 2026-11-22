@@ -1,0 +1,140 @@
+.viewport-stage.tiles-mode-map {
+  border-top: 2px solid #4c8bf5;
+}
+
+.viewport-stage.tiles-mode-tile {
+  border-top: 2px solid #22c55e;
+}
+
+.tiles-mode-switcher {
+  margin-left: 6px;
+}
+
+.tiles-tabs-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.tiles-tab {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+
+.tiles-tab:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.tiles-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.tiles-grid-docked {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.tiles-docked-browser {
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  overflow-y: auto;
+}
+
+.tiles-prop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.tiles-prop-label {
+  width: 48px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.tiles-text-input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 2px 5px;
+  min-width: 0;
+}
+
+.tiles-flag-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tiles-layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tiles-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tiles-layer-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tiles-layer-row.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.tiles-layer-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tiles-overlay-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.tiles-hover-outline {
+  fill: none;
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.tiles-ghost-canvas {
+  position: absolute;
+  pointer-events: none;
+  image-rendering: pixelated;
+  opacity: 0.55;
+  z-index: 5;
+}

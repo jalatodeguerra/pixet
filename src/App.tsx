@@ -41,6 +41,9 @@ import {
   RIG_TOOL_SHORTCUTS,
   rigToolDisabledReason,
 } from "./components/rig/rigTools";
+import { TilesetBrowserPanel } from "./components/tiles/TilesetBrowserPanel";
+import { TILE_TOOL_SHORTCUTS } from "./components/tiles/tileTools";
+import { packCell, rotateCellCW, unpackCell } from "./engine/tiles/cell";
 
 const TOOL_SHORTCUTS: Record<string, ToolId> = {
   b: "pencil",
@@ -60,6 +63,9 @@ const TOOL_SHORTCUTS: Record<string, ToolId> = {
 export function App() {
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
+  const timelineHeight = useEditorStore((s) => s.timelineHeight);
+  const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
   const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
   const setTimelineHeight = useEditorStore((s) => s.setTimelineHeight);
   const isPlaying = useEditorStore((s) => s.isPlaying);
@@ -80,7 +86,24 @@ export function App() {
     if (!isPlaying) return;
     const durationMs =
       frames[currentFrame]?.durationMs ?? Math.round(1000 / fps);
-    const id = window.setTimeout(nextFrame, Math.max(16, durationMs));
+    const id = window.setTimeout(() => {
+      const state = useEditorStore.getState();
+      if (state.workspaceMode === "rig" && state.rigMode === "animate") {
+        const clip = pixelEngine.rig.getActiveClip();
+        const maxFrames = Math.max(1, clip.frameCount);
+        const loop = clip.loop !== false;
+        pixelEngine.rig.clearPoseOverrides();
+        if (state.currentFrame + 1 < maxFrames) {
+          state.setCurrentFrame(state.currentFrame + 1);
+        } else if (loop) {
+          state.setCurrentFrame(0);
+        } else {
+          state.togglePlaying();
+        }
+        return;
+      }
+      nextFrame();
+    }, Math.max(16, durationMs));
     return () => window.clearTimeout(id);
   }, [isPlaying, currentFrame, frames, fps, nextFrame]);
 
@@ -253,7 +276,10 @@ export function App() {
         return;
       }
 
-      if (key === "x") {
+      if (
+        key === "x" &&
+        !(state.workspaceMode === "tiles" && state.tilesMode === "map")
+      ) {
         state.swapColors();
         return;
       }
@@ -292,6 +318,39 @@ export function App() {
           return;
         }
         // Never fall through to drawing tool shortcuts in the rig workspace.
+        return;
+      }
+
+      // Tiles Map workspace shortcuts replace drawing shortcuts.
+      if (state.workspaceMode === "tiles" && state.tilesMode === "map") {
+        if (key === "x") {
+          state.setTileBrushFlags({
+            ...state.tileBrushFlags,
+            flipH: !state.tileBrushFlags.flipH,
+          });
+          return;
+        }
+        if (key === "y") {
+          state.setTileBrushFlags({
+            ...state.tileBrushFlags,
+            flipV: !state.tileBrushFlags.flipV,
+          });
+          return;
+        }
+        if (key === "z") {
+          const packed = packCell(0, 1, state.tileBrushFlags);
+          const rot = unpackCell(rotateCellCW(packed));
+          state.setTileBrushFlags({
+            flipH: rot.flipH,
+            flipV: rot.flipV,
+            flipD: rot.flipD,
+          });
+          return;
+        }
+        const mappedTileTool = TILE_TOOL_SHORTCUTS[key];
+        if (mappedTileTool) {
+          state.setTileTool(mappedTileTool);
+        }
         return;
       }
 
@@ -412,7 +471,16 @@ export function App() {
                 onMouseDown={() => setDraggingTimeline(true)}
               />
             )}
-            <Timeline />
+            {workspaceMode === "tiles" && tilesetBrowserDocked ? (
+              <div
+                className="tiles-docked-browser"
+                style={{ height: timelineHeight }}
+              >
+                <TilesetBrowserPanel docked />
+              </div>
+            ) : (
+              <Timeline />
+            )}
           </>
         )}
       </main>

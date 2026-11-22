@@ -25,10 +25,8 @@ import { WebGL2Renderer } from "../engine/renderer/WebGL2Renderer";
 import { renderBoneInfluenceOverlay } from "../engine/rig/RigEngine";
 import {
   buildIsoGridSvgPath,
-  getIsoOrigin,
   plotIsoBox,
   plotIsoLine,
-  screenToIso,
 } from "../engine/tiles/isometric";
 import {
   applyPixelPerfectFilter,
@@ -56,6 +54,8 @@ import {
 } from "../store/editorStore";
 import { RigOverlay } from "./rig/RigOverlay";
 import { useRigPointer } from "./rig/useRigPointer";
+import { TileOverlay } from "./tiles/TileOverlay";
+import { useTilePointer } from "./tiles/useTilePointer";
 import { PALETTE_PRESETS } from "../utils/paletteParser";
 import { buildShadingRamp } from "../utils/color";
 
@@ -67,7 +67,6 @@ interface ActiveStroke {
     | "marquee"
     | "lasso"
     | "move"
-    | "tileStamp"
     | "tileEdit"
     | "isoBox";
   tool: ToolId;
@@ -150,25 +149,6 @@ function getShapePoints(
   return plotEllipse(x0, y0, end.x, end.y, filled);
 }
 
-function getTileCellCoords(
-  px: number,
-  py: number,
-  canvasW: number,
-  tileW: number,
-  tileH: number,
-  projection: "orthogonal" | "isometric"
-): { col: number; row: number } {
-  if (projection === "isometric") {
-    const isoTileH = Math.max(4, Math.floor(tileW / 2));
-    const { originX, originY } = getIsoOrigin(canvasW, isoTileH);
-    return screenToIso(px, py, tileW, isoTileH, originX, originY);
-  }
-  return {
-    col: Math.floor(px / tileW),
-    row: Math.floor(py / tileH),
-  };
-}
-
 export function Viewport() {
   const documentName = useEditorStore((s) => s.documentName);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
@@ -184,6 +164,7 @@ export function Viewport() {
   const currentFrame = useEditorStore((s) => s.currentFrame);
   const layers = useEditorStore((s) => s.layers);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const tilesMode = useEditorStore((s) => s.tilesMode);
   const seamlessWrap = useEditorStore((s) => s.seamlessWrap);
   const showTileGrid = useEditorStore((s) => s.showTileGrid);
   const showIsoGrid = useEditorStore((s) => s.showIsoGrid);
@@ -610,6 +591,7 @@ export function Viewport() {
   const rigPointer = useRigPointer({
     onHoverPixels: (px, py) => updateHoverOverlay(px, py),
   });
+  const tilePointer = useTilePointer({ getPixelCoords });
 
   const sampleColorAt = (px: number, py: number, isSecondary: boolean) => {
     const state = useEditorStore.getState();
@@ -745,13 +727,17 @@ export function Viewport() {
     const { x: px, y: py } = getPixelCoords(e);
     const isSecondary = e.button === 2;
 
-    if (e.altKey || state.activeTool === "eyedropper") {
-      sampleColorAt(px, py, isSecondary);
+    if (state.workspaceMode === "rig") {
+      rigPointer.onPointerDown(e);
       return;
     }
 
-    if (state.workspaceMode === "rig") {
-      rigPointer.onPointerDown(e);
+    if (tilePointer.onPointerDown(e)) {
+      return;
+    }
+
+    if (e.altKey || state.activeTool === "eyedropper") {
+      sampleColorAt(px, py, isSecondary);
       return;
     }
 
@@ -898,60 +884,6 @@ export function Viewport() {
     }
     if (isLayerEffectivelyLocked(state.layers, activeLayer.id)) {
       state.setStatusMessage(`Layer "${activeLayer.name}" is locked`);
-      return;
-    }
-
-    if (tool === "tileStamp") {
-      if (activeLayer.kind !== "tilemap") {
-        state.setStatusMessage("Add or select a Tilemap layer to stamp tiles");
-        return;
-      }
-      e.currentTarget.setPointerCapture(e.pointerId);
-      const stampTileId = isSecondary ? 0 : state.activeTileId;
-      const { col, row } = getTileCellCoords(
-        px,
-        py,
-        state.canvasWidth,
-        state.tileWidth,
-        state.tileHeight,
-        state.tileProjection
-      );
-      if (state.autoTileEnabled && pixelEngine.autoTileRuleset) {
-        pixelEngine.paintAutoTileAtCell(
-          activeLayer.id,
-          state.currentFrame,
-          col,
-          row,
-          stampTileId === 0,
-          state.autoTileMode
-        );
-      } else {
-        pixelEngine.setTilemapCell(
-          activeLayer.id,
-          state.currentFrame,
-          col,
-          row,
-          stampTileId
-        );
-      }
-      strokeRef.current = {
-        kind: "tileStamp",
-        tool,
-        layerId: activeLayer.id,
-        frameIndex: state.currentFrame,
-        alphaLock: false,
-        rgba: [0, 0, 0, 0],
-        rawPoints: [{ x: col, y: row }],
-        paintedSet: new Set([`${col},${row}`]),
-        usePixelPerfect: false,
-        startX: col,
-        startY: row,
-        origOffsetX: 0,
-        origOffsetY: 0,
-        origMask: null,
-        stampTileId,
-      };
-      pixelEngine.emitChange();
       return;
     }
 
@@ -1246,6 +1178,10 @@ export function Viewport() {
       return;
     }
 
+    if (tilePointer.onPointerMove(e)) {
+      return;
+    }
+
     const dataDrag = dataDragRef.current;
     if (dataDrag) {
       const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, px));
@@ -1316,41 +1252,6 @@ export function Viewport() {
         pixelEngine.selection = stroke.origMask.translate(dx, dy);
       }
       pixelEngine.emitChange();
-      return;
-    }
-
-    if (stroke.kind === "tileStamp") {
-      const { col, row } = getTileCellCoords(
-        px,
-        py,
-        state.canvasWidth,
-        state.tileWidth,
-        state.tileHeight,
-        state.tileProjection
-      );
-      const key = `${col},${row}`;
-      if (!stroke.paintedSet.has(key)) {
-        stroke.paintedSet.add(key);
-        if (state.autoTileEnabled && pixelEngine.autoTileRuleset) {
-          pixelEngine.paintAutoTileAtCell(
-            stroke.layerId,
-            stroke.frameIndex,
-            col,
-            row,
-            stroke.stampTileId === 0,
-            state.autoTileMode
-          );
-        } else {
-          pixelEngine.setTilemapCell(
-            stroke.layerId,
-            stroke.frameIndex,
-            col,
-            row,
-            stroke.stampTileId
-          );
-        }
-        pixelEngine.emitChange();
-      }
       return;
     }
 
@@ -1585,6 +1486,10 @@ export function Viewport() {
       return;
     }
 
+    if (tilePointer.onPointerUp(e)) {
+      return;
+    }
+
     const dataDrag = dataDragRef.current;
     if (dataDrag) {
       dataDragRef.current = null;
@@ -1665,11 +1570,6 @@ export function Viewport() {
     }
 
     if (stroke.kind === "move") {
-      pixelEngine.emitChange();
-      return;
-    }
-
-    if (stroke.kind === "tileStamp") {
       pixelEngine.emitChange();
       return;
     }
@@ -1838,6 +1738,7 @@ export function Viewport() {
 
   const handleCanvasPointerLeave = () => {
     rigPointer.onPointerLeave();
+    tilePointer.onPointerLeave();
     setCursorPos(null);
     if (!strokeRef.current) {
       const state = useEditorStore.getState();
@@ -1938,7 +1839,7 @@ export function Viewport() {
       </div>
 
       <div
-        className={`viewport-stage ${workspaceMode === "rig" ? `rig-mode-${rigMode}` : ""}`}
+        className={`viewport-stage ${workspaceMode === "rig" ? `rig-mode-${rigMode}` : workspaceMode === "tiles" ? `tiles-mode-${tilesMode}` : ""}`}
         style={{ cursor: spacePressed ? "grab" : undefined }}
         onWheel={handleWheel}
         onContextMenu={handleCanvasContextMenu}
@@ -1997,6 +1898,8 @@ export function Viewport() {
               }}
             />
           )}
+
+          <TileOverlay />
 
           {showIsoGrid && isoGridPath && (
             <svg

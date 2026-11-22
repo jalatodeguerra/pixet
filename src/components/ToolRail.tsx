@@ -22,6 +22,7 @@ import {
   rigToolDisabledReason,
   rigToolTitle,
 } from "./rig/rigTools";
+import { TILE_TOOL_BY_ID, TILE_TOOL_GROUPS } from "./tiles/tileTools";
 
 interface ToolDef {
   id: ToolId;
@@ -89,10 +90,49 @@ const TOOL_GROUPS: ToolGroupDef[] = [
 
 export function ToolRail() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const tilesMode = useEditorStore((s) => s.tilesMode);
   if (workspaceMode === "rig") {
     return <RigToolRail />;
   }
+  if (workspaceMode === "tiles" && tilesMode === "map") {
+    return <TileToolRail />;
+  }
   return <DrawingToolRail />;
+}
+
+function TileToolRail() {
+  const tileTool = useEditorStore((s) => s.tileTool);
+  const setTileTool = useEditorStore((s) => s.setTileTool);
+
+  return (
+    <aside className="tool-rail" aria-label="Tile Tools">
+      {TILE_TOOL_GROUPS.map((group, groupIdx) => (
+        <div key={`tile-group-${groupIdx}`} style={{ display: "contents" }}>
+          {group.ids.map((toolId) => {
+            const def = TILE_TOOL_BY_ID.get(toolId);
+            if (!def) return null;
+            const Icon = def.icon;
+            const active = tileTool === toolId;
+            const title = `${def.label} (${def.shortcut})`;
+            return (
+              <button
+                key={toolId}
+                type="button"
+                className={`tool-btn ${active ? "active" : ""}`}
+                title={title}
+                aria-label={title}
+                aria-pressed={active}
+                onClick={() => setTileTool(toolId)}
+              >
+                <Icon size={16} />
+              </button>
+            );
+          })}
+          {group.dividerAfter && <div className="tool-rail-sep" />}
+        </div>
+      ))}
+    </aside>
+  );
 }
 
 function RigToolRail() {

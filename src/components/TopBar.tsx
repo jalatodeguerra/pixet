@@ -31,7 +31,12 @@ import {
 } from "../engine/io/projectBridge";
 import { pickImageFileForImport } from "../engine/io/imageImport";
 import { syncRigHistoryFlags } from "../engine/rig/rigActions";
-import { useEditorStore, WorkspaceMode, RigMode } from "../store/editorStore";
+import {
+  useEditorStore,
+  WorkspaceMode,
+  RigMode,
+  TileMode,
+} from "../store/editorStore";
 
 type MenuKey = "File" | "Edit" | "View" | "Sprite";
 
@@ -61,11 +66,26 @@ const RIG_MODES: { id: RigMode; label: string; hint: string }[] = [
   },
 ];
 
+const TILE_MODES: { id: TileMode; label: string; hint: string }[] = [
+  {
+    id: "map",
+    label: "Map",
+    hint: "Map · paint tiles and objects on tilemap layers",
+  },
+  {
+    id: "tile",
+    label: "Tile",
+    hint: "Tile · edit selected tile pixels",
+  },
+];
+
 export function TopBar() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const setWorkspaceMode = useEditorStore((s) => s.setWorkspaceMode);
   const rigMode = useEditorStore((s) => s.rigMode);
   const setRigMode = useEditorStore((s) => s.setRigMode);
+  const tilesMode = useEditorStore((s) => s.tilesMode);
+  const setTilesMode = useEditorStore((s) => s.setTilesMode);
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
   const togglePanelsCollapsed = useEditorStore((s) => s.togglePanelsCollapsed);
   const toggleShowGrid = useEditorStore((s) => s.toggleShowGrid);
@@ -222,6 +242,31 @@ export function TopBar() {
             );
           })}
         </div>
+
+        {workspaceMode === "tiles" && (
+          <div
+            className="mode-switcher tiles-mode-switcher"
+            role="tablist"
+            aria-label="Tiles Mode"
+          >
+            {TILE_MODES.map((m) => {
+              const active = tilesMode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  title={m.hint}
+                  className={`mode-pill ${active ? "active" : ""}`}
+                  onClick={() => setTilesMode(m.id)}
+                >
+                  <span>{m.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {workspaceMode === "rig" && (
           <div

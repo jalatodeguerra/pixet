@@ -21,7 +21,8 @@ import {
 import { ColorPicker } from "./ColorPicker";
 import { GameDataPanel } from "./GameDataPanel";
 import { RigSidebar } from "./rig/RigSidebar";
-import { TilesetPanel } from "./TilesetPanel";
+import { TilesetBrowserPanel } from "./tiles/TilesetBrowserPanel";
+import { TilesSidebar } from "./tiles/TilesSidebar";
 import { PixelBuffer } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { renderIsometricTilemapToBuffer } from "../engine/tiles/isometric";
@@ -171,6 +172,8 @@ function LayerThumbnail({
 export function RightSidebar() {
   const rightPanelWidth = useEditorStore((s) => s.rightPanelWidth);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const tilesMode = useEditorStore((s) => s.tilesMode);
+  const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
 
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
@@ -278,17 +281,23 @@ export function RightSidebar() {
 
   const isPresetMatch = PALETTE_PRESETS.some((p) => p.name === paletteName);
 
+  const hideDefaultSidebar =
+    workspaceMode === "rig" ||
+    (workspaceMode === "tiles" && tilesMode === "map");
+
   return (
     <aside
       className="right-sidebar"
       style={{ width: rightPanelWidth }}
       aria-label="Inspector Sidebar"
     >
-      {/* Tileset Inspector in Tiles Mode */}
+      {/* Tileset Inspector in Tile Edit Mode */}
       <div
-        className={`sidebar-section-stack ${workspaceMode === "rig" ? "is-hidden" : ""}`}
+        className={`sidebar-section-stack ${hideDefaultSidebar ? "is-hidden" : ""}`}
       >
-        {workspaceMode === "tiles" && <TilesetPanel />}
+        {workspaceMode === "tiles" &&
+          tilesMode === "tile" &&
+          !tilesetBrowserDocked && <TilesetBrowserPanel />}
 
         {/* Game Data Inspector in Data Mode */}
         {workspaceMode === "data" && <GameDataPanel />}
@@ -969,6 +978,9 @@ export function RightSidebar() {
 
       {/* Focused Rig Inspector in Rig Mode */}
       {workspaceMode === "rig" && <RigSidebar />}
+
+      {/* Focused Tiles Inspector in Tiles Map Mode */}
+      {workspaceMode === "tiles" && tilesMode === "map" && <TilesSidebar />}
     </aside>
   );
 }

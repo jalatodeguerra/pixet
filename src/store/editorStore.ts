@@ -1,12 +1,21 @@
 import { create } from "zustand";
 import type { PendingImageImport } from "../engine/io/imageImport";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
+import type { CellFlags } from "../engine/tiles/cell";
+import type { TileTool } from "../components/tiles/tileTools";
 import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
 import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
 
-export type { LayerMapRole };
+export type { LayerMapRole, TileTool };
 
 export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
+export type TileMode = "map" | "tile";
+export interface TileBrushSelection {
+  tilesetIndex: number;
+  cols: number;
+  rows: number;
+  cells: number[];
+}
 export type RigMode = "setup" | "animate";
 export type RigTool =
   | "select"
@@ -132,6 +141,14 @@ interface EditorState {
   showIsoGrid: boolean;
   isoBoxHeight: number;
   tileProjection: "orthogonal" | "isometric";
+  tilesMode: TileMode;
+  tileTool: TileTool;
+  activeTilesetIndex: number;
+  tileBrushFlags: CellFlags;
+  tilesetBrowserZoom: number;
+  tilesetBrowserDocked: boolean;
+  hoveredTileCell: { col: number; row: number } | null;
+  tileBrush: TileBrushSelection | null;
   zoom: number;
   cursorPos: CursorPoint | null;
   canUndo: boolean;
@@ -166,6 +183,8 @@ interface EditorState {
   rigShowInfluence: boolean;
   rigBrushSize: number;
   rigVersion: number;
+  rigAutoKey: boolean;
+  rigTimelineView: "dope" | "curves";
   /** R6 weight brush strength (0..1). */
   rigWeightStrength: number;
   /** R6 weight brush mode. */
@@ -232,6 +251,14 @@ interface EditorState {
   setActiveTileId: (id: number) => void;
   setTileSize: (w: number, h: number) => void;
   bumpTilesetVersion: () => void;
+  setTilesMode: (mode: TileMode) => void;
+  setTileTool: (tool: TileTool) => void;
+  setActiveTilesetIndex: (index: number) => void;
+  setTileBrushFlags: (flags: CellFlags) => void;
+  setTilesetBrowserZoom: (zoom: number) => void;
+  toggleTilesetBrowserDocked: () => void;
+  setHoveredTileCell: (cell: { col: number; row: number } | null) => void;
+  setTileBrush: (brush: TileBrushSelection | null) => void;
   toggleAutoTile: () => void;
   setAutoTileEnabled: (enabled: boolean) => void;
   setAutoTileMode: (mode: AutoTileMode) => void;
@@ -330,6 +357,8 @@ interface EditorState {
   toggleRigShowInfluence: () => void;
   setRigBrushSize: (size: number) => void;
   bumpRigVersion: () => void;
+  toggleRigAutoKey: () => void;
+  setRigTimelineView: (view: "dope" | "curves") => void;
   setRigWeightStrength: (strength: number) => void;
   setRigWeightMode: (mode: WeightBrushMode) => void;
   setRigWeightFalloff: (falloff: WeightFalloff) => void;
@@ -411,6 +440,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   showIsoGrid: false,
   isoBoxHeight: 8,
   tileProjection: "orthogonal",
+  tilesMode: "map",
+  tileTool: "stamp",
+  activeTilesetIndex: 0,
+  tileBrushFlags: { flipH: false, flipV: false, flipD: false },
+  tilesetBrowserZoom: 2,
+  tilesetBrowserDocked: false,
+  hoveredTileCell: null,
+  tileBrush: null,
   zoom: 12,
   cursorPos: null,
   canUndo: false,
@@ -445,6 +482,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigShowInfluence: true,
   rigBrushSize: 3,
   rigVersion: 0,
+  rigAutoKey: false,
+  rigTimelineView: "dope",
   rigWeightStrength: 0.5,
   rigWeightMode: "add",
   rigWeightFalloff: "linear",
@@ -558,6 +597,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setActiveTileId: (activeTileId) => set({ activeTileId: Math.max(0, activeTileId) }),
   setTileSize: (tileWidth, tileHeight) => set({ tileWidth, tileHeight }),
   bumpTilesetVersion: () => set((s) => ({ tilesetVersion: s.tilesetVersion + 1 })),
+  setTilesMode: (tilesMode) => set({ tilesMode }),
+  setTileTool: (tileTool) => set({ tileTool }),
+  setActiveTilesetIndex: (index) =>
+    set({ activeTilesetIndex: Math.max(0, index), tileBrush: null }),
+  setTileBrushFlags: (tileBrushFlags) => set({ tileBrushFlags }),
+  setTilesetBrowserZoom: (z) =>
+    set({ tilesetBrowserZoom: Math.max(1, Math.min(4, Math.round(z))) }),
+  toggleTilesetBrowserDocked: () =>
+    set((s) => ({ tilesetBrowserDocked: !s.tilesetBrowserDocked })),
+  setHoveredTileCell: (hoveredTileCell) => set({ hoveredTileCell }),
+  setTileBrush: (tileBrush) => set({ tileBrush }),
   toggleAutoTile: () => set((s) => ({ autoTileEnabled: !s.autoTileEnabled })),
   setAutoTileEnabled: (autoTileEnabled) => set({ autoTileEnabled }),
   setAutoTileMode: (autoTileMode) => set({ autoTileMode }),
@@ -1288,6 +1338,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRigBrushSize: (size) =>
     set({ rigBrushSize: Math.max(1, Math.min(12, Math.round(size))) }),
   bumpRigVersion: () => set((s) => ({ rigVersion: s.rigVersion + 1 })),
+  toggleRigAutoKey: () => set((s) => ({ rigAutoKey: !s.rigAutoKey })),
+  setRigTimelineView: (rigTimelineView) => set({ rigTimelineView }),
   setRigWeightStrength: (strength) =>
     set({ rigWeightStrength: Math.max(0, Math.min(1, strength)) }),
   setRigWeightMode: (rigWeightMode) => set({ rigWeightMode }),

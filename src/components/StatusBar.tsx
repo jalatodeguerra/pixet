@@ -1,4 +1,5 @@
 import { pixelEngine } from "../engine/document/PixelEngine";
+import { formatCellFlags } from "../engine/tiles/overlayGeometry";
 import { useEditorStore } from "../store/editorStore";
 
 export function StatusBar() {
@@ -16,6 +17,10 @@ export function StatusBar() {
   const rigMode = useEditorStore((s) => s.rigMode);
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
+  const hoveredTileCell = useEditorStore((s) => s.hoveredTileCell);
+  const activeTileId = useEditorStore((s) => s.activeTileId);
+  const activeTilesetIndex = useEditorStore((s) => s.activeTilesetIndex);
+  const tileBrushFlags = useEditorStore((s) => s.tileBrushFlags);
 
   const activeFrame = frames[currentFrame] ?? frames[0];
   const activeLayer = layers.find((l) => l.id === activeLayerId);
@@ -93,6 +98,29 @@ export function StatusBar() {
             <span className="mono-value">
               Constraints: {activeConstraintCount}
             </span>
+          </>
+        ) : workspaceMode === "tiles" ? (
+          <>
+            <div className="status-sep" />
+            <span className="mono-value">
+              {hoveredTileCell
+                ? `Cell: ${hoveredTileCell.col}, ${hoveredTileCell.row}`
+                : "Cell: --"}
+            </span>
+            <div className="status-sep" />
+            <span>
+              {(pixelEngine.tilesetRegistry.get(activeTilesetIndex)?.name ??
+                pixelEngine.tileset.name)}{" "}
+              {activeTileId > 0 ? `#${activeTileId}` : "Empty"}
+            </span>
+            {formatCellFlags(tileBrushFlags) && (
+              <>
+                <div className="status-sep" />
+                <span className="mono-value">
+                  {formatCellFlags(tileBrushFlags)}
+                </span>
+              </>
+            )}
           </>
         ) : activeLayer ? (
           <>

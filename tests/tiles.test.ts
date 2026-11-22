@@ -23,6 +23,11 @@ import {
   Tileset,
   TilesetRegistry,
 } from "../src/engine/tiles/TilemapEngine.ts";
+import {
+  cellRectToScreen,
+  formatCellFlags,
+  screenToTileCell,
+} from "../src/engine/tiles/overlayGeometry.ts";
 
 test("cell pack/unpack, flip, and rotate dihedral identities", () => {
   assert.equal(packCell(0, 0), 0);
@@ -266,4 +271,38 @@ test("TilesetRegistry snapshot and extSnapshot round-trip", () => {
   assert.equal(reg2.tilesets[0].getMeta(1)?.probability, 0.5);
   assert.deepEqual(reg2.tilesets[1].getTile(1)?.getPixel(3, 3), [255, 215, 0, 255]);
   assert.equal(reg2.tilesets[1].getMeta(1)?.name, "Coin");
+});
+
+test("overlayGeometry screenToTileCell, cellRectToScreen, and formatCellFlags", () => {
+  assert.deepEqual(
+    screenToTileCell(35, 19, 128, 16, 16, "orthogonal"),
+    { col: 2, row: 1 }
+  );
+  assert.deepEqual(
+    cellRectToScreen(2, 1, 3, 2, 16, 16, 128, "orthogonal"),
+    { kind: "rect", x: 32, y: 16, w: 48, h: 32 }
+  );
+
+  // Isometric round-trip: origin at (64, 4) for canvasW=128, tileW=16, isoTileH=8
+  const isoCell = screenToTileCell(64, 4, 128, 16, 16, "isometric");
+  assert.deepEqual(isoCell, { col: 0, row: 0 });
+  const isoPoly = cellRectToScreen(0, 0, 1, 1, 16, 16, 128, "isometric");
+  assert.equal(isoPoly.kind, "polygon");
+  if (isoPoly.kind === "polygon") {
+    assert.deepEqual(isoPoly.points, [
+      { x: 64, y: 0 },
+      { x: 72, y: 4 },
+      { x: 64, y: 8 },
+      { x: 56, y: 4 },
+    ]);
+  }
+
+  assert.equal(
+    formatCellFlags({ flipH: false, flipV: false, flipD: false }),
+    ""
+  );
+  assert.equal(
+    formatCellFlags({ flipH: true, flipV: false, flipD: true }),
+    "H D"
+  );
 });
