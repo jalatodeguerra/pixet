@@ -18,6 +18,7 @@ import {
   Unlock,
   Upload,
 } from "lucide-react";
+import { GameDataPanel } from "./GameDataPanel";
 import { RigPanel } from "./RigPanel";
 import { TilesetPanel } from "./TilesetPanel";
 import { PixelBuffer } from "../engine/document/PixelBuffer";
@@ -286,6 +287,9 @@ export function RightSidebar() {
 
       {/* 2D Rig Inspector in Rig Mode */}
       {workspaceMode === "rig" && <RigPanel />}
+
+      {/* Game Data Inspector in Data Mode */}
+      {workspaceMode === "data" && <GameDataPanel />}
 
       {/* Color & Palette */}
       <section className="panel-section">

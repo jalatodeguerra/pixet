@@ -62,6 +62,7 @@ import {
   resizePixelBufferNearest,
   sliceSpritesheet,
 } from "../src/engine/io/imageImport.ts";
+import { GameDataState } from "../src/engine/gamedev/GameDataEngine.ts";
 
 test("plotBresenhamLine produces connected endpoints", () => {
   const pts = plotBresenhamLine(0, 0, 4, 2);
@@ -982,4 +983,46 @@ test("PixelEngine.resizeCanvas expands centered and crops anchored cleanly", () 
   assert.equal(cropped.width, 4);
   assert.equal(cropped.height, 4);
   assert.deepEqual(cropped.getPixel(3, 3), [200, 100, 50, 255]);
+});
+
+test("GameDataState tracks boxes, sockets, events, frame copy, and JSON export", () => {
+  const gd = new GameDataState();
+  const box = gd.addBox({
+    frame: 0,
+    kind: "hitbox",
+    name: "sword_slash",
+    x: 4,
+    y: 6,
+    w: 12,
+    h: 8,
+  });
+  const sock = gd.addSocket({
+    frame: 0,
+    name: "muzzle",
+    x: 16,
+    y: 10,
+  });
+  const evt = gd.addEvent(1, "spawn_vfx", "spark");
+
+  assert.equal(gd.getBoxesAtFrame(0).length, 1);
+  assert.equal(gd.getSocketsAtFrame(0).length, 1);
+  assert.equal(gd.getEventsAtFrame(1).length, 1);
+  assert.equal(evt?.name, "spawn_vfx");
+
+  gd.updateBox(box.id, { w: 14 });
+  assert.equal(gd.getBoxesAtFrame(0)[0].w, 14);
+  gd.updateSocket(sock.id, { y: 12 });
+  assert.equal(gd.getSocketsAtFrame(0)[0].y, 12);
+
+  // Copy frame 0 boxes & sockets to frame 1
+  const copied = gd.copyFrameMetadata(0, 1);
+  assert.equal(copied, 2);
+  assert.equal(gd.getBoxesAtFrame(1).length, 1);
+  assert.equal(gd.getSocketsAtFrame(1).length, 1);
+
+  const parsed = JSON.parse(gd.serializeGameDataJson("hero.pixet", 32, 32, 4));
+  assert.equal(parsed.schema, "pixet-gamedata-v1");
+  assert.equal(parsed.boxes.length, 2);
+  assert.equal(parsed.sockets.length, 2);
+  assert.equal(parsed.events.length, 1);
 });

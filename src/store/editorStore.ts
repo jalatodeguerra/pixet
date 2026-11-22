@@ -2,11 +2,13 @@ import { create } from "zustand";
 import type { PendingImageImport } from "../engine/io/imageImport";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 
-export type WorkspaceMode = "draw" | "tiles" | "rig";
+export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
 export type RigTool = "select" | "addBone" | "ik" | "weightPaint";
+export type DataTool = "hitbox" | "hurtbox" | "collision" | "socket";
 
 export type ToolId =
   | "pencil"
+  | "fillBrush"
   | "eraser"
   | "line"
   | "rect"
@@ -147,6 +149,10 @@ interface EditorState {
   rigBrushSize: number;
   rigVersion: number;
 
+  dataTool: DataTool;
+  showGameDataOverlay: boolean;
+  gameDataVersion: number;
+
   layers: LayerItem[];
   activeLayerId: string;
   selectedLayerIds: string[];
@@ -277,6 +283,9 @@ interface EditorState {
   toggleRigShowInfluence: () => void;
   setRigBrushSize: (size: number) => void;
   bumpRigVersion: () => void;
+  setDataTool: (tool: DataTool) => void;
+  toggleShowGameDataOverlay: () => void;
+  bumpGameDataVersion: () => void;
   loadProjectState: (payload: {
     documentName: string;
     filePath: string | null;
@@ -365,6 +374,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigShowInfluence: true,
   rigBrushSize: 3,
   rigVersion: 0,
+
+  dataTool: "hitbox",
+  showGameDataOverlay: true,
+  gameDataVersion: 0,
 
   layers: [
     {
@@ -1111,6 +1124,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRigBrushSize: (size) =>
     set({ rigBrushSize: Math.max(1, Math.min(12, Math.round(size))) }),
   bumpRigVersion: () => set((s) => ({ rigVersion: s.rigVersion + 1 })),
+  setDataTool: (dataTool) => set({ dataTool }),
+  toggleShowGameDataOverlay: () =>
+    set((s) => ({ showGameDataOverlay: !s.showGameDataOverlay })),
+  bumpGameDataVersion: () =>
+    set((s) => ({ gameDataVersion: s.gameDataVersion + 1 })),
   loadProjectState: (payload) =>
     set({
       documentName: payload.documentName,

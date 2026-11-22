@@ -39,6 +39,7 @@ import { ToolId, useEditorStore } from "./store/editorStore";
 
 const TOOL_SHORTCUTS: Record<string, ToolId> = {
   b: "pencil",
+  f: "fillBrush",
   e: "eraser",
   l: "line",
   u: "rect",

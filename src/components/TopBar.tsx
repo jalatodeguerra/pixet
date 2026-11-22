@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Bone,
   Box,
+  Crosshair,
   Download,
   LayoutGrid,
   PanelRightClose,
@@ -42,6 +43,7 @@ const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; badge?: st
   { id: "draw", label: "Draw", icon: Pencil },
   { id: "tiles", label: "Tiles", icon: LayoutGrid, badge: "P2" },
   { id: "rig", label: "Rig", icon: Bone, badge: "P3" },
+  { id: "data", label: "Data", icon: Crosshair, badge: "P4" },
 ];
 
 export function TopBar() {

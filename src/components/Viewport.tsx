@@ -59,6 +59,7 @@ import { buildShadingRamp } from "../utils/color";
 interface ActiveStroke {
   kind:
     | "freehand"
+    | "fillBrush"
     | "shape"
     | "marquee"
     | "lasso"
@@ -89,6 +90,30 @@ function wrapCoord(v: number, size: number): number {
 function wrapPoint(pt: Point, w: number, h: number, enabled: boolean): Point {
   if (!enabled) return pt;
   return { x: wrapCoord(pt.x, w), y: wrapCoord(pt.y, h) };
+}
+
+function getFillBrushPoints(rawPoints: readonly Point[], w: number, h: number): Point[] {
+  const seen = new Set<string>();
+  const pts: Point[] = [];
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const key = `${x},${y}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    pts.push({ x, y });
+  };
+  for (const p of rawPoints) {
+    push(p.x, p.y);
+  }
+  if (rawPoints.length >= 3) {
+    const mask = createLassoSelection(w, h, rawPoints.slice());
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (mask.contains(x, y)) push(x, y);
+      }
+    }
+  }
+  return pts;
 }
 
 type DragPreview =
@@ -174,6 +199,8 @@ export function Viewport() {
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const showFloatingPreview = useEditorStore((s) => s.showFloatingPreview);
   const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
+  const showGameDataOverlay = useEditorStore((s) => s.showGameDataOverlay);
+  const gameDataVersion = useEditorStore((s) => s.gameDataVersion);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapGhostRef = useRef<HTMLCanvasElement>(null);
@@ -199,6 +226,20 @@ export function Viewport() {
     y0: number;
     x1: number;
     y1: number;
+  } | null>(null);
+  const dataDragRef = useRef<{
+    kind: "hitbox" | "hurtbox" | "collision";
+    startX: number;
+    startY: number;
+    curX: number;
+    curY: number;
+  } | null>(null);
+  const [dataDraftBox, setDataDraftBox] = useState<{
+    kind: "hitbox" | "hurtbox" | "collision";
+    x: number;
+    y: number;
+    w: number;
+    h: number;
   } | null>(null);
 
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -467,6 +508,7 @@ export function Viewport() {
     }
 
     if (
+      state.workspaceMode === "data" ||
       px < 0 ||
       py < 0 ||
       px >= state.canvasWidth ||
@@ -709,8 +751,43 @@ export function Viewport() {
       return;
     }
 
-    // Left click draws; Alt+Right samples BG color; plain Right-click opens context menu
     if (e.button !== 0) return;
+
+    if (state.workspaceMode === "data") {
+      const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, px));
+      const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      if (state.dataTool === "socket") {
+        const created = pixelEngine.gameData.addSocket({
+          frame: state.currentFrame,
+          name: `socket_${pixelEngine.gameData.getSocketsAtFrame(state.currentFrame).length + 1}`,
+          x: clampedX,
+          y: clampedY,
+        });
+        state.bumpGameDataVersion();
+        state.setStatusMessage(
+          `Placed socket "${created.name}" at (${created.x}, ${created.y})`
+        );
+        return;
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      dataDragRef.current = {
+        kind: state.dataTool,
+        startX: clampedX,
+        startY: clampedY,
+        curX: clampedX,
+        curY: clampedY,
+      };
+      setDataDraftBox({
+        kind: state.dataTool,
+        x: clampedX,
+        y: clampedY,
+        w: 1,
+        h: 1,
+      });
+      return;
+    }
+
+    // Standard drawing tools below
 
     if (state.workspaceMode === "rig" && e.button === 0) {
       const sub = getSubpixelCoords(e);
@@ -1076,6 +1153,32 @@ export function Viewport() {
       return;
     }
 
+    if (tool === "fillBrush") {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      pixelEngine.clearOverlay();
+      const startPt = { x: px, y: py };
+      pixelEngine.overlayBuffer.setPixel(px, py, rgba[0], rgba[1], rgba[2], rgba[3]);
+      renderOverlayOnly();
+      strokeRef.current = {
+        kind: "fillBrush",
+        tool,
+        layerId: activeLayer.id,
+        frameIndex: state.currentFrame,
+        alphaLock: activeLayer.alphaLock,
+        rgba,
+        rawPoints: [startPt],
+        paintedSet: new Set(),
+        usePixelPerfect: false,
+        startX: px,
+        startY: py,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        origMask: null,
+        stampTileId: 0,
+      };
+      return;
+    }
+
     if (tool === "pencil" || tool === "eraser") {
       e.currentTarget.setPointerCapture(e.pointerId);
       pixelEngine.clearOverlay();
@@ -1261,6 +1364,20 @@ export function Viewport() {
       setCursorPos({ x: px, y: py });
     } else {
       setCursorPos(null);
+    }
+
+    const dataDrag = dataDragRef.current;
+    if (dataDrag) {
+      const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, px));
+      const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      dataDrag.curX = clampedX;
+      dataDrag.curY = clampedY;
+      const minX = Math.min(dataDrag.startX, clampedX);
+      const minY = Math.min(dataDrag.startY, clampedY);
+      const w = Math.abs(clampedX - dataDrag.startX) + 1;
+      const h = Math.abs(clampedY - dataDrag.startY) + 1;
+      setDataDraftBox({ kind: dataDrag.kind, x: minX, y: minY, w, h });
+      return;
     }
 
     const rigDrag = rigDragRef.current;
@@ -1465,6 +1582,49 @@ export function Viewport() {
       return;
     }
 
+    if (stroke.kind === "fillBrush") {
+      const last = stroke.rawPoints[stroke.rawPoints.length - 1];
+      if (last.x === px && last.y === py) return;
+      const segment = plotBresenhamLine(last.x, last.y, px, py);
+      for (let i = 1; i < segment.length; i++) {
+        stroke.rawPoints.push(segment[i]);
+      }
+
+      pixelEngine.clearOverlay();
+      const fillPts = getFillBrushPoints(
+        stroke.rawPoints,
+        state.canvasWidth,
+        state.canvasHeight
+      );
+      for (const pt of fillPts) {
+        for (const rawSp of expandSymmetry(
+          pt,
+          state.canvasWidth,
+          state.canvasHeight,
+          state.symmetryX,
+          state.symmetryY
+        )) {
+          const sp = wrapPoint(
+            rawSp,
+            state.canvasWidth,
+            state.canvasHeight,
+            state.seamlessWrap
+          );
+          if (!canWriteAt(sp.x, sp.y)) continue;
+          pixelEngine.overlayBuffer.setPixel(
+            sp.x,
+            sp.y,
+            stroke.rgba[0],
+            stroke.rgba[1],
+            stroke.rgba[2],
+            stroke.rgba[3]
+          );
+        }
+      }
+      renderOverlayOnly();
+      return;
+    }
+
     if (stroke.kind === "tileEdit") {
       const last = stroke.rawPoints[stroke.rawPoints.length - 1];
       if (last.x === px && last.y === py) return;
@@ -1615,6 +1775,34 @@ export function Viewport() {
   };
 
   const finishStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const dataDrag = dataDragRef.current;
+    if (dataDrag) {
+      dataDragRef.current = null;
+      setDataDraftBox(null);
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      const st = useEditorStore.getState();
+      const minX = Math.min(dataDrag.startX, dataDrag.curX);
+      const minY = Math.min(dataDrag.startY, dataDrag.curY);
+      const w = Math.abs(dataDrag.curX - dataDrag.startX) + 1;
+      const h = Math.abs(dataDrag.curY - dataDrag.startY) + 1;
+      const created = pixelEngine.gameData.addBox({
+        frame: st.currentFrame,
+        kind: dataDrag.kind,
+        name: `${dataDrag.kind}_${pixelEngine.gameData.getBoxesAtFrame(st.currentFrame).length + 1}`,
+        x: minX,
+        y: minY,
+        w,
+        h,
+      });
+      st.bumpGameDataVersion();
+      st.setStatusMessage(
+        `Added ${created.kind} (${created.w}×${created.h} at ${created.x},${created.y})`
+      );
+      return;
+    }
+
     const rigDrag = rigDragRef.current;
     if (rigDrag) {
       rigDragRef.current = null;
@@ -1774,6 +1962,54 @@ export function Viewport() {
             faceRgba[1],
             faceRgba[2],
             faceRgba[3],
+            stroke.alphaLock
+          );
+        }
+      }
+      if (pixelEngine.history.commitTransaction(cel)) {
+        syncHistoryAndCelState(stroke.layerId, stroke.frameIndex);
+      } else {
+        pixelEngine.history.cancelTransaction();
+      }
+      pixelEngine.emitChange();
+      return;
+    }
+
+    if (stroke.kind === "fillBrush") {
+      pixelEngine.clearOverlay();
+      pixelEngine.history.beginTransaction(
+        stroke.layerId,
+        stroke.frameIndex,
+        "Fill Brush"
+      );
+      const fillPts = getFillBrushPoints(
+        stroke.rawPoints,
+        cel.width,
+        cel.height
+      );
+      for (const pt of fillPts) {
+        for (const rawSp of expandSymmetry(
+          pt,
+          cel.width,
+          cel.height,
+          state.symmetryX,
+          state.symmetryY
+        )) {
+          const sp = wrapPoint(
+            rawSp,
+            cel.width,
+            cel.height,
+            state.seamlessWrap
+          );
+          if (!canWriteAt(sp.x, sp.y)) continue;
+          pixelEngine.history.capturePixelTile(cel, sp.x, sp.y);
+          cel.setPixel(
+            sp.x,
+            sp.y,
+            stroke.rgba[0],
+            stroke.rgba[1],
+            stroke.rgba[2],
+            stroke.rgba[3],
             stroke.alphaLock
           );
         }
@@ -1948,6 +2184,17 @@ export function Viewport() {
       .filter((item): item is NonNullable<typeof item> => item !== null);
   }, [workspaceMode, rigShowBones, currentFrame, rigVersion, selectedBoneId]);
 
+  const gameDataOverlay = useMemo(() => {
+    void gameDataVersion;
+    if (workspaceMode !== "data" && !showGameDataOverlay) {
+      return { boxes: [], sockets: [] };
+    }
+    return {
+      boxes: pixelEngine.gameData.getBoxesAtFrame(currentFrame),
+      sockets: pixelEngine.gameData.getSocketsAtFrame(currentFrame),
+    };
+  }, [workspaceMode, showGameDataOverlay, currentFrame, gameDataVersion]);
+
   return (
     <section className="viewport-container" aria-label="Canvas Viewport">
       <div className="document-tabs">
@@ -2102,6 +2349,44 @@ export function Viewport() {
               )}
             </svg>
           )}
+
+          {(workspaceMode === "data" || showGameDataOverlay) &&
+            (gameDataOverlay.boxes.length > 0 ||
+              gameDataOverlay.sockets.length > 0 ||
+              dataDraftBox) && (
+              <svg
+                className="viewport-gamedata-svg"
+                viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
+                preserveAspectRatio="none"
+              >
+                {gameDataOverlay.boxes.map((b) => (
+                  <rect
+                    key={b.id}
+                    className={`gamedata-box ${b.kind}`}
+                    x={b.x}
+                    y={b.y}
+                    width={b.w}
+                    height={b.h}
+                  />
+                ))}
+                {dataDraftBox && (
+                  <rect
+                    className={`gamedata-box ${dataDraftBox.kind} draft`}
+                    x={dataDraftBox.x}
+                    y={dataDraftBox.y}
+                    width={dataDraftBox.w}
+                    height={dataDraftBox.h}
+                  />
+                )}
+                {gameDataOverlay.sockets.map((s) => (
+                  <g key={s.id} className="gamedata-socket">
+                    <line x1={s.x - 1} y1={s.y + 0.5} x2={s.x + 2} y2={s.y + 0.5} />
+                    <line x1={s.x + 0.5} y1={s.y - 1} x2={s.x + 0.5} y2={s.y + 2} />
+                    <rect x={s.x} y={s.y} width={1} height={1} />
+                  </g>
+                ))}
+              </svg>
+            )}
 
           {symmetryX && <div className="viewport-symmetry-x" />}
           {symmetryY && <div className="viewport-symmetry-y" />}

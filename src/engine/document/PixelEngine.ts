@@ -19,6 +19,7 @@ import {
   RigState,
   warpLayerByBone,
 } from "../rig/RigEngine.ts";
+import { GameDataState } from "../gamedev/GameDataEngine.ts";
 import type {
   FloatingSelection,
   SelectionMask,
@@ -95,6 +96,7 @@ export class PixelEngine {
   readonly tileset = new Tileset("tileset-default", "Main Tileset", 16, 16);
   readonly tilemaps = new Map<string, TilemapData>();
   readonly rig = new RigState();
+  readonly gameData = new GameDataState();
   readonly history = new TileHistory(100);
   compositeBuffer: Uint8ClampedArray;
   overlayBuffer: PixelBuffer;
@@ -132,6 +134,7 @@ export class PixelEngine {
     this.celLinks.clear();
     this.tilemaps.clear();
     this.rig.reset();
+    this.gameData.reset();
     this.history.clear();
     this.selection = null;
     this.floating = null;
