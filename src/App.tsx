@@ -1,0 +1,393 @@
+import { useEffect, useRef, useState } from "react";
+import { Upload } from "lucide-react";
+import { ExportModal } from "./components/ExportModal";
+import { ImportImageModal } from "./components/ImportImageModal";
+import { RightSidebar } from "./components/RightSidebar";
+import { Rotate3DModal } from "./components/Rotate3DModal";
+import { StatusBar } from "./components/StatusBar";
+import { Timeline } from "./components/Timeline";
+import { ToolOptionsBar } from "./components/ToolOptionsBar";
+import { ToolRail } from "./components/ToolRail";
+import { TopBar } from "./components/TopBar";
+import { Viewport } from "./components/Viewport";
+import { pixelEngine } from "./engine/document/PixelEngine";
+import { performRedo, performUndo } from "./engine/document/historyActions";
+import {
+  commitFloatingSelection,
+  copySelection,
+  cutSelection,
+  deleteSelection,
+  deselectAll,
+  pasteClipboard,
+  selectAllCanvas,
+} from "./engine/document/selectionActions";
+import {
+  openProjectAction,
+  saveProjectAction,
+} from "./engine/io/projectBridge";
+import {
+  decodeImageFileToPixelBuffer,
+  isSupportedImageFile,
+  pickImageFileForImport,
+} from "./engine/io/imageImport";
+import { ToolId, useEditorStore } from "./store/editorStore";
+
+const TOOL_SHORTCUTS: Record<string, ToolId> = {
+  b: "pencil",
+  e: "eraser",
+  l: "line",
+  u: "rect",
+  o: "ellipse",
+  g: "fill",
+  i: "eyedropper",
+  m: "marquee",
+  v: "move",
+  t: "tileStamp",
+  k: "isoBox",
+};
+
+export function App() {
+  const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
+  const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
+  const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
+  const setTimelineHeight = useEditorStore((s) => s.setTimelineHeight);
+  const isPlaying = useEditorStore((s) => s.isPlaying);
+  const fps = useEditorStore((s) => s.fps);
+  const frames = useEditorStore((s) => s.frames);
+  const currentFrame = useEditorStore((s) => s.currentFrame);
+  const nextFrame = useEditorStore((s) => s.nextFrame);
+  const statusMessage = useEditorStore((s) => s.statusMessage);
+  const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
+
+  const [draggingRight, setDraggingRight] = useState(false);
+  const [draggingTimeline, setDraggingTimeline] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragDepthRef = useRef(0);
+
+  // Variable-duration playback timer loop
+  useEffect(() => {
+    if (!isPlaying) return;
+    const durationMs =
+      frames[currentFrame]?.durationMs ?? Math.round(1000 / fps);
+    const id = window.setTimeout(nextFrame, Math.max(16, durationMs));
+    return () => window.clearTimeout(id);
+  }, [isPlaying, currentFrame, frames, fps, nextFrame]);
+
+  // Auto-clear transient status messages
+  useEffect(() => {
+    if (!statusMessage) return;
+    const timer = window.setTimeout(() => setStatusMessage(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [statusMessage, setStatusMessage]);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const isEditable = (target: EventTarget | null) =>
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT");
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditable(e.target)) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const ctrlKey = e.key.toLowerCase();
+        if (ctrlKey === "z") {
+          e.preventDefault();
+          if (e.shiftKey) {
+            performRedo();
+          } else {
+            performUndo();
+          }
+          return;
+        }
+        if (ctrlKey === "y") {
+          e.preventDefault();
+          performRedo();
+          return;
+        }
+        if (ctrlKey === "c") {
+          e.preventDefault();
+          copySelection();
+          return;
+        }
+        if (ctrlKey === "x") {
+          e.preventDefault();
+          cutSelection();
+          return;
+        }
+        if (ctrlKey === "v") {
+          e.preventDefault();
+          pasteClipboard();
+          return;
+        }
+        if (ctrlKey === "a") {
+          e.preventDefault();
+          selectAllCanvas();
+          return;
+        }
+        if (ctrlKey === "d") {
+          e.preventDefault();
+          deselectAll();
+          return;
+        }
+        if (ctrlKey === "s") {
+          e.preventDefault();
+          void saveProjectAction(e.shiftKey);
+          return;
+        }
+        if (ctrlKey === "o") {
+          e.preventDefault();
+          void openProjectAction();
+          return;
+        }
+        if (ctrlKey === "e") {
+          e.preventDefault();
+          useEditorStore.getState().setExportModalOpen(true);
+          return;
+        }
+        if (ctrlKey === "3") {
+          e.preventDefault();
+          const st = useEditorStore.getState();
+          st.setRotate3dModalOpen(!st.rotate3dModalOpen);
+          return;
+        }
+        if (ctrlKey === "i" && e.shiftKey) {
+          e.preventDefault();
+          void pickImageFileForImport()
+            .then((img) => {
+              if (img) useEditorStore.getState().setPendingImportImage(img);
+            })
+            .catch((err) => {
+              useEditorStore
+                .getState()
+                .setStatusMessage(`Import failed: ${String(err)}`);
+            });
+          return;
+        }
+        return;
+      }
+
+      if (e.altKey) {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+      const state = useEditorStore.getState();
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        deselectAll();
+        return;
+      }
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (pixelEngine.floating || pixelEngine.selection) {
+          e.preventDefault();
+          deleteSelection();
+          return;
+        }
+      }
+
+      if (
+        pixelEngine.floating &&
+        (e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "ArrowUp" ||
+          e.key === "ArrowDown")
+      ) {
+        e.preventDefault();
+        const dx = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+        const dy = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+        pixelEngine.floating.offsetX += dx;
+        pixelEngine.floating.offsetY += dy;
+        if (pixelEngine.selection) {
+          pixelEngine.selection = pixelEngine.selection.translate(dx, dy);
+        }
+        pixelEngine.emitChange();
+        return;
+      }
+
+      if (e.key === "Tab") {
+        e.preventDefault();
+        state.togglePanelsCollapsed();
+        return;
+      }
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (pixelEngine.floating) {
+          commitFloatingSelection();
+          state.setStatusMessage("Committed selection");
+        } else {
+          state.togglePlaying();
+        }
+        return;
+      }
+
+      if (key === "x") {
+        state.swapColors();
+        return;
+      }
+
+      if (e.key === "[") {
+        state.setBrushSize(state.brushSize - 1);
+        return;
+      }
+
+      if (e.key === "]") {
+        state.setBrushSize(state.brushSize + 1);
+        return;
+      }
+
+      if (e.key === "=" || e.key === "+") {
+        state.setZoom(state.zoom + 1);
+        return;
+      }
+
+      if (e.key === "-") {
+        state.setZoom(state.zoom - 1);
+        return;
+      }
+
+      const mappedTool = TOOL_SHORTCUTS[key];
+      if (mappedTool) {
+        state.setActiveTool(mappedTool);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Drag resize handlers
+  useEffect(() => {
+    if (!draggingRight && !draggingTimeline) return;
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (draggingRight) {
+        setRightPanelWidth(window.innerWidth - e.clientX);
+      }
+      if (draggingTimeline) {
+        // Status bar is 24px at bottom
+        setTimelineHeight(window.innerHeight - 24 - e.clientY);
+      }
+    };
+
+    const onMouseUp = () => {
+      setDraggingRight(false);
+      setDraggingTimeline(false);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [draggingRight, draggingTimeline, setRightPanelWidth, setTimelineHeight]);
+
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragOver(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const imageFile = files.find((f) => isSupportedImageFile(f));
+    if (!imageFile) {
+      if (files.length > 0) {
+        setStatusMessage("Drop a PNG, WebP, JPG, BMP, or GIF image");
+      }
+      return;
+    }
+
+    void decodeImageFileToPixelBuffer(imageFile)
+      .then((decoded) => {
+        useEditorStore.getState().setPendingImportImage(decoded);
+      })
+      .catch((err) => {
+        setStatusMessage(`Image import failed: ${String(err)}`);
+      });
+  };
+
+  return (
+    <div
+      className="editor-shell"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <TopBar />
+      <ToolOptionsBar />
+
+      <main className="workspace-main">
+        <div className="workspace-middle">
+          {!panelsCollapsed && <ToolRail />}
+          <Viewport />
+          {!panelsCollapsed && (
+            <>
+              <div
+                className={`resizer-vertical ${draggingRight ? "dragging" : ""}`}
+                onMouseDown={() => setDraggingRight(true)}
+              />
+              <RightSidebar />
+            </>
+          )}
+        </div>
+
+        {!panelsCollapsed && (
+          <>
+            {!timelineCollapsed && (
+              <div
+                className={`resizer-horizontal ${draggingTimeline ? "dragging" : ""}`}
+                onMouseDown={() => setDraggingTimeline(true)}
+              />
+            )}
+            <Timeline />
+          </>
+        )}
+      </main>
+
+      <StatusBar />
+      <ExportModal />
+      <Rotate3DModal />
+      <ImportImageModal />
+      {isDragOver && (
+        <div className="dropzone-overlay">
+          <div className="dropzone-card">
+            <Upload size={26} />
+            <span>Drop image to import into Pixet</span>
+            <small>PNG, WebP, JPG, BMP, or GIF — New Sprite, Layer, or Spritesheet</small>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
