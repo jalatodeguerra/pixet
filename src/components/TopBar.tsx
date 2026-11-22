@@ -51,6 +51,7 @@ export function TopBar() {
   const togglePanelsCollapsed = useEditorStore((s) => s.togglePanelsCollapsed);
   const toggleShowGrid = useEditorStore((s) => s.toggleShowGrid);
   const toggleTimelineCollapsed = useEditorStore((s) => s.toggleTimelineCollapsed);
+  const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
   const setZoom = useEditorStore((s) => s.setZoom);
   const zoom = useEditorStore((s) => s.zoom);
   const swapColors = useEditorStore((s) => s.swapColors);
@@ -116,6 +117,7 @@ export function TopBar() {
       { label: "Toggle Pixel Grid", shortcut: "G", action: () => { toggleShowGrid(); setOpenMenu(null); } },
       { label: "Toggle Side Panels", shortcut: "Tab", action: () => { togglePanelsCollapsed(); setOpenMenu(null); } },
       { label: "Toggle Timeline", action: () => { toggleTimelineCollapsed(); setOpenMenu(null); } },
+      { label: "Toggle Floating Preview", action: () => { toggleFloatingPreview(); setOpenMenu(null); } },
       { label: "Zoom In", shortcut: "+", action: () => { setZoom(zoom + 2); setOpenMenu(null); } },
       { label: "Zoom Out", shortcut: "-", action: () => { setZoom(zoom - 2); setOpenMenu(null); } },
       { label: "Reset Zoom (12x)", action: () => { setZoom(12); setOpenMenu(null); } },

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { Copy, Eraser, Grid2x2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Copy, Eraser, Grid2x2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 import { useEditorStore } from "../store/editorStore";
@@ -65,6 +65,7 @@ export function TilesetPanel() {
   const setTileProjection = useEditorStore((s) => s.setTileProjection);
   const showIsoGrid = useEditorStore((s) => s.showIsoGrid);
   const toggleShowIsoGrid = useEditorStore((s) => s.toggleShowIsoGrid);
+  const [collapsed, setCollapsed] = useState(false);
 
   const tileCount = pixelEngine.tileset.count;
   const tileIds = Array.from({ length: tileCount }, (_, i) => i + 1);
@@ -128,7 +129,14 @@ export function TilesetPanel() {
   return (
     <section className="panel-section">
       <div className="panel-header">
-        <span>Tileset ({tileCount})</span>
+        <button
+          type="button"
+          className="panel-collapse-btn"
+          onClick={() => setCollapsed((v) => !v)}
+        >
+          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+          <span>Tileset ({tileCount})</span>
+        </button>
         <div className="panel-header-actions">
           <select
             className="palette-select"
@@ -186,7 +194,7 @@ export function TilesetPanel() {
         </div>
       </div>
 
-      <div className="panel-body">
+      {!collapsed && <div className="panel-body">
         <div className="tileset-grid">
           <button
             type="button"
@@ -280,7 +288,7 @@ export function TilesetPanel() {
           Stamp tiles with <code>T</code>, or paint with Pencil <code>B</code> on
           a Tilemap layer to live-edit all instances.
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

@@ -88,23 +88,25 @@ export function Timeline() {
   return (
     <section
       className="timeline-dock"
-      style={{ height: timelineCollapsed ? 32 : timelineHeight }}
+      style={{ height: timelineCollapsed ? 30 : timelineHeight }}
       aria-label="Animation Timeline"
     >
       <div className="timeline-toolbar">
         <div className="timeline-controls">
-          <span
-            style={{
-              fontWeight: 600,
-              fontSize: 11,
-              textTransform: "uppercase",
-              letterSpacing: "0.03em",
-              color: "var(--text-secondary)",
-              marginRight: 4,
-            }}
+          <button
+            type="button"
+            className="panel-collapse-btn"
+            style={{ marginRight: 4 }}
+            title={timelineCollapsed ? "Expand Timeline" : "Collapse Timeline"}
+            onClick={toggleTimelineCollapsed}
           >
-            Timeline
-          </span>
+            {timelineCollapsed ? (
+              <ChevronUp size={12} />
+            ) : (
+              <ChevronDown size={12} />
+            )}
+            <span>Timeline</span>
+          </button>
 
           <button
             type="button"

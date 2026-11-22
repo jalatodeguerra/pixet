@@ -166,6 +166,7 @@ interface EditorState {
   timelineHeight: number;
   timelineCollapsed: boolean;
   panelsCollapsed: boolean;
+  showFloatingPreview: boolean;
   statusMessage: string | null;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
@@ -250,6 +251,8 @@ interface EditorState {
   setTimelineHeight: (height: number) => void;
   toggleTimelineCollapsed: () => void;
   togglePanelsCollapsed: () => void;
+  toggleFloatingPreview: () => void;
+  setShowFloatingPreview: (show: boolean) => void;
   setStatusMessage: (msg: string | null) => void;
   setCurrentFilePath: (path: string | null) => void;
   setDocumentName: (name: string) => void;
@@ -427,6 +430,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   timelineHeight: 204,
   timelineCollapsed: false,
   panelsCollapsed: false,
+  showFloatingPreview: true,
   statusMessage: null,
 
   setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
@@ -946,6 +950,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((s) => ({ timelineCollapsed: !s.timelineCollapsed })),
   togglePanelsCollapsed: () =>
     set((s) => ({ panelsCollapsed: !s.panelsCollapsed })),
+  toggleFloatingPreview: () =>
+    set((s) => ({ showFloatingPreview: !s.showFloatingPreview })),
+  setShowFloatingPreview: (showFloatingPreview) => set({ showFloatingPreview }),
   setStatusMessage: (statusMessage) => set({ statusMessage }),
   setCurrentFilePath: (currentFilePath) => set({ currentFilePath }),
   setDocumentName: (documentName) => set({ documentName }),

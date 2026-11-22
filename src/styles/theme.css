@@ -1,21 +1,21 @@
 :root {
-  --bg-root: #111114;
-  --bg-panel: #18181d;
-  --bg-surface: #212128;
-  --bg-elevated: #2a2a33;
-  --bg-hover: #32323d;
+  --bg-root: #141414;
+  --bg-panel: #1a1a1a;
+  --bg-surface: #202020;
+  --bg-elevated: #272727;
+  --bg-hover: #303030;
 
-  --border-subtle: #2e2e38;
-  --border-strong: #3e3e4c;
+  --border-subtle: #2b2b2b;
+  --border-strong: #3d3d3d;
 
-  --text-primary: #ececf2;
-  --text-secondary: #a0a0b4;
-  --text-muted: #6c6c80;
+  --text-primary: #e8e8e8;
+  --text-secondary: #9e9e9e;
+  --text-muted: #6e6e6e;
 
-  --accent: #5b8cff;
-  --accent-hover: #709bff;
-  --accent-soft: rgba(91, 140, 255, 0.16);
-  --accent-border: rgba(91, 140, 255, 0.45);
+  --accent: #4c8bf5;
+  --accent-hover: #5e97f6;
+  --accent-soft: rgba(76, 139, 245, 0.16);
+  --accent-border: #4c8bf5;
 
   --danger: #e05d6f;
   --success: #4cc38a;
@@ -28,8 +28,8 @@
   --optionsbar-height: 32px;
   --toolrail-width: 44px;
   --statusbar-height: 24px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
 }
 
 *,
@@ -87,7 +87,6 @@ button:disabled {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {

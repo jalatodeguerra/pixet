@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -14,8 +14,6 @@ import {
   Grid2x2,
   GripVertical,
   Lock,
-  Pause,
-  Play,
   Plus,
   Trash2,
   Unlock,
@@ -23,7 +21,10 @@ import {
 } from "lucide-react";
 import { RigPanel } from "./RigPanel";
 import { TilesetPanel } from "./TilesetPanel";
+import { PixelBuffer } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
+import { renderIsometricTilemapToBuffer } from "../engine/tiles/isometric";
+import { renderTilemapToBuffer } from "../engine/tiles/TilemapEngine";
 import {
   copySelection,
   copySelectionToNewLayer,
@@ -53,23 +54,128 @@ const BLEND_MODES: BlendMode[] = [
   "Add",
 ];
 
+function LayerThumbnail({
+  layerId,
+  layerKind,
+  frameIndex,
+  canvasWidth,
+  canvasHeight,
+  tilesetVersion,
+  tileProjection,
+}: {
+  layerId: string;
+  layerKind: string;
+  frameIndex: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  tilesetVersion: number;
+  tileProjection: "orthogonal" | "isometric";
+}) {
+  const thumbRef = useRef<HTMLCanvasElement>(null);
+  const scratchRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const drawThumb = () => {
+      const thumb = thumbRef.current;
+      if (!thumb) return;
+      const tctx = thumb.getContext("2d");
+      if (!tctx) return;
+      tctx.clearRect(0, 0, thumb.width, thumb.height);
+
+      let buf: PixelBuffer | undefined;
+      if (layerKind === "tilemap") {
+        const tm = pixelEngine.getTilemap(layerId, frameIndex);
+        if (tm) {
+          buf = new PixelBuffer(pixelEngine.width, pixelEngine.height);
+          if (tileProjection === "isometric") {
+            renderIsometricTilemapToBuffer(
+              tm,
+              pixelEngine.tileset,
+              buf.data,
+              buf.width,
+              buf.height,
+              1,
+              "Normal"
+            );
+          } else {
+            renderTilemapToBuffer(
+              tm,
+              pixelEngine.tileset,
+              buf.data,
+              buf.width,
+              buf.height,
+              1,
+              "Normal"
+            );
+          }
+        }
+      } else {
+        buf = pixelEngine.getCel(layerId, frameIndex);
+      }
+
+      if (!buf || buf.isEmpty()) return;
+
+      if (!scratchRef.current) {
+        scratchRef.current = document.createElement("canvas");
+      }
+      const scratch = scratchRef.current;
+      scratch.width = buf.width;
+      scratch.height = buf.height;
+      const sctx = scratch.getContext("2d");
+      if (!sctx) return;
+
+      sctx.putImageData(
+        new ImageData(
+          new Uint8ClampedArray(buf.data),
+          buf.width,
+          buf.height
+        ),
+        0,
+        0
+      );
+
+      const scale = Math.min(thumb.width / buf.width, thumb.height / buf.height);
+      const dw = Math.max(1, Math.round(buf.width * scale));
+      const dh = Math.max(1, Math.round(buf.height * scale));
+      const dx = Math.floor((thumb.width - dw) / 2);
+      const dy = Math.floor((thumb.height - dh) / 2);
+      tctx.imageSmoothingEnabled = false;
+      tctx.drawImage(scratch, dx, dy, dw, dh);
+    };
+
+    drawThumb();
+    return pixelEngine.subscribe(drawThumb);
+  }, [
+    layerId,
+    layerKind,
+    frameIndex,
+    canvasWidth,
+    canvasHeight,
+    tilesetVersion,
+    tileProjection,
+  ]);
+
+  return (
+    <span className="layer-thumb-wrap">
+      <canvas
+        ref={thumbRef}
+        width={22}
+        height={22}
+        className="layer-thumb-canvas"
+      />
+    </span>
+  );
+}
+
 export function RightSidebar() {
   const rightPanelWidth = useEditorStore((s) => s.rightPanelWidth);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
-  const rigVersion = useEditorStore((s) => s.rigVersion);
-  const rigPixelSnap = useEditorStore((s) => s.rigPixelSnap);
-  const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
 
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const currentFrame = useEditorStore((s) => s.currentFrame);
-  const isPlaying = useEditorStore((s) => s.isPlaying);
-  const togglePlaying = useEditorStore((s) => s.togglePlaying);
-  const previewScale = useEditorStore((s) => s.previewScale);
-  const setPreviewScale = useEditorStore((s) => s.setPreviewScale);
-  const tags = useEditorStore((s) => s.tags);
-  const activeTagId = useEditorStore((s) => s.activeTagId);
-  const setActiveTagId = useEditorStore((s) => s.setActiveTagId);
+  const tilesetVersion = useEditorStore((s) => s.tilesetVersion);
+  const tileProjection = useEditorStore((s) => s.tileProjection);
 
   const primaryColor = useEditorStore((s) => s.primaryColor);
   const secondaryColor = useEditorStore((s) => s.secondaryColor);
@@ -101,6 +207,8 @@ export function RightSidebar() {
   const setLayerParent = useEditorStore((s) => s.setLayerParent);
   const openContextMenu = useEditorStore((s) => s.openContextMenu);
 
+  const [colorOpen, setColorOpen] = useState(true);
+  const [layersOpen, setLayersOpen] = useState(true);
   const [hexInput, setHexInput] = useState(primaryColor);
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -110,52 +218,11 @@ export function RightSidebar() {
     pos: "before" | "after" | "inside";
   } | null>(null);
 
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const paletteFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setHexInput(primaryColor);
   }, [primaryColor]);
-
-  const drawPreview = useCallback(() => {
-    const canvas = previewCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const state = useEditorStore.getState();
-    const composite =
-      state.workspaceMode === "rig" && pixelEngine.rig.bones.length > 0
-        ? pixelEngine.compositeRigFrame(state.layers, state.currentFrame, {
-            pixelSnap: state.rigPixelSnap,
-            rotSprite: state.rigRotSprite,
-          })
-        : pixelEngine.compositeFrame(state.layers, state.currentFrame);
-    const img = new ImageData(
-      new Uint8ClampedArray(composite),
-      pixelEngine.width,
-      pixelEngine.height
-    );
-    ctx.putImageData(img, 0, 0);
-  }, []);
-
-  useEffect(() => {
-    drawPreview();
-  }, [
-    canvasWidth,
-    canvasHeight,
-    currentFrame,
-    layers,
-    workspaceMode,
-    rigVersion,
-    rigPixelSnap,
-    rigRotSprite,
-    drawPreview,
-  ]);
-
-  useEffect(() => {
-    return pixelEngine.subscribe(drawPreview);
-  }, [drawPreview]);
 
   const activeLayer =
     layers.find((l) => l.id === activeLayerId) ?? layers[0];
@@ -211,76 +278,6 @@ export function RightSidebar() {
       style={{ width: rightPanelWidth }}
       aria-label="Inspector Sidebar"
     >
-      {/* Preview */}
-      <section className="panel-section">
-        <div className="panel-header">
-          <span>Preview</span>
-          <div className="panel-header-actions">
-            <select
-              className="palette-select"
-              style={{ maxWidth: 82, padding: "1px 4px", fontSize: 10 }}
-              aria-label="Preview Tag Filter"
-              value={activeTagId ?? ""}
-              onChange={(e) => setActiveTagId(e.target.value || null)}
-            >
-              <option value="">All Frames</option>
-              {tags.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className={`toggle-chip ${previewScale === 1 ? "active" : ""}`}
-              style={{ padding: "1px 5px", fontSize: 10 }}
-              onClick={() => setPreviewScale(1)}
-            >
-              1×
-            </button>
-            <button
-              type="button"
-              className={`toggle-chip ${previewScale === 2 ? "active" : ""}`}
-              style={{ padding: "1px 5px", fontSize: 10 }}
-              onClick={() => setPreviewScale(2)}
-            >
-              2×
-            </button>
-            <button
-              type="button"
-              className={`toggle-chip ${previewScale === 4 ? "active" : ""}`}
-              style={{ padding: "1px 5px", fontSize: 10 }}
-              onClick={() => setPreviewScale(4)}
-            >
-              4×
-            </button>
-            <button
-              type="button"
-              className="icon-action-btn"
-              style={{ width: 22, height: 22 }}
-              title={isPlaying ? "Pause Preview" : "Play Preview"}
-              onClick={togglePlaying}
-            >
-              {isPlaying ? <Pause size={12} /> : <Play size={12} />}
-            </button>
-          </div>
-        </div>
-        <div className="panel-body">
-          <div className="preview-stage">
-            <canvas
-              ref={previewCanvasRef}
-              width={canvasWidth}
-              height={canvasHeight}
-              className="preview-canvas"
-              style={{
-                width: canvasWidth * previewScale,
-                height: canvasHeight * previewScale,
-              }}
-            />
-          </div>
-        </div>
-      </section>
-
       {/* Tileset Inspector in Tiles Mode */}
       {workspaceMode === "tiles" && <TilesetPanel />}
 
@@ -290,7 +287,14 @@ export function RightSidebar() {
       {/* Color & Palette */}
       <section className="panel-section">
         <div className="panel-header">
-          <span>Color & Palette</span>
+          <button
+            type="button"
+            className="panel-collapse-btn"
+            onClick={() => setColorOpen((v) => !v)}
+          >
+            {colorOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>Color &amp; Palette</span>
+          </button>
           <span
             className="mono-value"
             style={{ fontSize: 10, color: "var(--text-muted)" }}
@@ -298,7 +302,7 @@ export function RightSidebar() {
             {palette.length} Swatches
           </span>
         </div>
-        <div className="panel-body">
+        {colorOpen && <div className="panel-body">
           <div className="color-top-row">
             <div className="fg-bg-stack">
               <div
@@ -489,16 +493,23 @@ export function RightSidebar() {
               );
             })}
           </div>
-        </div>
+        </div>}
       </section>
 
       {/* Layers */}
       <section
         className="panel-section"
-        style={{ flex: 1, borderBottom: "none" }}
+        style={layersOpen ? { flex: 1, borderBottom: "none" } : undefined}
       >
         <div className="panel-header">
-          <span>Layers</span>
+          <button
+            type="button"
+            className="panel-collapse-btn"
+            onClick={() => setLayersOpen((v) => !v)}
+          >
+            {layersOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>Layers</span>
+          </button>
           <div className="panel-header-actions">
             <button
               type="button"
@@ -571,7 +582,7 @@ export function RightSidebar() {
           </div>
         </div>
 
-        <div className="panel-body">
+        {layersOpen && <div className="panel-body">
           {activeLayer && (
             <div className="layers-controls">
               <select
@@ -797,6 +808,18 @@ export function RightSidebar() {
                     <Grid2x2 size={12} color="var(--accent)" />
                   )}
 
+                  {layer.kind !== "group" && (
+                    <LayerThumbnail
+                      layerId={layer.id}
+                      layerKind={layer.kind}
+                      frameIndex={currentFrame}
+                      canvasWidth={canvasWidth}
+                      canvasHeight={canvasHeight}
+                      tilesetVersion={tilesetVersion}
+                      tileProjection={tileProjection}
+                    />
+                  )}
+
                   {isEditing ? (
                     <input
                       type="text"
@@ -880,7 +903,7 @@ export function RightSidebar() {
               );
             })}
           </div>
-        </div>
+        </div>}
       </section>
     </aside>
   );

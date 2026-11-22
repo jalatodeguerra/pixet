@@ -1,6 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Bone as BoneIcon,
+  ChevronDown,
+  ChevronRight,
   Crosshair,
   Download,
   Eye,
@@ -239,6 +241,8 @@ export function RigPanel() {
     { id: "weightPaint", label: "Paint", icon: Paintbrush },
   ];
 
+  const [collapsed, setCollapsed] = useState(false);
+
   const isKeyed = selectedBone
     ? pixelEngine.rig.hasKeyframe(selectedBone.id, currentFrame)
     : false;
@@ -246,10 +250,15 @@ export function RigPanel() {
   return (
     <section className="panel-section">
       <div className="panel-header">
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <button
+          type="button"
+          className="panel-collapse-btn"
+          onClick={() => setCollapsed((v) => !v)}
+        >
+          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
           <BoneIcon size={12} />
           <span>2D Pixel Rig</span>
-        </div>
+        </button>
         <div className="panel-header-actions">
           <button
             type="button"
@@ -271,7 +280,7 @@ export function RigPanel() {
         </div>
       </div>
 
-      <div className="panel-body">
+      {!collapsed && <div className="panel-body">
         <div className="rig-tool-row">
           {toolButtons.map((tb) => {
             const Icon = tb.icon;
@@ -541,7 +550,7 @@ export function RigPanel() {
             <span>Rig JSON</span>
           </button>
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Minus, Plus } from "lucide-react";
+import { Eye, Minus, Plus } from "lucide-react";
+import { FloatingPreview } from "./FloatingPreview";
 import {
   hexToRgba,
   type RGBA,
@@ -171,6 +172,8 @@ export function Viewport() {
   const rigShowBones = useEditorStore((s) => s.rigShowBones);
   const rigShowInfluence = useEditorStore((s) => s.rigShowInfluence);
   const rigVersion = useEditorStore((s) => s.rigVersion);
+  const showFloatingPreview = useEditorStore((s) => s.showFloatingPreview);
+  const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapGhostRef = useRef<HTMLCanvasElement>(null);
@@ -2134,7 +2137,20 @@ export function Viewport() {
               Center
             </button>
           )}
+          <div className="option-divider" style={{ height: 14, margin: "0 2px" }} />
+          <button
+            type="button"
+            className={`toggle-chip ${showFloatingPreview ? "active" : ""}`}
+            style={{ padding: "1px 5px", fontSize: 10 }}
+            title="Toggle Floating Preview"
+            onClick={toggleFloatingPreview}
+          >
+            <Eye size={11} />
+            <span>Preview</span>
+          </button>
         </div>
+
+        <FloatingPreview />
       </div>
     </section>
   );
