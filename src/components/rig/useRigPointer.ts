@@ -6,6 +6,7 @@ import {
   endRigGesture,
   mutateRig,
 } from "../../engine/rig/rigActions";
+import { detectIkChainForBone } from "../../engine/rig/constraints";
 import {
   getBoneSubtreeIds,
   mirrorBones,
@@ -15,7 +16,9 @@ import {
 import { useEditorStore } from "../../store/editorStore";
 import { plotBresenhamLine } from "../../engine/tools/pixelAlgos";
 import {
+  buildConstraintTargetShapes,
   buildRigBoneShapes,
+  hitTestConstraintTarget,
   hitTestRigGizmo,
   type RigDraftBone,
 } from "./rigGizmo";
@@ -44,7 +47,8 @@ type RigDragKind =
   | "scaleBone"
   | "addBone"
   | "ik"
-  | "weightPaint";
+  | "weightPaint"
+  | "constraintTarget";
 
 interface RigDrag {
   kind: RigDragKind;
@@ -388,8 +392,8 @@ export function useRigPointer({
     if (e.button !== 0) return true;
 
     const tool = state.rigTool;
-    if (tool === "meshEdit" || tool === "pin") {
-      // Behaviour for these tools lands in R3/R6; the rail disables them.
+    if (tool === "meshEdit") {
+      // Behaviour for Mesh Edit lands with mesh UI; the rail disables it.
       return true;
     }
 
@@ -447,6 +451,76 @@ export function useRigPointer({
       null,
       state.selectedBoneIds
     );
+
+    if (
+      tool === "select" ||
+      tool === "translate" ||
+      tool === "ik" ||
+      tool === "pin"
+    ) {
+      const targets = buildConstraintTargetShapes(
+        rig,
+        state.currentFrame,
+        state.rigMode
+      );
+      const targetHit = hitTestConstraintTarget(targets, pt.x, pt.y, zoom);
+      if (targetHit) {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        dragRef.current = {
+          kind: "constraintTarget",
+          boneId: targetHit.id,
+          startX: pt.x,
+          startY: pt.y,
+          jointX: targetHit.x,
+          jointY: targetHit.y,
+          parentWorldDeg: 0,
+          parentScaleX: 1,
+          parentScaleY: 1,
+          origLocalX: targetHit.x,
+          origLocalY: targetHit.y,
+          origScaleX: 1,
+          origScaleY: 1,
+          origLength: 0,
+          startDist: 1,
+          addTipX: pt.x,
+          addTipY: pt.y,
+        };
+        return true;
+      }
+    }
+
+    if (tool === "pin") {
+      const hit = hitTestRigGizmo(shapes, pt.x, pt.y, zoom, false);
+      if (!hit) return true;
+      const bone = rig.bones.find((b) => b.id === hit.boneId);
+      if (!bone) return true;
+      const chain = detectIkChainForBone(rig.bones, bone.id, 3);
+      const transforms = rig.computeWorldTransforms(
+        state.currentFrame,
+        state.rigMode === "setup" ? "rest" : "pose",
+        true
+      );
+      const tipTransform = transforms.get(bone.id);
+      const targetX = tipTransform ? tipTransform.tipX : pt.x;
+      const targetY = tipTransform ? tipTransform.tipY : pt.y;
+      mutateRig("Pin IK constraint", () =>
+        rig.addConstraint({
+          type: "ik",
+          name: `IK ${bone.name}`,
+          enabled: true,
+          mix: 1,
+          boneIds: chain,
+          targetX,
+          targetY,
+          bendSign: 1,
+        })
+      );
+      state.setSelectedBoneId(bone.id);
+      state.setStatusMessage(
+        `Pinned ${chain.length}-bone IK constraint on "${bone.name}"`
+      );
+      return true;
+    }
 
     if (tool === "addBone") {
       if (state.rigMode !== "setup") {
@@ -681,6 +755,27 @@ export function useRigPointer({
         y0: drag.startY,
         x1: tip.x,
         y1: tip.y,
+      });
+      return true;
+    }
+
+    if (drag.kind === "constraintTarget") {
+      ensureGesture(drag, "Move constraint target");
+      const nextX = state.rigPixelSnap ? snapToPixelCenter(pt.x) : pt.x;
+      const nextY = state.rigPixelSnap ? snapToPixelCenter(pt.y) : pt.y;
+      mutateRig("Move constraint target", () => {
+        rig.updateConstraint(drag.boneId, { targetX: nextX, targetY: nextY });
+        if (
+          state.rigMode === "animate" &&
+          rig.getActiveClip().constraintTracks?.[drag.boneId]
+        ) {
+          rig.setConstraintTargetKeyframe(
+            drag.boneId,
+            state.currentFrame,
+            nextX,
+            nextY
+          );
+        }
       });
       return true;
     }

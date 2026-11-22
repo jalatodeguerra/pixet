@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import { useEditorStore } from "../../store/editorStore";
 import {
+  buildConstraintTargetShapes,
   buildRigBoneShapes,
   GIZMO_HANDLE_SIZE_PX,
   GIZMO_RING_RADIUS_PX,
@@ -52,6 +53,12 @@ export function RigOverlay({
     rigVersion,
   ]);
 
+  const constraintTargets = useMemo(() => {
+    void rigVersion;
+    if (workspaceMode !== "rig" || !rigShowBones) return [];
+    return buildConstraintTargetShapes(pixelEngine.rig, currentFrame, rigMode);
+  }, [workspaceMode, rigShowBones, currentFrame, rigMode, rigVersion]);
+
   if (workspaceMode !== "rig" || !rigShowBones) return null;
 
   const safeZoom = Math.max(1, zoom);
@@ -68,7 +75,7 @@ export function RigOverlay({
       {shapes.map((b) => (
         <g key={b.id}>
           <polygon
-            className={`rig-bone-shape ${b.selected ? "selected" : ""} ${b.hovered ? "hovered" : ""} ${b.locked ? "locked" : ""}`}
+            className={`rig-bone-shape ${b.selected ? "selected" : ""} ${b.hovered ? "hovered" : ""} ${b.locked ? "locked" : ""} ${b.ikTinted ? "ik-chain" : ""}`}
             points={b.polygon}
             style={!b.selected && b.color ? { stroke: b.color } : undefined}
           />
@@ -112,6 +119,39 @@ export function RigOverlay({
           />
         </g>
       )}
+
+      {constraintTargets.map((ct) => (
+        <g key={`ct-${ct.id}`}>
+          <line
+            className="rig-constraint-line"
+            x1={ct.anchorX}
+            y1={ct.anchorY}
+            x2={ct.x}
+            y2={ct.y}
+          />
+          <rect
+            className="rig-constraint-target"
+            x={ct.x - handleHalf}
+            y={ct.y - handleHalf}
+            width={handleHalf * 2}
+            height={handleHalf * 2}
+          />
+          <line
+            className="rig-constraint-line"
+            x1={ct.x - handleHalf * 1.3}
+            y1={ct.y}
+            x2={ct.x + handleHalf * 1.3}
+            y2={ct.y}
+          />
+          <line
+            className="rig-constraint-line"
+            x1={ct.x}
+            y1={ct.y - handleHalf * 1.3}
+            x2={ct.x}
+            y2={ct.y + handleHalf * 1.3}
+          />
+        </g>
+      ))}
 
       {draftBone && (
         <line

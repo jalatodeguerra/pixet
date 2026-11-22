@@ -2,6 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  computeAimLocalAngleDeg,
+  detectIkChainForBone,
+  solveFabrik,
+} from "../src/engine/rig/constraints.ts";
+import {
   mirrorBoneName,
   mirrorBones,
   mirrorPose,
@@ -2430,4 +2435,91 @@ test("R2 snapAngleDeg snaps to 22.5-degree increments", () => {
   assert.equal(snapAngleDeg(20), 22.5);
   assert.equal(snapAngleDeg(44), 45);
   assert.equal(snapAngleDeg(-88), -90);
+});
+
+test("R3 solveFabrik reaches reachable 3-bone and 4-bone targets within tolerance", () => {
+  const pts3 = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 20, y: 0 },
+    { x: 30, y: 0 },
+  ];
+  const target3 = { x: 15, y: 12 };
+  const res3 = solveFabrik(pts3, [10, 10, 10], target3, 20, 0.01);
+  const tip3 = res3.points[3];
+  assert.ok(Math.hypot(tip3.x - target3.x, tip3.y - target3.y) <= 0.01);
+  assert.equal(res3.localRotationsDeg.length, 3);
+
+  const pts4 = [
+    { x: 0, y: 0 },
+    { x: 8, y: 0 },
+    { x: 16, y: 0 },
+    { x: 24, y: 0 },
+    { x: 32, y: 0 },
+  ];
+  const target4 = { x: 12, y: -14 };
+  const res4 = solveFabrik(pts4, [8, 8, 8, 8], target4, 20, 0.01);
+  const tip4 = res4.points[4];
+  assert.ok(Math.hypot(tip4.x - target4.x, tip4.y - target4.y) <= 0.01);
+});
+
+test("R3 solveFabrik clamps unreachable targets along a straight line and respects angle limits", () => {
+  const pts = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 20, y: 0 },
+    { x: 30, y: 0 },
+  ];
+  const farTarget = { x: 0, y: 100 };
+  const resFar = solveFabrik(pts, [10, 10, 10], farTarget, 12, 0.01);
+  const tipFar = resFar.points[3];
+  assert.ok(Math.abs(tipFar.x) < 1e-4);
+  assert.ok(Math.abs(tipFar.y - 30) < 1e-4);
+
+  // Angle limits keep each local angle inside [-30, 30].
+  const limits = [
+    { minDeg: -30, maxDeg: 30 },
+    { minDeg: -30, maxDeg: 30 },
+    { minDeg: -30, maxDeg: 30 },
+  ];
+  const resLim = solveFabrik(pts, [10, 10, 10], { x: 10, y: 20 }, 12, 0.01, limits, 0);
+  for (const deg of resLim.localRotationsDeg) {
+    assert.ok(deg >= -30.001 && deg <= 30.001, `angle ${deg} out of limits`);
+  }
+});
+
+test("R3 computeAimLocalAngleDeg and detectIkChainForBone", () => {
+  assert.ok(Math.abs(computeAimLocalAngleDeg(0, 0, 0, 10, 15, 30) - 75) < 1e-4);
+
+  const engine = new PixelEngine(64, 64);
+  const rig = engine.rig;
+  const b1 = rig.addBone({ name: "B1", parentId: null, localX: 10, localY: 10, length: 10, rotationDeg: 0 });
+  const b2 = rig.addBone({ name: "B2", parentId: b1.id, localX: 10, localY: 0, length: 10, rotationDeg: 0 });
+  const b3 = rig.addBone({ name: "B3", parentId: b2.id, localX: 10, localY: 0, length: 10, rotationDeg: 0 });
+  const b4 = rig.addBone({ name: "B4", parentId: b3.id, localX: 10, localY: 0, length: 10, rotationDeg: 0 });
+
+  assert.deepEqual(detectIkChainForBone(rig.bones, b4.id, 3), [b2.id, b3.id, b4.id]);
+
+  // 3-bone IK constraint evaluated through RigState.evaluate reaches target.
+  const c = rig.addConstraint({
+    type: "ik",
+    name: "IK 3-bone",
+    enabled: true,
+    mix: 1,
+    boneIds: [b1.id, b2.id, b3.id],
+    targetX: 25,
+    targetY: 22,
+    bendSign: 1,
+  });
+  const evaluated = rig.evaluate(0);
+  const tip = evaluated.get(b3.id)!;
+  assert.ok(Math.hypot(tip.tipX - 25, tip.tipY - 22) < 0.25);
+
+  // Constraint CRUD + target keyframing.
+  rig.setConstraintTargetKeyframe(c.id, 0, 25, 22);
+  assert.equal(rig.hasConstraintTargetKeyframe(c.id, 0), true);
+  rig.deleteConstraintTargetKeyframe(c.id, 0);
+  assert.equal(rig.hasConstraintTargetKeyframe(c.id, 0), false);
+  rig.removeConstraint(c.id);
+  assert.equal(rig.constraints.length, 0);
 });

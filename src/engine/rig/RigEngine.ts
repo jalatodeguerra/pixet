@@ -1,4 +1,5 @@
 import { PixelBuffer, type RGBA } from "../document/PixelBuffer.ts";
+import { computeAimLocalAngleDeg, solveFabrik } from "./constraints.ts";
 import type { PixelCleanupOptions } from "./pixelCleanup.ts";
 import type { RigMesh, RigMeshKeyframe } from "./mesh.ts";
 import {
@@ -713,6 +714,7 @@ export class RigState {
   meshes: RigMesh[] = [];
   private nextBoneNum = 1;
   private nextMeshNum = 1;
+  private nextConstraintNum = 1;
   private revision = 0;
   private springCache = new Map<string, number[]>();
   private cachedWeights: BoneWeights | null = null;
@@ -739,6 +741,7 @@ export class RigState {
     this.meshes = [];
     this.nextBoneNum = 1;
     this.nextMeshNum = 1;
+    this.nextConstraintNum = 1;
     this.springCache.clear();
     this.cachedWeights = null;
     this.cachedWeightsRevision = -1;
@@ -1462,16 +1465,15 @@ export class RigState {
     const parentDeg = bone.parentId
       ? transforms.get(bone.parentId)?.worldRotationDeg ?? 0
       : 0;
-    const desiredWorldDeg =
-      (Math.atan2(targetY - transform.y, targetX - transform.x) * 180) /
-        Math.PI +
-      offsetDeg;
-    this.blendLocalRotation(
-      locals,
-      boneId,
-      normalizeAngleDeg(desiredWorldDeg - parentDeg),
-      mix
+    const localDeg = computeAimLocalAngleDeg(
+      transform.x,
+      transform.y,
+      targetX,
+      targetY,
+      offsetDeg,
+      parentDeg
     );
+    this.blendLocalRotation(locals, boneId, localDeg, mix);
     return [boneId];
   }
 
@@ -1552,46 +1554,93 @@ export class RigState {
           );
         }
 
-        // R0 fast path: solve the last two bones of the chain. R3 replaces
-        // this with FABRIK for arbitrary chain lengths.
         const childId = chain[chain.length - 1];
         const rootId = chain[chain.length - 2];
         const rootBone = this.findBone(rootId);
         const childBone = this.findBone(childId);
         const rootWorld = transforms.get(rootId);
-        if (!rootBone || !childBone || !rootWorld) return [];
-        if (childBone.parentId !== rootId) {
-          return this.aimBone(
-            childId,
+        if (
+          chain.length === 2 &&
+          rootBone &&
+          childBone &&
+          rootWorld &&
+          childBone.parentId === rootId &&
+          rootBone.minAngleDeg === undefined &&
+          rootBone.maxAngleDeg === undefined &&
+          childBone.minAngleDeg === undefined &&
+          childBone.maxAngleDeg === undefined
+        ) {
+          const grandParentDeg = rootBone.parentId
+            ? transforms.get(rootBone.parentId)?.worldRotationDeg ?? 0
+            : 0;
+          const solved = solveTwoBoneIK(
+            rootWorld.x,
+            rootWorld.y,
+            rootBone.length,
+            childBone.length,
             target.x,
             target.y,
-            0,
-            mix,
-            locals,
-            transforms
+            constraint.bendSign
           );
+          this.blendLocalRotation(
+            locals,
+            rootId,
+            normalizeAngleDeg(solved.rootWorldDeg - grandParentDeg),
+            mix
+          );
+          this.blendLocalRotation(locals, childId, solved.childLocalDeg, mix);
+          return [rootId, childId];
         }
 
-        const grandParentDeg = rootBone.parentId
-          ? transforms.get(rootBone.parentId)?.worldRotationDeg ?? 0
+        // FABRIK N-bone IK (also used for 2-bone chains with angle limits).
+        const chainBones: Bone[] = [];
+        const chainWorldPoints: { x: number; y: number }[] = [];
+        const lengths: number[] = [];
+        const angleLimits: { minDeg?: number; maxDeg?: number }[] = [];
+        for (const id of chain) {
+          const b = this.findBone(id);
+          const t = transforms.get(id);
+          if (!b || !t) continue;
+          chainBones.push(b);
+          chainWorldPoints.push({ x: t.x, y: t.y });
+          lengths.push(Math.max(0.001, b.length * Math.abs(t.worldScaleX || 1)));
+          angleLimits.push({
+            minDeg: b.minAngleDeg,
+            maxDeg: b.maxAngleDeg,
+          });
+        }
+        if (chainBones.length === 0) return [];
+        const tipTransform = transforms.get(
+          chainBones[chainBones.length - 1].id
+        );
+        if (!tipTransform) return [];
+        chainWorldPoints.push({ x: tipTransform.tipX, y: tipTransform.tipY });
+        const rootParentId = chainBones[0].parentId;
+        const parentWorldDeg = rootParentId
+          ? (transforms.get(rootParentId)?.worldRotationDeg ?? 0)
           : 0;
-        const solved = solveTwoBoneIK(
-          rootWorld.x,
-          rootWorld.y,
-          rootBone.length,
-          childBone.length,
-          target.x,
-          target.y,
-          constraint.bendSign
+
+        const solved = solveFabrik(
+          chainWorldPoints,
+          lengths,
+          target,
+          12,
+          0.01,
+          angleLimits,
+          parentWorldDeg
         );
-        this.blendLocalRotation(
-          locals,
-          rootId,
-          normalizeAngleDeg(solved.rootWorldDeg - grandParentDeg),
-          mix
-        );
-        this.blendLocalRotation(locals, childId, solved.childLocalDeg, mix);
-        return [rootId, childId];
+        const affected: string[] = [];
+        for (let i = 0; i < chainBones.length; i++) {
+          const b = chainBones[i];
+          this.blendLocalRotation(
+            locals,
+            b.id,
+            solved.localRotationsDeg[i] ?? 0,
+            mix
+          );
+          affected.push(b.id);
+        }
+        return affected;
       }
 
       case "aim": {
@@ -1696,6 +1745,105 @@ export class RigState {
       constraint.targetX,
       constraint.targetY
     );
+  }
+
+  addConstraint(
+    input: (
+      | Omit<Extract<RigConstraint, { type: "ik" }>, "id">
+      | Omit<Extract<RigConstraint, { type: "aim" }>, "id">
+      | Omit<
+          Extract<RigConstraint, { type: "copyRotation" | "copyTransform" }>,
+          "id"
+        >
+      | Omit<Extract<RigConstraint, { type: "spring" }>, "id">
+    ) & { id?: string }
+  ): RigConstraint {
+    const id = input.id ?? `constraint-${this.nextConstraintNum++}`;
+    const created = cloneConstraint({ ...input, id } as RigConstraint);
+    this.constraints.push(created);
+    this.invalidateEvaluation();
+    return created;
+  }
+
+  updateConstraint(
+    id: string,
+    patch: Record<string, unknown>
+  ): void {
+    const idx = this.constraints.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+    const current = this.constraints[idx];
+    const next = { ...current, ...patch, id: current.id, type: current.type };
+    this.constraints[idx] = cloneConstraint(next as RigConstraint);
+    this.invalidateEvaluation();
+  }
+
+  removeConstraint(id: string): void {
+    this.constraints = this.constraints.filter((c) => c.id !== id);
+    for (const clip of this.clips) {
+      if (clip.constraintTracks) {
+        delete clip.constraintTracks[id];
+      }
+    }
+    this.invalidateEvaluation();
+  }
+
+  moveConstraint(id: string, delta: -1 | 1): void {
+    const idx = this.constraints.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+    const targetIdx = idx + delta;
+    if (targetIdx < 0 || targetIdx >= this.constraints.length) return;
+    const [item] = this.constraints.splice(idx, 1);
+    this.constraints.splice(targetIdx, 0, item);
+    this.invalidateEvaluation();
+  }
+
+  setConstraintTargetKeyframe(
+    constraintId: string,
+    frame: number,
+    x?: number,
+    y?: number,
+    easing: EasingMode = "linear"
+  ): void {
+    const constraint = this.constraints.find((c) => c.id === constraintId);
+    if (!constraint || (constraint.type !== "ik" && constraint.type !== "aim")) {
+      return;
+    }
+    const clip = this.getActiveClip();
+    if (!clip.constraintTracks) clip.constraintTracks = {};
+    const track = clip.constraintTracks[constraintId] ?? [];
+    const current = this.getConstraintTargetAtFrame(constraintId, frame);
+    const kf: ConstraintTargetKeyframe = {
+      frame,
+      targetX: x ?? current?.x ?? constraint.targetX,
+      targetY: y ?? current?.y ?? constraint.targetY,
+      easing,
+    };
+    const existingIdx = track.findIndex((k) => k.frame === frame);
+    if (existingIdx >= 0) track[existingIdx] = kf;
+    else {
+      track.push(kf);
+      track.sort((a, b) => a.frame - b.frame);
+    }
+    clip.constraintTracks[constraintId] = track;
+    this.invalidateEvaluation();
+  }
+
+  deleteConstraintTargetKeyframe(constraintId: string, frame: number): void {
+    const clip = this.getActiveClip();
+    const track = clip.constraintTracks?.[constraintId];
+    if (!track) return;
+    const next = track.filter((k) => k.frame !== frame);
+    if (next.length === 0 && clip.constraintTracks) {
+      delete clip.constraintTracks[constraintId];
+    } else if (clip.constraintTracks) {
+      clip.constraintTracks[constraintId] = next;
+    }
+    this.invalidateEvaluation();
+  }
+
+  hasConstraintTargetKeyframe(constraintId: string, frame: number): boolean {
+    const track = this.getActiveClip().constraintTracks?.[constraintId];
+    return Boolean(track?.some((k) => k.frame === frame));
   }
 
   /**
@@ -2116,6 +2264,15 @@ export class RigState {
             typeof constraint.type === "string"
         )
         .map(cloneConstraint);
+      for (const constraint of this.constraints) {
+        const match = /(\d+)$/.exec(constraint.id);
+        if (match) {
+          this.nextConstraintNum = Math.max(
+            this.nextConstraintNum,
+            Number(match[1]) + 1
+          );
+        }
+      }
     }
 
     if (Array.isArray(raw.slots)) {

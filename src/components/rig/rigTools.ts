@@ -52,7 +52,6 @@ export const RIG_TOOL_DEFS: RigToolDef[] = [
     label: "Pin IK Constraint",
     shortcut: "P",
     icon: Pin,
-    milestone: "R3",
   },
   { id: "weightPaint", label: "Weight Paint", shortcut: "W", icon: Paintbrush },
   {

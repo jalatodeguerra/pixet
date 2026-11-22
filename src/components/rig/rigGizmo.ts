@@ -23,7 +23,19 @@ export interface RigBoneShape {
   hovered: boolean;
   keyed: boolean;
   locked: boolean;
+  ikTinted: boolean;
   color?: string;
+}
+
+export interface RigConstraintTargetShape {
+  id: string;
+  name: string;
+  type: "ik" | "aim";
+  x: number;
+  y: number;
+  anchorX: number;
+  anchorY: number;
+  enabled: boolean;
 }
 
 export type RigGizmoHitKind = "translate" | "rotate" | "scale" | "body";
@@ -60,6 +72,12 @@ export function buildRigBoneShapes(
     true
   );
   const selectedSet = new Set(selectedBoneIds);
+  const ikBoneIds = new Set<string>();
+  for (const constraint of rig.constraints) {
+    if (constraint.type === "ik" && constraint.enabled !== false) {
+      for (const id of constraint.boneIds) ikBoneIds.add(id);
+    }
+  }
   const shapes: RigBoneShape[] = [];
   for (const bone of rig.bones) {
     if (bone.hidden) continue;
@@ -90,6 +108,7 @@ export function buildRigBoneShapes(
       hovered: bone.id === hoveredBoneId,
       keyed: rigMode === "animate" && rig.hasKeyframe(bone.id, frame),
       locked: Boolean(bone.locked),
+      ikTinted: ikBoneIds.has(bone.id),
       color: bone.color,
     });
   }
@@ -163,6 +182,80 @@ export function hitTestRigGizmo(
     );
     if (nearest <= bodyRadius) {
       return { boneId: shape.id, kind: "body" };
+    }
+  }
+  return null;
+}
+
+/**
+ * Builds drawable target handles for enabled IK and Aim constraints.
+ */
+export function buildConstraintTargetShapes(
+  rig: RigState,
+  frame: number,
+  rigMode: RigMode
+): RigConstraintTargetShape[] {
+  const transforms = rig.computeWorldTransforms(
+    frame,
+    rigMode === "setup" ? "rest" : "pose",
+    true
+  );
+  const shapes: RigConstraintTargetShape[] = [];
+  for (const constraint of rig.constraints) {
+    if (constraint.enabled === false) continue;
+    if (constraint.type === "ik") {
+      const tipId = constraint.boneIds[constraint.boneIds.length - 1];
+      const tipTransform = tipId ? transforms.get(tipId) : undefined;
+      if (!tipTransform) continue;
+      const target =
+        rigMode === "animate"
+          ? rig.getConstraintTargetAtFrame(constraint.id, frame)
+          : { x: constraint.targetX, y: constraint.targetY };
+      if (!target) continue;
+      shapes.push({
+        id: constraint.id,
+        name: constraint.name,
+        type: "ik",
+        x: target.x,
+        y: target.y,
+        anchorX: tipTransform.tipX,
+        anchorY: tipTransform.tipY,
+        enabled: true,
+      });
+    } else if (constraint.type === "aim") {
+      const boneTransform = transforms.get(constraint.boneId);
+      if (!boneTransform) continue;
+      const target =
+        rigMode === "animate"
+          ? rig.getConstraintTargetAtFrame(constraint.id, frame)
+          : { x: constraint.targetX, y: constraint.targetY };
+      if (!target) continue;
+      shapes.push({
+        id: constraint.id,
+        name: constraint.name,
+        type: "aim",
+        x: target.x,
+        y: target.y,
+        anchorX: boneTransform.x,
+        anchorY: boneTransform.y,
+        enabled: true,
+      });
+    }
+  }
+  return shapes;
+}
+
+export function hitTestConstraintTarget(
+  targets: readonly RigConstraintTargetShape[],
+  x: number,
+  y: number,
+  zoom: number
+): RigConstraintTargetShape | null {
+  const radius = GIZMO_HANDLE_HIT_PX / Math.max(1, zoom);
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const t = targets[i];
+    if (distance(x, y, t.x, t.y) <= radius) {
+      return t;
     }
   }
   return null;
