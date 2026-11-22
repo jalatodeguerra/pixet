@@ -16,12 +16,20 @@ import {
   X,
 } from "lucide-react";
 import {
+  copySelection,
+  copySelectionToNewLayer,
+  cutSelection,
+  cutSelectionToNewLayer,
+  pasteClipboard,
+} from "../engine/document/selectionActions";
+import {
   addEmptyFrameAction,
   deleteCurrentFrameAction,
   duplicateCurrentFrameAction,
   reorderFrameAction,
   toggleLinkCelAction,
 } from "../engine/document/timelineActions";
+import { pixelEngine } from "../engine/document/PixelEngine";
 import { useEditorStore } from "../store/editorStore";
 
 export function Timeline() {
@@ -30,6 +38,7 @@ export function Timeline() {
   const isPlaying = useEditorStore((s) => s.isPlaying);
   const loopPlayback = useEditorStore((s) => s.loopPlayback);
   const fps = useEditorStore((s) => s.fps);
+  const openContextMenu = useEditorStore((s) => s.openContextMenu);
   const onionSkin = useEditorStore((s) => s.onionSkin);
   const onionPrevFrames = useEditorStore((s) => s.onionPrevFrames);
   const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
@@ -411,6 +420,22 @@ export function Timeline() {
                   className={`frame-head-cell ${active ? "active" : ""} ${isDragOver ? "drag-over" : ""}`}
                   title={`Frame ${frame.index + 1} (${frame.durationMs}ms) · Drag to reorder`}
                   onClick={() => setCurrentFrame(frame.index)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setCurrentFrame(frame.index);
+                    openContextMenu(e.clientX, e.clientY, [
+                      { kind: "item", label: "New Frame", action: () => addEmptyFrameAction() },
+                      { kind: "item", label: "Duplicate Frame", action: () => duplicateCurrentFrameAction() },
+                      { kind: "separator" },
+                      {
+                        kind: "item",
+                        label: "Delete Frame",
+                        disabled: frames.length <= 1,
+                        danger: true,
+                        action: () => deleteCurrentFrameAction(),
+                      },
+                    ]);
+                  }}
                   onDragStart={() => setDragFrameIdx(frame.index)}
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -479,6 +504,35 @@ export function Timeline() {
                       onClick={() => {
                         selectLayer(layer.id);
                         setCurrentFrame(frame.index);
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        selectLayer(layer.id);
+                        setCurrentFrame(frame.index);
+                        const hasClip = Boolean(pixelEngine.clipboard);
+                        openContextMenu(e.clientX, e.clientY, [
+                          { kind: "item", label: "Cut", shortcut: "Ctrl+X", action: () => { cutSelection(); } },
+                          { kind: "item", label: "Copy", shortcut: "Ctrl+C", action: () => { copySelection(); } },
+                          { kind: "item", label: "Paste", shortcut: "Ctrl+V", disabled: !hasClip, action: () => { pasteClipboard(); } },
+                          { kind: "separator" },
+                          { kind: "item", label: "Cut to New Layer", shortcut: "Ctrl+Shift+X", action: () => { cutSelectionToNewLayer(); } },
+                          { kind: "item", label: "Copy to New Layer", shortcut: "Ctrl+J", action: () => { copySelectionToNewLayer(); } },
+                          { kind: "separator" },
+                          {
+                            kind: "item",
+                            label: isLinked ? "Unlink Cel" : "Link Cel to Previous",
+                            disabled: layer.kind === "group" || (!isLinked && frame.index === 0),
+                            action: () => toggleLinkCelAction(layer.id, frame.index),
+                          },
+                          { kind: "item", label: "Duplicate Frame", action: () => duplicateCurrentFrameAction() },
+                          {
+                            kind: "item",
+                            label: "Delete Frame",
+                            disabled: frames.length <= 1,
+                            danger: true,
+                            action: () => deleteCurrentFrameAction(),
+                          },
+                        ]);
                       }}
                     >
                       {layer.kind !== "group" && (
