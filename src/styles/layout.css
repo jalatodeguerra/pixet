@@ -2012,6 +2012,29 @@
 
 .floating-preview-body {
   padding: 8px;
+  cursor: grab;
+}
+
+.floating-preview-body:active {
+  cursor: grabbing;
+}
+
+.floating-preview-drag-handle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  cursor: grab;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+}
+
+.floating-preview-drag-handle:active {
+  cursor: grabbing;
 }
 
 .floating-preview-body .preview-stage {

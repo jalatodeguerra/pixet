@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Pause, Play, X } from "lucide-react";
+import { ChevronDown, ChevronRight, GripVertical, Pause, Play, X } from "lucide-react";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { useEditorStore } from "../store/editorStore";
 
@@ -143,22 +143,30 @@ export function FloatingPreview() {
           ? { left: pos.left, top: pos.top }
           : { right: 12, top: pos.top }
       }
-      onMouseDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        startDrag(e);
+      }}
       onPointerDown={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
       aria-label="Floating Animation Preview"
     >
-      <div className="floating-preview-header" onMouseDown={startDrag}>
+      <div className="floating-preview-header">
         <button
           type="button"
-          className="panel-collapse-btn"
+          className="icon-action-btn"
+          style={{ width: 18, height: 18 }}
           title={collapsed ? "Expand Preview" : "Collapse Preview"}
           onClick={() => setCollapsed((c) => !c)}
         >
           {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-          <span>Preview</span>
         </button>
+
+        <div className="floating-preview-drag-handle" title="Drag to move preview">
+          <GripVertical size={11} />
+          <span>Preview</span>
+        </div>
 
         <div className="panel-header-actions">
           <select
