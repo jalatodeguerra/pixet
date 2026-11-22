@@ -10,6 +10,7 @@ import { RightSidebar } from "./components/RightSidebar";
 import { Rotate3DModal } from "./components/Rotate3DModal";
 import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
+import { ImportTilesetModal } from "./components/tiles/ImportTilesetModal";
 import { ToolOptionsBar } from "./components/ToolOptionsBar";
 import { ToolRail } from "./components/ToolRail";
 import { TopBar } from "./components/TopBar";
@@ -582,6 +583,7 @@ export function App() {
       <ImportImageModal />
       <NewSpriteModal />
       <CanvasSizeModal />
+      <ImportTilesetModal />
       <ContextMenu />
       {isDragOver && (
         <div className="dropzone-overlay">

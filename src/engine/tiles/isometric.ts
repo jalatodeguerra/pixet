@@ -190,7 +190,8 @@ export function renderIsometricTilemapToBuffer(
   dstW: number,
   dstH: number,
   opacity: number,
-  blendMode: BlendModeName
+  blendMode: BlendModeName,
+  elapsedMs?: number
 ): void {
   const baseTs =
     tilesetOrRegistry instanceof TilesetRegistry
@@ -205,7 +206,7 @@ export function renderIsometricTilemapToBuffer(
     for (let col = 0; col < tilemap.cols; col++) {
       const cell = tilemap.getCell(col, row);
       if (cell === 0) continue;
-      const resolved = resolveTileFromSource(tilesetOrRegistry, cell);
+      const resolved = resolveTileFromSource(tilesetOrRegistry, cell, elapsedMs);
       if (!resolved) continue;
 
       const center = isoToScreen(col, row, tileW, isoTileH, originX, originY);

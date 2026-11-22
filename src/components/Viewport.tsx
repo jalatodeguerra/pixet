@@ -54,6 +54,7 @@ import {
 } from "../store/editorStore";
 import { RigOverlay } from "./rig/RigOverlay";
 import { useRigPointer } from "./rig/useRigPointer";
+import { TileEditViewport } from "./tiles/TileEditViewport";
 import { TileOverlay } from "./tiles/TileOverlay";
 import { useTilePointer } from "./tiles/useTilePointer";
 import { PALETTE_PRESETS } from "../utils/paletteParser";
@@ -165,6 +166,7 @@ export function Viewport() {
   const layers = useEditorStore((s) => s.layers);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const tilesMode = useEditorStore((s) => s.tilesMode);
+  const animateTilesPreview = useEditorStore((s) => s.animateTilesPreview);
   const seamlessWrap = useEditorStore((s) => s.seamlessWrap);
   const showTileGrid = useEditorStore((s) => s.showTileGrid);
   const showIsoGrid = useEditorStore((s) => s.showIsoGrid);
@@ -592,6 +594,21 @@ export function Viewport() {
     onHoverPixels: (px, py) => updateHoverOverlay(px, py),
   });
   const tilePointer = useTilePointer({ getPixelCoords });
+
+  useEffect(() => {
+    if (!animateTilesPreview) {
+      pixelEngine.tileAnimationElapsedMs = undefined;
+      pixelEngine.emitChange();
+      return;
+    }
+    const start = performance.now();
+    const id = window.setInterval(() => {
+      if (!pixelEngine.hasAnimatedTiles()) return;
+      pixelEngine.tileAnimationElapsedMs = performance.now() - start;
+      pixelEngine.emitChange();
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [animateTilesPreview]);
 
   const sampleColorAt = (px: number, py: number, isSecondary: boolean) => {
     const state = useEditorStore.getState();
@@ -1841,13 +1858,16 @@ export function Viewport() {
       <div
         className={`viewport-stage ${workspaceMode === "rig" ? `rig-mode-${rigMode}` : workspaceMode === "tiles" ? `tiles-mode-${tilesMode}` : ""}`}
         style={{ cursor: spacePressed ? "grab" : undefined }}
-        onWheel={handleWheel}
+        onWheel={workspaceMode === "tiles" && tilesMode === "tile" ? undefined : handleWheel}
         onContextMenu={handleCanvasContextMenu}
-        onMouseDown={handleStageMouseDown}
-        onMouseMove={handleStageMouseMove}
-        onMouseUp={handleStageMouseUp}
-        onMouseLeave={handleStageMouseUp}
+        onMouseDown={workspaceMode === "tiles" && tilesMode === "tile" ? undefined : handleStageMouseDown}
+        onMouseMove={workspaceMode === "tiles" && tilesMode === "tile" ? undefined : handleStageMouseMove}
+        onMouseUp={workspaceMode === "tiles" && tilesMode === "tile" ? undefined : handleStageMouseUp}
+        onMouseLeave={workspaceMode === "tiles" && tilesMode === "tile" ? undefined : handleStageMouseUp}
       >
+        {workspaceMode === "tiles" && tilesMode === "tile" ? (
+          <TileEditViewport />
+        ) : (
         <div
           className="viewport-canvas-frame"
           style={{
@@ -1991,6 +2011,7 @@ export function Viewport() {
           {symmetryX && <div className="viewport-symmetry-x" />}
           {symmetryY && <div className="viewport-symmetry-y" />}
         </div>
+        )}
 
         <div className="viewport-overlay-pill">
           <button

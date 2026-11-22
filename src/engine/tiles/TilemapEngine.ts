@@ -6,6 +6,7 @@ import {
   unpackCell,
 } from "./cell.ts";
 import { Tileset, TilesetRegistry } from "./Tileset.ts";
+import { resolveAnimatedTileId } from "./tileAuthoring.ts";
 
 export * from "./cell.ts";
 export * from "./Tileset.ts";
@@ -260,21 +261,34 @@ export class TilemapData {
 
 export function resolveTileFromSource(
   tilesetOrRegistry: Tileset | TilesetRegistry,
-  cell: number
+  cell: number,
+  elapsedMs?: number
 ): { buf: PixelBuffer; flags: CellFlags; tileWidth: number; tileHeight: number } | null {
   if (tilesetOrRegistry instanceof TilesetRegistry) {
-    const resolved = tilesetOrRegistry.resolve(cell);
-    if (!resolved) return null;
+    const u = unpackCell(cell);
+    if (u.localId === 0) return null;
+    const ts = tilesetOrRegistry.get(u.tilesetIndex);
+    if (!ts) return null;
+    const effectiveId =
+      elapsedMs !== undefined
+        ? resolveAnimatedTileId(ts, u.localId, elapsedMs)
+        : u.localId;
+    const buf = ts.getTile(effectiveId);
+    if (!buf) return null;
     return {
-      buf: resolved.buf,
-      flags: resolved.flags,
-      tileWidth: resolved.tileset.tileWidth,
-      tileHeight: resolved.tileset.tileHeight,
+      buf,
+      flags: { flipH: u.flipH, flipV: u.flipV, flipD: u.flipD },
+      tileWidth: ts.tileWidth,
+      tileHeight: ts.tileHeight,
     };
   }
   const u = unpackCell(cell);
   if (u.localId === 0 || u.tilesetIndex !== 0) return null;
-  const buf = tilesetOrRegistry.getTile(u.localId);
+  const effectiveId =
+    elapsedMs !== undefined
+      ? resolveAnimatedTileId(tilesetOrRegistry, u.localId, elapsedMs)
+      : u.localId;
+  const buf = tilesetOrRegistry.getTile(effectiveId);
   if (!buf) return null;
   return {
     buf,
@@ -291,7 +305,8 @@ export function renderTilemapToBuffer(
   dstW: number,
   dstH: number,
   opacity: number,
-  blendMode: BlendModeName
+  blendMode: BlendModeName,
+  elapsedMs?: number
 ): void {
   const baseTs =
     tilesetOrRegistry instanceof TilesetRegistry
@@ -304,7 +319,7 @@ export function renderTilemapToBuffer(
     for (let col = 0; col < tilemap.cols; col++) {
       const cell = tilemap.getCell(col, row);
       if (cell === 0) continue;
-      const resolved = resolveTileFromSource(tilesetOrRegistry, cell);
+      const resolved = resolveTileFromSource(tilesetOrRegistry, cell, elapsedMs);
       if (!resolved) continue;
       blitTileTransformed(
         dst,

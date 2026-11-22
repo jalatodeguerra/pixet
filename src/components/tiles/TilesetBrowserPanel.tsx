@@ -8,7 +8,9 @@ import {
   PanelBottom,
   PanelRight,
   Plus,
+  Scissors,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { syncHistoryAndCelState } from "../../engine/document/historyActions";
 import { pixelEngine } from "../../engine/document/PixelEngine";
@@ -17,6 +19,11 @@ import {
   createEmptyPeering,
   getActivePeeringIndices,
 } from "../../engine/tiles/terrain";
+import {
+  computeUsageOrder,
+  findUnusedTiles,
+  sliceLayerToTilemap,
+} from "../../engine/tiles/tileAuthoring";
 import { Tileset } from "../../engine/tiles/Tileset";
 import { useEditorStore } from "../../store/editorStore";
 
@@ -95,6 +102,11 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
   const terrainEditMode = useEditorStore((s) => s.terrainEditMode);
   const activeTerrainSetId = useEditorStore((s) => s.activeTerrainSetId);
   const activeTerrainId = useEditorStore((s) => s.activeTerrainId);
+  const tileSearchQuery = useEditorStore((s) => s.tileSearchQuery);
+  const setTileSearchQuery = useEditorStore((s) => s.setTileSearchQuery);
+  const setTileImportModalOpen = useEditorStore((s) => s.setTileImportModalOpen);
+  const activeLayerId = useEditorStore((s) => s.activeLayerId);
+  const currentFrame = useEditorStore((s) => s.currentFrame);
 
   const [collapsed, setCollapsed] = useState(false);
   const [draggedTileId, setDraggedTileId] = useState<number | null>(null);
@@ -170,19 +182,79 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
     }
   };
 
-  const handleResizeTileset = (size: number) => {
+  const handleResizeTileset = (newW: number, newH: number) => {
+    const w = Math.max(4, Math.min(64, Math.round(newW)));
+    const h = Math.max(4, Math.min(64, Math.round(newH)));
     pixelEngine.recordTilesetOp("Resize Tileset", () => {
       if (safeTsIndex === 0) {
-        pixelEngine.resizeTileset(size, size);
+        pixelEngine.resizeTileset(w, h);
       } else {
-        ts.resizeTiles(size, size);
+        ts.resizeTiles(w, h);
       }
     });
     if (safeTsIndex === 0) {
-      setTileSize(size, size);
+      setTileSize(w, h);
     }
     bumpTilesetVersion();
     syncHistoryAndCelState();
+  };
+
+  const handleSliceActiveLayer = () => {
+    const cel = pixelEngine.getCel(activeLayerId, currentFrame);
+    if (!cel) {
+      setStatusMessage("Select a populated raster layer to slice into tiles");
+      return;
+    }
+    const nextIdx = pixelEngine.tilesetRegistry.tilesets.length;
+    const sliced = sliceLayerToTilemap(
+      cel,
+      { tileWidth: tileW, tileHeight: tileH, dedupe: true, dedupeFlips: true },
+      nextIdx,
+      `tileset-${Date.now().toString(36)}`,
+      `Sliced ${tileW}×${tileH}`
+    );
+    if (sliced.uniqueTiles === 0) {
+      setStatusMessage("Active layer is empty");
+      return;
+    }
+    pixelEngine.recordTilesetOp("Slice Layer to Tileset", () => {
+      pixelEngine.tilesetRegistry.add(sliced.tileset);
+    });
+    addTilemapLayer();
+    const newLayerId = useEditorStore.getState().activeLayerId;
+    pixelEngine.tilemaps.set(`${newLayerId}:${currentFrame}`, sliced.tilemap);
+    setActiveTilesetIndex(nextIdx);
+    setActiveTileId(1);
+    bumpTilesetVersion();
+    syncHistoryAndCelState(newLayerId, currentFrame);
+    pixelEngine.emitChange();
+    setStatusMessage(
+      `${sliced.uniqueTiles} unique tiles from ${sliced.totalCells} cells`
+    );
+  };
+
+  const handleDedupeTiles = () => {
+    const merged = pixelEngine.recordTilesetOp("Dedupe Tiles", () =>
+      pixelEngine.mergeDuplicateTilesInTileset(safeTsIndex)
+    );
+    bumpTilesetVersion();
+    syncHistoryAndCelState();
+    setStatusMessage(
+      merged > 0 ? `Merged ${merged} duplicate tiles` : "No duplicate tiles"
+    );
+  };
+
+  const handleSortByUsage = () => {
+    const order = computeUsageOrder(ts, safeTsIndex, pixelEngine.tilemaps.values());
+    const ok = pixelEngine.recordTilesetOp("Sort Tiles by Usage", () =>
+      pixelEngine.reorderTilesInTileset(order, safeTsIndex)
+    );
+    if (ok) {
+      setActiveTileId(1);
+      bumpTilesetVersion();
+      syncHistoryAndCelState();
+      setStatusMessage("Sorted tiles by map usage");
+    }
   };
 
   const handleSwatchClick = (id: number, shiftKey: boolean) => {
@@ -300,6 +372,22 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
     syncHistoryAndCelState();
   };
 
+  const unusedCount = findUnusedTiles(
+    ts,
+    safeTsIndex,
+    pixelEngine.tilemaps.values()
+  ).length;
+
+  const query = tileSearchQuery.trim().toLowerCase();
+  const visibleTileIds = query
+    ? tileIds.filter((id) => {
+        if (String(id) === query) return true;
+        const m = ts.getMeta(id);
+        if (m?.name?.toLowerCase().includes(query)) return true;
+        return m?.tags?.some((t) => t.toLowerCase().includes(query)) ?? false;
+      })
+    : tileIds;
+
   return (
     <section className="panel-section">
       <div className="panel-header">
@@ -314,14 +402,21 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
         <div className="panel-header-actions">
           <select
             className="palette-select"
-            style={{ width: 56, padding: "1px 4px", fontSize: 10 }}
-            aria-label="Tile Size"
-            value={tileW}
-            onChange={(e) => handleResizeTileset(Number(e.target.value))}
+            style={{ width: 62, padding: "1px 4px", fontSize: 10 }}
+            aria-label="Tile Size Preset"
+            value={`${tileW}x${tileH}`}
+            onChange={(e) => {
+              const [w, h] = e.target.value.split("x").map(Number);
+              if (w && h) handleResizeTileset(w, h);
+            }}
           >
-            <option value={8}>8×8</option>
-            <option value={16}>16×16</option>
-            <option value={32}>32×32</option>
+            <option value="8x8">8×8</option>
+            <option value="16x16">16×16</option>
+            <option value="16x24">16×24</option>
+            <option value="32x32">32×32</option>
+            {!["8x8", "16x16", "16x24", "32x32"].includes(`${tileW}x${tileH}`) && (
+              <option value={`${tileW}x${tileH}`}>{tileW}×{tileH}</option>
+            )}
           </select>
           <button
             type="button"
@@ -424,6 +519,59 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
             </button>
           </div>
 
+          <div className="tiles-search-row">
+            <input
+              type="text"
+              className="tiles-text-input"
+              placeholder="Filter name / tag / #id..."
+              value={tileSearchQuery}
+              onChange={(e) => setTileSearchQuery(e.target.value)}
+            />
+            <button
+              type="button"
+              className="mini-btn"
+              style={{ fontSize: 10 }}
+              title="Import Tileset PNG"
+              onClick={() => setTileImportModalOpen(true)}
+            >
+              <Upload size={10} />
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              style={{ fontSize: 10 }}
+              title="Slice Active Raster Layer into Tileset + Tilemap"
+              onClick={handleSliceActiveLayer}
+            >
+              <Scissors size={10} />
+            </button>
+          </div>
+
+          <div className="tileset-controls-row" style={{ marginBottom: 6 }}>
+            <button
+              type="button"
+              className="mini-btn"
+              style={{ fontSize: 10 }}
+              onClick={handleDedupeTiles}
+            >
+              Dedupe
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              style={{ fontSize: 10 }}
+              onClick={handleSortByUsage}
+            >
+              Sort Used
+            </button>
+            <span
+              className="mono-value"
+              style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-muted)" }}
+            >
+              Unused: {unusedCount}
+            </span>
+          </div>
+
           <div
             ref={gridRef}
             tabIndex={0}
@@ -452,7 +600,7 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
               <Eraser size={14} color="var(--text-muted)" />
             </button>
 
-            {tileIds.map((id) => {
+            {visibleTileIds.map((id) => {
               const isSelected =
                 activeTileId === id || brushSelectedIds.has(id);
               return (

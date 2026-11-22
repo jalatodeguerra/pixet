@@ -62,6 +62,17 @@ import {
   resolveTerrainTile,
   type TerrainSet,
 } from "../src/engine/tiles/terrain.ts";
+import {
+  computeUsageOrder,
+  findDuplicateTiles,
+  findUnusedTiles,
+  getVariantTileIds,
+  mergeDuplicateTiles,
+  resolveAnimatedTileId,
+  setTileVariantOf,
+  sliceImageToTiles,
+  sliceLayerToTilemap,
+} from "../src/engine/tiles/tileAuthoring.ts";
 
 test("cell pack/unpack, flip, and rotate dihedral identities", () => {
   assert.equal(packCell(0, 0), 0);
@@ -573,4 +584,87 @@ test("terrain v2 blob47 generator, solver, multi-terrain transitions, remap, and
   assert.equal(autoChanges[0].col, 1);
   assert.equal(autoChanges[0].row, 1);
   assert.equal(autoChanges[0].after, packCell(0, 3));
+});
+
+test("tileAuthoring slicing, dedupeFlips, animated tiles, variants, and housekeeping", () => {
+  // 1. sliceImageToTiles with margin=1, spacing=1, 4x4 tiles in a 11x6 image -> 2x1 cells
+  const img = new PixelBuffer(11, 6);
+  // Cell (0,0) at (1,1): red pixel at (0,0)
+  img.setPixel(1, 1, 255, 0, 0, 255);
+  // Cell (1,0) at (6,1): identical red pixel -> deduped
+  img.setPixel(6, 1, 255, 0, 0, 255);
+  const sliced = sliceImageToTiles(img, {
+    tileWidth: 4,
+    tileHeight: 4,
+    margin: 1,
+    spacing: 1,
+    skipEmpty: true,
+    dedupe: true,
+  });
+  assert.equal(sliced.totalCells, 2);
+  assert.equal(sliced.uniqueTiles, 1);
+
+  // 2. sliceLayerToTilemap with dedupeFlips: true
+  const layerBuf = new PixelBuffer(8, 4);
+  // Left 4x4 tile: pixel at (0,0)
+  layerBuf.setPixel(0, 0, 10, 20, 30, 255);
+  // Right 4x4 tile: horizontal mirror -> pixel at (7,0) = local (3,0)
+  layerBuf.setPixel(7, 0, 10, 20, 30, 255);
+  const layerSlice = sliceLayerToTilemap(layerBuf, {
+    tileWidth: 4,
+    tileHeight: 4,
+    dedupe: true,
+    dedupeFlips: true,
+  });
+  assert.equal(layerSlice.uniqueTiles, 1);
+  assert.equal(unpackCell(layerSlice.tilemap.getCell(0, 0)).localId, 1);
+  assert.equal(unpackCell(layerSlice.tilemap.getCell(1, 0)).localId, 1);
+  assert.equal(unpackCell(layerSlice.tilemap.getCell(1, 0)).flipH, true);
+
+  // 3. resolveAnimatedTileId across timestamps
+  const animTs = new Tileset("anim", "Anim", 4, 4);
+  animTs.addTile();
+  animTs.addTile();
+  animTs.setMeta(1, {
+    animation: {
+      frames: [
+        { localId: 1, durationMs: 100 },
+        { localId: 2, durationMs: 200 },
+      ],
+    },
+  });
+  assert.equal(resolveAnimatedTileId(animTs, 1, 50), 1);
+  assert.equal(resolveAnimatedTileId(animTs, 1, 150), 2);
+  assert.equal(resolveAnimatedTileId(animTs, 1, 350), 1); // wraps modulo 300ms
+
+  // 4. Variants
+  animTs.addTile();
+  setTileVariantOf(animTs, 3, 1);
+  assert.deepEqual(getVariantTileIds(animTs, 1), [1, 3]);
+
+  // 5. Housekeeping: unused, duplicates, mergeDuplicateTiles, computeUsageOrder
+  const dupTs = new Tileset("dup", "Dup", 4, 4);
+  const t1 = dupTs.addTile();
+  const t2 = dupTs.addTile();
+  const t3 = dupTs.addTile();
+  dupTs.getTile(t1)!.setPixel(0, 0, 50, 60, 70, 255);
+  dupTs.getTile(t2)!.setPixel(0, 0, 50, 60, 70, 255); // duplicate of t1
+  dupTs.getTile(t3)!.setPixel(1, 1, 90, 90, 90, 255);
+
+  const tm = new TilemapData(3, 1);
+  tm.setCell(0, 0, packCell(0, t2));
+  tm.setCell(1, 0, packCell(0, t3));
+  tm.setCell(2, 0, packCell(0, t3));
+
+  assert.deepEqual(findUnusedTiles(dupTs, 0, [tm]), [t1]);
+  assert.deepEqual(computeUsageOrder(dupTs, 0, [tm]), [t3, t2, t1]);
+  assert.equal(findDuplicateTiles(dupTs).length, 1);
+
+  const { remap, mergedCount } = mergeDuplicateTiles(dupTs);
+  assert.equal(mergedCount, 1);
+  assert.equal(dupTs.count, 2);
+  tm.remapTileIds(0, remap);
+  // t2 merged into t1 -> new id 1; t3 shifted to new id 2
+  assert.equal(tm.getCell(0, 0), packCell(0, 1));
+  assert.equal(tm.getCell(1, 0), packCell(0, 2));
 });

@@ -166,6 +166,10 @@ interface EditorState {
   activeTerrainSetId: string | null;
   activeTerrainId: string | null;
   terrainEditMode: boolean;
+  tileEditWrapPreview: boolean;
+  animateTilesPreview: boolean;
+  tileSearchQuery: string;
+  tileImportModalOpen: boolean;
   zoom: number;
   cursorPos: CursorPoint | null;
   canUndo: boolean;
@@ -299,6 +303,10 @@ interface EditorState {
   setActiveTerrainId: (id: string | null) => void;
   toggleTerrainEditMode: () => void;
   setTerrainEditMode: (v: boolean) => void;
+  toggleTileEditWrapPreview: () => void;
+  toggleAnimateTilesPreview: () => void;
+  setTileSearchQuery: (q: string) => void;
+  setTileImportModalOpen: (open: boolean) => void;
   toggleAutoTile: () => void;
   setAutoTileEnabled: (enabled: boolean) => void;
   setAutoTileMode: (mode: AutoTileMode) => void;
@@ -500,6 +508,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeTerrainSetId: null,
   activeTerrainId: null,
   terrainEditMode: false,
+  tileEditWrapPreview: true,
+  animateTilesPreview: true,
+  tileSearchQuery: "",
+  tileImportModalOpen: false,
   zoom: 12,
   cursorPos: null,
   canUndo: false,
@@ -676,6 +688,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleTerrainEditMode: () =>
     set((s) => ({ terrainEditMode: !s.terrainEditMode })),
   setTerrainEditMode: (terrainEditMode) => set({ terrainEditMode }),
+  toggleTileEditWrapPreview: () =>
+    set((s) => ({ tileEditWrapPreview: !s.tileEditWrapPreview })),
+  toggleAnimateTilesPreview: () =>
+    set((s) => ({ animateTilesPreview: !s.animateTilesPreview })),
+  setTileSearchQuery: (tileSearchQuery) => set({ tileSearchQuery }),
+  setTileImportModalOpen: (tileImportModalOpen) => set({ tileImportModalOpen }),
   toggleAutoTile: () => set((s) => ({ autoTileEnabled: !s.autoTileEnabled })),
   setAutoTileEnabled: (autoTileEnabled) => set({ autoTileEnabled }),
   setAutoTileMode: (autoTileMode) => set({ autoTileMode }),

@@ -16,6 +16,7 @@ import {
   remapTerrainSets,
   type TerrainSet,
 } from "../tiles/terrain.ts";
+import { mergeDuplicateTiles } from "../tiles/tileAuthoring.ts";
 import {
   captureTilemapHistorySnapshot,
   TilemapHistory,
@@ -148,6 +149,7 @@ export class PixelEngine {
   terrainSets: TerrainSet[] = [];
   autoMapRules: AutoMapRule[] = [];
   tileProjection: "orthogonal" | "isometric" = "orthogonal";
+  tileAnimationElapsedMs: number | undefined = undefined;
 
   private listeners = new Set<() => void>();
   /** R6 deformed-layer cache keyed by (frame, rig revision, cel revision, ...). */
@@ -517,6 +519,35 @@ export class PixelEngine {
     return set;
   }
 
+  hasAnimatedTiles(): boolean {
+    for (const ts of this.tilesetRegistry.tilesets) {
+      for (let i = 1; i < ts.meta.length; i++) {
+        if ((ts.meta[i]?.animation?.frames.length ?? 0) > 1) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  mergeDuplicateTilesInTileset(tilesetIndex = 0): number {
+    const ts = this.tilesetRegistry.get(tilesetIndex);
+    if (!ts) return 0;
+    const { remap, mergedCount } = mergeDuplicateTiles(ts);
+    if (mergedCount === 0) return 0;
+    for (const tm of this.tilemaps.values()) {
+      tm.remapTileIds(tilesetIndex, remap);
+    }
+    if (tilesetIndex === 0 && this.autoTileRuleset) {
+      if (!remapAutoTileRuleset(this.autoTileRuleset, remap)) {
+        this.autoTileRuleset = null;
+      }
+    }
+    remapTerrainSets(this.terrainSets, tilesetIndex, remap);
+    this.emitChange();
+    return mergedCount;
+  }
+
   paintAutoTileAtCell(
     layerId: string,
     frameIndex: number,
@@ -746,7 +777,8 @@ export class PixelEngine {
               this.width,
               this.height,
               effective.opacity,
-              layer.blendMode
+              layer.blendMode,
+              this.tileAnimationElapsedMs
             );
           } else {
             renderTilemapToBuffer(
@@ -756,7 +788,8 @@ export class PixelEngine {
               this.width,
               this.height,
               effective.opacity,
-              layer.blendMode
+              layer.blendMode,
+              this.tileAnimationElapsedMs
             );
           }
         }
@@ -868,7 +901,8 @@ export class PixelEngine {
               this.width,
               this.height,
               effective.opacity,
-              layer.blendMode
+              layer.blendMode,
+              this.tileAnimationElapsedMs
             );
           } else {
             renderTilemapToBuffer(
@@ -878,7 +912,8 @@ export class PixelEngine {
               this.width,
               this.height,
               effective.opacity,
-              layer.blendMode
+              layer.blendMode,
+              this.tileAnimationElapsedMs
             );
           }
         }
