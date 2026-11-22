@@ -20,9 +20,11 @@ import {
 } from "../engine/document/selectionActions";
 import { useEditorStore } from "../store/editorStore";
 import { RigToolOptionsBar } from "./rig/RigToolOptionsBar";
+import { TileToolOptionsBar } from "./tiles/TileToolOptionsBar";
 
 export function ToolOptionsBar() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const tilesMode = useEditorStore((s) => s.tilesMode);
   const activeTool = useEditorStore((s) => s.activeTool);
   const brushSize = useEditorStore((s) => s.brushSize);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
@@ -67,6 +69,10 @@ export function ToolOptionsBar() {
 
   if (workspaceMode === "rig") {
     return <RigToolOptionsBar />;
+  }
+
+  if (workspaceMode === "tiles" && tilesMode === "map") {
+    return <TileToolOptionsBar />;
   }
 
   return (

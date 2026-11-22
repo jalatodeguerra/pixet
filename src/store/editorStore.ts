@@ -149,6 +149,20 @@ interface EditorState {
   tilesetBrowserDocked: boolean;
   hoveredTileCell: { col: number; row: number } | null;
   tileBrush: TileBrushSelection | null;
+  tileBrushAnchor: "topLeft" | "center";
+  tileEraserSize: number;
+  tileFillContiguous: boolean;
+  tileRandomSeed: number;
+  tileSelection: string[];
+  tileClipboard: TileBrushSelection | null;
+  tilePreviewChanges: Array<{ col: number; row: number; cell: number }>;
+  tileMarqueeRect: {
+    c0: number;
+    r0: number;
+    c1: number;
+    r1: number;
+    kind: "select" | "pick";
+  } | null;
   zoom: number;
   cursorPos: CursorPoint | null;
   canUndo: boolean;
@@ -259,6 +273,24 @@ interface EditorState {
   toggleTilesetBrowserDocked: () => void;
   setHoveredTileCell: (cell: { col: number; row: number } | null) => void;
   setTileBrush: (brush: TileBrushSelection | null) => void;
+  setTileBrushAnchor: (anchor: "topLeft" | "center") => void;
+  setTileEraserSize: (size: number) => void;
+  toggleTileFillContiguous: () => void;
+  setTileRandomSeed: (seed: number) => void;
+  setTileSelection: (cells: string[]) => void;
+  setTileClipboard: (clip: TileBrushSelection | null) => void;
+  setTilePreviewChanges: (
+    changes: Array<{ col: number; row: number; cell: number }>
+  ) => void;
+  setTileMarqueeRect: (
+    rect: {
+      c0: number;
+      r0: number;
+      c1: number;
+      r1: number;
+      kind: "select" | "pick";
+    } | null
+  ) => void;
   toggleAutoTile: () => void;
   setAutoTileEnabled: (enabled: boolean) => void;
   setAutoTileMode: (mode: AutoTileMode) => void;
@@ -448,6 +480,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   tilesetBrowserDocked: false,
   hoveredTileCell: null,
   tileBrush: null,
+  tileBrushAnchor: "topLeft",
+  tileEraserSize: 1,
+  tileFillContiguous: true,
+  tileRandomSeed: 1337,
+  tileSelection: [],
+  tileClipboard: null,
+  tilePreviewChanges: [],
+  tileMarqueeRect: null,
   zoom: 12,
   cursorPos: null,
   canUndo: false,
@@ -608,6 +648,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((s) => ({ tilesetBrowserDocked: !s.tilesetBrowserDocked })),
   setHoveredTileCell: (hoveredTileCell) => set({ hoveredTileCell }),
   setTileBrush: (tileBrush) => set({ tileBrush }),
+  setTileBrushAnchor: (tileBrushAnchor) => set({ tileBrushAnchor }),
+  setTileEraserSize: (size) =>
+    set({ tileEraserSize: Math.max(1, Math.min(8, Math.round(size))) }),
+  toggleTileFillContiguous: () =>
+    set((s) => ({ tileFillContiguous: !s.tileFillContiguous })),
+  setTileRandomSeed: (tileRandomSeed) => set({ tileRandomSeed }),
+  setTileSelection: (tileSelection) => set({ tileSelection }),
+  setTileClipboard: (tileClipboard) => set({ tileClipboard }),
+  setTilePreviewChanges: (tilePreviewChanges) => set({ tilePreviewChanges }),
+  setTileMarqueeRect: (tileMarqueeRect) => set({ tileMarqueeRect }),
   toggleAutoTile: () => set((s) => ({ autoTileEnabled: !s.autoTileEnabled })),
   setAutoTileEnabled: (autoTileEnabled) => set({ autoTileEnabled }),
   setAutoTileMode: (autoTileMode) => set({ autoTileMode }),

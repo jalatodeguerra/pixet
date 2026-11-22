@@ -42,8 +42,17 @@ import {
   rigToolDisabledReason,
 } from "./components/rig/rigTools";
 import { TilesetBrowserPanel } from "./components/tiles/TilesetBrowserPanel";
+import {
+  copyTileSelectionToClipboard,
+  deleteTileSelectionCells,
+} from "./components/tiles/TileToolOptionsBar";
 import { TILE_TOOL_SHORTCUTS } from "./components/tiles/tileTools";
 import { packCell, rotateCellCW, unpackCell } from "./engine/tiles/cell";
+import {
+  flipBrushH,
+  flipBrushV,
+  rotateBrushCW,
+} from "./engine/tiles/mapTools";
 
 const TOOL_SHORTCUTS: Record<string, ToolId> = {
   b: "pencil",
@@ -145,12 +154,20 @@ export function App() {
         }
         if (ctrlKey === "c") {
           e.preventDefault();
-          copySelection();
+          const st = useEditorStore.getState();
+          if (st.workspaceMode === "tiles" && st.tilesMode === "map") {
+            copyTileSelectionToClipboard(false);
+          } else {
+            copySelection();
+          }
           return;
         }
         if (ctrlKey === "x") {
           e.preventDefault();
-          if (e.shiftKey) {
+          const st = useEditorStore.getState();
+          if (st.workspaceMode === "tiles" && st.tilesMode === "map") {
+            copyTileSelectionToClipboard(true);
+          } else if (e.shiftKey) {
             cutSelectionToNewLayer();
           } else {
             cutSelection();
@@ -164,7 +181,18 @@ export function App() {
         }
         if (ctrlKey === "v") {
           e.preventDefault();
-          pasteClipboard();
+          const st = useEditorStore.getState();
+          if (st.workspaceMode === "tiles" && st.tilesMode === "map") {
+            if (st.tileClipboard) {
+              st.setTileBrush(st.tileClipboard);
+              st.setTileTool("stamp");
+              st.setStatusMessage(
+                `Pasted ${st.tileClipboard.cols}×${st.tileClipboard.rows} tile brush`
+              );
+            }
+          } else {
+            pasteClipboard();
+          }
           return;
         }
         if (ctrlKey === "a") {
@@ -174,7 +202,12 @@ export function App() {
         }
         if (ctrlKey === "d") {
           e.preventDefault();
-          deselectAll();
+          const st = useEditorStore.getState();
+          if (st.workspaceMode === "tiles" && st.tilesMode === "map") {
+            st.setTileSelection([]);
+          } else {
+            deselectAll();
+          }
           return;
         }
         if (ctrlKey === "s") {
@@ -233,6 +266,16 @@ export function App() {
       }
 
       if (e.key === "Delete" || e.key === "Backspace") {
+        const st = useEditorStore.getState();
+        if (
+          st.workspaceMode === "tiles" &&
+          st.tilesMode === "map" &&
+          st.tileSelection.length > 0
+        ) {
+          e.preventDefault();
+          deleteTileSelectionCells();
+          return;
+        }
         if (pixelEngine.floating || pixelEngine.selection) {
           e.preventDefault();
           deleteSelection();
@@ -323,28 +366,74 @@ export function App() {
 
       // Tiles Map workspace shortcuts replace drawing shortcuts.
       if (state.workspaceMode === "tiles" && state.tilesMode === "map") {
+        if (e.key === "Escape") {
+          state.setTileSelection([]);
+          return;
+        }
         if (key === "x") {
-          state.setTileBrushFlags({
-            ...state.tileBrushFlags,
-            flipH: !state.tileBrushFlags.flipH,
-          });
+          if (state.tileBrush) {
+            const flipped = flipBrushH({
+              cols: state.tileBrush.cols,
+              rows: state.tileBrush.rows,
+              cells: new Uint32Array(state.tileBrush.cells),
+            });
+            state.setTileBrush({
+              tilesetIndex: state.tileBrush.tilesetIndex,
+              cols: flipped.cols,
+              rows: flipped.rows,
+              cells: Array.from(flipped.cells),
+            });
+          } else {
+            state.setTileBrushFlags({
+              ...state.tileBrushFlags,
+              flipH: !state.tileBrushFlags.flipH,
+            });
+          }
           return;
         }
         if (key === "y") {
-          state.setTileBrushFlags({
-            ...state.tileBrushFlags,
-            flipV: !state.tileBrushFlags.flipV,
-          });
+          if (state.tileBrush) {
+            const flipped = flipBrushV({
+              cols: state.tileBrush.cols,
+              rows: state.tileBrush.rows,
+              cells: new Uint32Array(state.tileBrush.cells),
+            });
+            state.setTileBrush({
+              tilesetIndex: state.tileBrush.tilesetIndex,
+              cols: flipped.cols,
+              rows: flipped.rows,
+              cells: Array.from(flipped.cells),
+            });
+          } else {
+            state.setTileBrushFlags({
+              ...state.tileBrushFlags,
+              flipV: !state.tileBrushFlags.flipV,
+            });
+          }
           return;
         }
         if (key === "z") {
-          const packed = packCell(0, 1, state.tileBrushFlags);
-          const rot = unpackCell(rotateCellCW(packed));
-          state.setTileBrushFlags({
-            flipH: rot.flipH,
-            flipV: rot.flipV,
-            flipD: rot.flipD,
-          });
+          if (state.tileBrush) {
+            const rotated = rotateBrushCW({
+              cols: state.tileBrush.cols,
+              rows: state.tileBrush.rows,
+              cells: new Uint32Array(state.tileBrush.cells),
+            });
+            state.setTileBrush({
+              tilesetIndex: state.tileBrush.tilesetIndex,
+              cols: rotated.cols,
+              rows: rotated.rows,
+              cells: Array.from(rotated.cells),
+            });
+          } else {
+            const packed = packCell(0, 1, state.tileBrushFlags);
+            const rot = unpackCell(rotateCellCW(packed));
+            state.setTileBrushFlags({
+              flipH: rot.flipH,
+              flipV: rot.flipV,
+              flipD: rot.flipD,
+            });
+          }
           return;
         }
         const mappedTileTool = TILE_TOOL_SHORTCUTS[key];

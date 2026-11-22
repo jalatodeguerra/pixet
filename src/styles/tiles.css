@@ -131,6 +131,21 @@
   vector-effect: non-scaling-stroke;
 }
 
+.tiles-selection-outline {
+  fill: rgba(76, 139, 245, 0.16);
+  stroke: #eab308;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.tiles-marquee-outline {
+  fill: rgba(76, 139, 245, 0.12);
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+
 .tiles-ghost-canvas {
   position: absolute;
   pointer-events: none;

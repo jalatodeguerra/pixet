@@ -28,6 +28,25 @@ import {
   formatCellFlags,
   screenToTileCell,
 } from "../src/engine/tiles/overlayGeometry.ts";
+import {
+  applyCellChanges,
+  computeBrushStamp,
+  computeEraserStamp,
+  computeFloodFill,
+  computeLineStroke,
+  computeRandomStroke,
+  computeRectFill,
+  computeSelectionClear,
+  computeSelectionMove,
+  createSingleTileBrush,
+  extractBrushFromRegion,
+  flipBrushH,
+  flipBrushV,
+  plotCellLine,
+  rotateBrushCW,
+  snapCellLine45,
+  type TileBrush,
+} from "../src/engine/tiles/mapTools.ts";
 
 test("cell pack/unpack, flip, and rotate dihedral identities", () => {
   assert.equal(packCell(0, 0), 0);
@@ -305,4 +324,128 @@ test("overlayGeometry screenToTileCell, cellRectToScreen, and formatCellFlags", 
     formatCellFlags({ flipH: true, flipV: false, flipD: true }),
     "H D"
   );
+});
+
+test("mapTools brush transforms, rect/flood/line/eraser/random/selection tools", () => {
+  // 2x1 brush [1, 2]
+  const brush: TileBrush = {
+    cols: 2,
+    rows: 1,
+    cells: new Uint32Array([packCell(0, 1), packCell(0, 2)]),
+  };
+
+  // flipBrushH swaps columns and sets flipH on each cell
+  const fh = flipBrushH(brush);
+  assert.equal(unpackCell(fh.cells[0]).localId, 2);
+  assert.equal(unpackCell(fh.cells[0]).flipH, true);
+  assert.equal(unpackCell(fh.cells[1]).localId, 1);
+  assert.equal(unpackCell(fh.cells[1]).flipH, true);
+
+  // flipBrushV preserves 1-row layout and sets flipV
+  const fv = flipBrushV(brush);
+  assert.equal(unpackCell(fv.cells[0]).flipV, true);
+
+  // rotateBrushCW 4 times returns identity layout and flags
+  let rot = brush;
+  for (let i = 0; i < 4; i++) rot = rotateBrushCW(rot);
+  assert.equal(rot.cols, 2);
+  assert.equal(rot.rows, 1);
+  assert.deepEqual(Array.from(rot.cells), Array.from(brush.cells));
+
+  // Rect fill pattern alignment on 4x3 map
+  const tm = new TilemapData(4, 3);
+  const rectChanges = computeRectFill(tm, 1, 0, 3, 1, brush);
+  applyCellChanges(tm, rectChanges);
+  assert.equal(tm.getCell(1, 0), packCell(0, 1));
+  assert.equal(tm.getCell(2, 0), packCell(0, 2));
+  assert.equal(tm.getCell(3, 0), packCell(0, 1));
+  assert.equal(tm.getCell(1, 1), packCell(0, 1));
+
+  // Flood fill contiguous vs global
+  const tmFill = new TilemapData(4, 3);
+  tmFill.setCell(1, 0, 9);
+  tmFill.setCell(1, 1, 9);
+  tmFill.setCell(1, 2, 9);
+  // Left side (col 0) is separated from right side (cols 2..3) by wall of 9s
+  const contig = computeFloodFill(
+    tmFill,
+    0,
+    0,
+    createSingleTileBrush(5),
+    true
+  );
+  assert.equal(contig.length, 3); // only col 0
+  const global = computeFloodFill(
+    tmFill,
+    0,
+    0,
+    createSingleTileBrush(5),
+    false
+  );
+  assert.equal(global.length, 9); // all 9 empty cells
+
+  // Line & 45-degree snap
+  const line = plotCellLine(0, 0, 3, 3);
+  assert.equal(line.length, 4);
+  assert.deepEqual(snapCellLine45(0, 0, 4, 1), { col: 4, row: 0 });
+  const lineChanges = computeLineStroke(
+    new TilemapData(4, 4),
+    0,
+    0,
+    3,
+    1,
+    createSingleTileBrush(1),
+    true,
+    "topLeft"
+  );
+  assert.equal(lineChanges.length, 4);
+
+  // Center anchor & eraser stamp
+  const centerStamp = computeBrushStamp(
+    new TilemapData(5, 5),
+    2,
+    2,
+    { cols: 3, rows: 3, cells: new Uint32Array(9).fill(1) },
+    "center"
+  );
+  assert.equal(centerStamp.length, 9);
+  const tmErase = new TilemapData(4, 4, new Uint32Array(16).fill(1));
+  assert.equal(computeEraserStamp(tmErase, 2, 2, 2).length, 4);
+
+  // Random stroke determinism & probability weighting
+  const tmRand = new TilemapData(6, 1);
+  const pts = [
+    { col: 0, row: 0 },
+    { col: 1, row: 0 },
+    { col: 2, row: 0 },
+    { col: 3, row: 0 },
+  ];
+  const pool = [
+    { cell: 1, weight: 0 },
+    { cell: 2, weight: 10 },
+  ];
+  const rA = computeRandomStroke(tmRand, pts, pool, 42);
+  const rB = computeRandomStroke(tmRand, pts, pool, 42);
+  assert.deepEqual(rA, rB);
+  assert.ok(rA.every((c) => c.after === 2));
+
+  // Extract brush, selection move, selection clear
+  const tmSel = new TilemapData(4, 4);
+  tmSel.setCell(0, 0, 7);
+  tmSel.setCell(1, 0, 8);
+  const extracted = extractBrushFromRegion(tmSel, 0, 0, 1, 0);
+  assert.equal(extracted.cols, 2);
+  assert.deepEqual(Array.from(extracted.cells), [7, 8]);
+
+  const sel = new Set(["0,0", "1,0"]);
+  const moveChanges = computeSelectionMove(tmSel, sel, 1, 1);
+  applyCellChanges(tmSel, moveChanges);
+  assert.equal(tmSel.getCell(0, 0), 0);
+  assert.equal(tmSel.getCell(1, 1), 7);
+  assert.equal(tmSel.getCell(2, 1), 8);
+
+  const clearChanges = computeSelectionClear(tmSel, new Set(["1,1", "2,1"]));
+  applyCellChanges(tmSel, clearChanges);
+  assert.equal(tmSel.getCell(1, 1), 0);
+  assert.equal(tmSel.getCell(2, 1), 0);
 });
