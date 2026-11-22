@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { PendingImageImport } from "../engine/io/imageImport";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 
 export type WorkspaceMode = "draw" | "tiles" | "rig";
@@ -115,6 +116,7 @@ interface EditorState {
   colorMode: "RGBA" | "Indexed";
   exportModalOpen: boolean;
   rotate3dModalOpen: boolean;
+  pendingImportImage: PendingImageImport | null;
 
   rigTool: RigTool;
   selectedBoneId: string | null;
@@ -231,6 +233,7 @@ interface EditorState {
   setDocumentName: (name: string) => void;
   setExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
+  setPendingImportImage: (img: PendingImageImport | null) => void;
   setRigTool: (tool: RigTool) => void;
   setSelectedBoneId: (boneId: string | null) => void;
   toggleRigPixelSnap: () => void;
@@ -312,6 +315,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   colorMode: "RGBA",
   exportModalOpen: false,
   rotate3dModalOpen: false,
+  pendingImportImage: null,
 
   rigTool: "select",
   selectedBoneId: null,
@@ -913,6 +917,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setDocumentName: (documentName) => set({ documentName }),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
   setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
+  setPendingImportImage: (pendingImportImage) => set({ pendingImportImage }),
   setRigTool: (rigTool) => set({ rigTool }),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
   toggleRigPixelSnap: () => set((s) => ({ rigPixelSnap: !s.rigPixelSnap })),

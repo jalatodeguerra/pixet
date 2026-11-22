@@ -53,6 +53,13 @@ import {
   solveTwoBoneIK,
   warpLayerByBone,
 } from "../src/engine/rig/RigEngine.ts";
+import {
+  extractPaletteFromBuffer,
+  isSupportedImageFile,
+  placeBufferCentered,
+  resizePixelBufferNearest,
+  sliceSpritesheet,
+} from "../src/engine/io/imageImport.ts";
 
 test("plotBresenhamLine produces connected endpoints", () => {
   const pts = plotBresenhamLine(0, 0, 4, 2);
@@ -800,4 +807,42 @@ test("warpLayerByBone deforms pixel cel with RotSprite & serializes rig JSON", (
   assert.equal(json.schema, "pixet-rig-v1");
   assert.equal(json.bones.length, 1);
   assert.equal(json.bones[0].name, "Limb");
+});
+
+test("imageImport resizes nearest-neighbor, centers, slices spritesheets, and extracts palettes", () => {
+  assert.equal(isSupportedImageFile({ name: "hero.PNG", type: "" }), true);
+  assert.equal(isSupportedImageFile({ name: "notes.txt", type: "text/plain" }), false);
+
+  // Nearest-neighbor resize 2x2 -> 4x4
+  const tiny = new PixelBuffer(2, 2);
+  tiny.setPixel(0, 0, 255, 0, 0, 255);
+  tiny.setPixel(1, 0, 0, 255, 0, 255);
+  tiny.setPixel(0, 1, 0, 0, 255, 255);
+  tiny.setPixel(1, 1, 255, 255, 0, 255);
+  const scaled = resizePixelBufferNearest(tiny, 4, 4);
+  assert.deepEqual(scaled.getPixel(0, 0), [255, 0, 0, 255]);
+  assert.deepEqual(scaled.getPixel(1, 1), [255, 0, 0, 255]);
+  assert.deepEqual(scaled.getPixel(3, 3), [255, 255, 0, 255]);
+
+  // placeBufferCentered fits oversized image & centers smaller image
+  const centered = placeBufferCentered(tiny, 6, 6, false);
+  assert.deepEqual(centered.getPixel(2, 2), [255, 0, 0, 255]);
+  const shrunk = placeBufferCentered(scaled, 2, 2, true);
+  assert.equal(shrunk.width, 2);
+  assert.equal(shrunk.height, 2);
+
+  // sliceSpritesheet splits 16x8 into two 8x8 frames and skips empty second frame
+  const sheet = new PixelBuffer(16, 8);
+  sheet.setPixel(2, 2, 10, 20, 30, 255);
+  sheet.setPixel(3, 2, 10, 20, 30, 255);
+  sheet.setPixel(4, 2, 200, 100, 50, 255);
+  const nonEmptyOnly = sliceSpritesheet(sheet, 8, 8, true);
+  assert.equal(nonEmptyOnly.length, 1);
+  assert.deepEqual(nonEmptyOnly[0].getPixel(2, 2), [10, 20, 30, 255]);
+  const allCells = sliceSpritesheet(sheet, 8, 8, false);
+  assert.equal(allCells.length, 2);
+
+  // extractPaletteFromBuffer orders by descending frequency
+  const pal = extractPaletteFromBuffer(sheet, 8);
+  assert.deepEqual(pal, ["#0a141e", "#c86432"]);
 });

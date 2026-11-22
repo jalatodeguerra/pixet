@@ -1713,3 +1713,103 @@
 .rig-output-actions > .mini-btn {
   justify-content: center;
 }
+
+/* Image Import Modal & Global Dropzone */
+.import-modal-card {
+  width: 540px;
+}
+
+.import-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.import-mode-tabs .rotate3d-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.import-layout {
+  display: grid;
+  grid-template-columns: 236px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.import-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background-color: #15151a;
+  background-image:
+    linear-gradient(45deg, #1d1d24 25%, transparent 25%),
+    linear-gradient(-45deg, #1d1d24 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1d1d24 75%),
+    linear-gradient(-45deg, transparent 75%, #1d1d24 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.import-preview-box {
+  position: relative;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.import-slice-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.import-slice-svg line {
+  stroke: rgba(91, 140, 255, 0.85);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.dropzone-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  background: rgba(17, 17, 20, 0.82);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.dropzone-card {
+  padding: 24px 36px;
+  border-radius: var(--radius-md);
+  border: 2px dashed var(--accent);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.65);
+}
+
+.dropzone-card span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dropzone-card small {
+  font-size: 11px;
+  color: var(--text-secondary);
+}

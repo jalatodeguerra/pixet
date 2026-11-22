@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Upload } from "lucide-react";
 import { ExportModal } from "./components/ExportModal";
+import { ImportImageModal } from "./components/ImportImageModal";
 import { RightSidebar } from "./components/RightSidebar";
 import { Rotate3DModal } from "./components/Rotate3DModal";
 import { StatusBar } from "./components/StatusBar";
@@ -23,6 +25,11 @@ import {
   openProjectAction,
   saveProjectAction,
 } from "./engine/io/projectBridge";
+import {
+  decodeImageFileToPixelBuffer,
+  isSupportedImageFile,
+  pickImageFileForImport,
+} from "./engine/io/imageImport";
 import { ToolId, useEditorStore } from "./store/editorStore";
 
 const TOOL_SHORTCUTS: Record<string, ToolId> = {
@@ -54,6 +61,8 @@ export function App() {
 
   const [draggingRight, setDraggingRight] = useState(false);
   const [draggingTimeline, setDraggingTimeline] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragDepthRef = useRef(0);
 
   // Variable-duration playback timer loop
   useEffect(() => {
@@ -144,6 +153,19 @@ export function App() {
           e.preventDefault();
           const st = useEditorStore.getState();
           st.setRotate3dModalOpen(!st.rotate3dModalOpen);
+          return;
+        }
+        if (ctrlKey === "i" && e.shiftKey) {
+          e.preventDefault();
+          void pickImageFileForImport()
+            .then((img) => {
+              if (img) useEditorStore.getState().setPendingImportImage(img);
+            })
+            .catch((err) => {
+              useEditorStore
+                .getState()
+                .setStatusMessage(`Import failed: ${String(err)}`);
+            });
           return;
         }
         return;
@@ -268,8 +290,60 @@ export function App() {
     };
   }, [draggingRight, draggingTimeline, setRightPanelWidth, setTimelineHeight]);
 
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragOver(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const imageFile = files.find((f) => isSupportedImageFile(f));
+    if (!imageFile) {
+      if (files.length > 0) {
+        setStatusMessage("Drop a PNG, WebP, JPG, BMP, or GIF image");
+      }
+      return;
+    }
+
+    void decodeImageFileToPixelBuffer(imageFile)
+      .then((decoded) => {
+        useEditorStore.getState().setPendingImportImage(decoded);
+      })
+      .catch((err) => {
+        setStatusMessage(`Image import failed: ${String(err)}`);
+      });
+  };
+
   return (
-    <div className="editor-shell">
+    <div
+      className="editor-shell"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <TopBar />
       <ToolOptionsBar />
 
@@ -304,6 +378,16 @@ export function App() {
       <StatusBar />
       <ExportModal />
       <Rotate3DModal />
+      <ImportImageModal />
+      {isDragOver && (
+        <div className="dropzone-overlay">
+          <div className="dropzone-card">
+            <Upload size={26} />
+            <span>Drop image to import into Pixet</span>
+            <small>PNG, WebP, JPG, BMP, or GIF — New Sprite, Layer, or Spritesheet</small>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

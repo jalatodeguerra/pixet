@@ -25,6 +25,7 @@ import {
   openProjectAction,
   saveProjectAction,
 } from "../engine/io/projectBridge";
+import { pickImageFileForImport } from "../engine/io/imageImport";
 import { useEditorStore, WorkspaceMode } from "../store/editorStore";
 
 type MenuKey = "File" | "Edit" | "View" | "Sprite";
@@ -78,6 +79,20 @@ export function TopBar() {
     File: [
       { label: "New Sprite...", shortcut: "Ctrl+N", action: () => notifyMilestone("New Sprite dialog", "Phase 2") },
       { label: "Open .pixet...", shortcut: "Ctrl+O", action: () => { setOpenMenu(null); void openProjectAction(); } },
+      {
+        label: "Import Image...",
+        shortcut: "Ctrl+Shift+I",
+        action: () => {
+          setOpenMenu(null);
+          void pickImageFileForImport()
+            .then((img) => {
+              if (img) useEditorStore.getState().setPendingImportImage(img);
+            })
+            .catch((err) => {
+              setStatusMessage(`Import failed: ${String(err)}`);
+            });
+        },
+      },
       { label: "Save", shortcut: "Ctrl+S", action: () => { setOpenMenu(null); void saveProjectAction(false); } },
       { label: "Save As...", shortcut: "Ctrl+Shift+S", action: () => { setOpenMenu(null); void saveProjectAction(true); } },
       { label: "Export Spritesheet...", shortcut: "Ctrl+E", action: () => { setOpenMenu(null); setExportModalOpen(true); } },
