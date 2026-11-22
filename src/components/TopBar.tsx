@@ -30,6 +30,7 @@ import {
   saveProjectAction,
 } from "../engine/io/projectBridge";
 import { pickImageFileForImport } from "../engine/io/imageImport";
+import { syncRigHistoryFlags } from "../engine/rig/rigActions";
 import { useEditorStore, WorkspaceMode } from "../store/editorStore";
 
 type MenuKey = "File" | "Edit" | "View" | "Sprite";
@@ -193,7 +194,10 @@ export function TopBar() {
               role="tab"
               aria-selected={active}
               className={`mode-pill ${active ? "active" : ""}`}
-              onClick={() => setWorkspaceMode(m.id)}
+              onClick={() => {
+                setWorkspaceMode(m.id);
+                syncRigHistoryFlags();
+              }}
             >
               <Icon size={13} />
               <span>{m.label}</span>

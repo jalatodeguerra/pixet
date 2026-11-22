@@ -1,6 +1,14 @@
 import { PixelBuffer, type RGBA } from "../document/PixelBuffer.ts";
 
-export type EasingMode = "linear" | "step" | "easeInOut";
+export type EasingMode =
+  | "linear"
+  | "step"
+  | "easeInOut"
+  | "easeIn"
+  | "easeOut"
+  | "bezier";
+
+export type CubicBezierHandles = [number, number, number, number];
 
 export interface Bone {
   id: string;
@@ -11,12 +19,29 @@ export interface Bone {
   length: number;
   rotationDeg: number;
   boundLayerId: string | null;
+  /** Local scale on X, defaults to 1. */
+  scaleX?: number;
+  /** Local scale on Y, defaults to 1. */
+  scaleY?: number;
+  /** Editor tag color (UI only). */
+  color?: string;
+  /** Editor-only visibility toggle. */
+  hidden?: boolean;
+  /** Editor-only lock toggle. */
+  locked?: boolean;
+  /** Local rotation lower bound in degrees, applied to procedural motion. */
+  minAngleDeg?: number;
+  /** Local rotation upper bound in degrees, applied to procedural motion. */
+  maxAngleDeg?: number;
 }
 
 export interface BonePose {
   localX: number;
   localY: number;
   rotationDeg: number;
+  scaleX: number;
+  scaleY: number;
+  attachment: string | null;
 }
 
 export interface BoneWorldTransform {
@@ -27,6 +52,8 @@ export interface BoneWorldTransform {
   tipY: number;
   worldRotationDeg: number;
   length: number;
+  worldScaleX: number;
+  worldScaleY: number;
 }
 
 export interface BoneKeyframe {
@@ -35,6 +62,20 @@ export interface BoneKeyframe {
   localX?: number;
   localY?: number;
   easing?: EasingMode;
+  scaleX?: number;
+  scaleY?: number;
+  /** Sprite swap key (R5); step-interpolated. */
+  attachment?: string | null;
+  /** Cubic-bezier handles for easing "bezier". */
+  curve?: CubicBezierHandles;
+}
+
+export interface ConstraintTargetKeyframe {
+  frame: number;
+  targetX: number;
+  targetY: number;
+  easing?: EasingMode;
+  curve?: CubicBezierHandles;
 }
 
 export interface RigClip {
@@ -42,7 +83,84 @@ export interface RigClip {
   name: string;
   frameCount: number;
   tracks: Record<string, BoneKeyframe[]>;
+  constraintTracks?: Record<string, ConstraintTargetKeyframe[]>;
+  loop?: boolean;
 }
+
+interface RigConstraintBase {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** 0..1 blend between the animated pose and the constraint result. */
+  mix: number;
+}
+
+export type RigConstraint =
+  | (RigConstraintBase & {
+      type: "ik";
+      /** Chain ordered root -> tip. */
+      boneIds: string[];
+      targetX: number;
+      targetY: number;
+      bendSign: 1 | -1;
+    })
+  | (RigConstraintBase & {
+      type: "aim";
+      boneId: string;
+      targetX: number;
+      targetY: number;
+      offsetDeg: number;
+    })
+  | (RigConstraintBase & {
+      type: "copyRotation" | "copyTransform";
+      boneId: string;
+      sourceBoneId: string;
+    })
+  | (RigConstraintBase & {
+      type: "spring";
+      boneId: string;
+      stiffness: number;
+      damping: number;
+      gravity: number;
+    });
+
+export interface RigSlot {
+  id: string;
+  name: string;
+  boneId: string;
+  layerId: string | null;
+  attachments: Record<string, { layerId: string; frame: number }>;
+  defaultAttachment: string | null;
+}
+
+export interface RigPoseBone {
+  rotationDeg: number;
+  localX: number;
+  localY: number;
+  scaleX?: number;
+  scaleY?: number;
+}
+
+export interface RigPose {
+  id: string;
+  name: string;
+  bones: Record<string, RigPoseBone>;
+}
+
+export interface BoneWeightInfluence {
+  boneId: string;
+  /** 0..1 */
+  w: number;
+}
+
+/** Sparse per-pixel skin weights, at most MAX_BONE_INFLUENCES per pixel. */
+export interface BoneWeights {
+  width: number;
+  height: number;
+  entries: Map<number, BoneWeightInfluence[]>;
+}
+
+export const MAX_BONE_INFLUENCES = 4;
 
 export interface RigRenderOptions {
   pixelSnap: boolean;
@@ -62,11 +180,36 @@ export interface RigMaskSnapshot {
   indices: number[];
 }
 
+export interface RigWeightEntrySnapshot {
+  i: number;
+  b: Array<[string, number]>;
+}
+
+export interface RigWeightSnapshot {
+  width: number;
+  height: number;
+  entries: RigWeightEntrySnapshot[];
+}
+
+export const RIG_SNAPSHOT_VERSION = 2;
+
 export interface RigSnapshot {
+  version: 2;
   bones: Bone[];
   clips: RigClip[];
   activeClipId: string;
+  constraints: RigConstraint[];
+  slots: RigSlot[];
+  poses: RigPose[];
+  weights: RigWeightSnapshot | null;
   masks: RigMaskSnapshot[];
+}
+
+export interface RigEvaluateOptions {
+  /** Use the live pose overrides (default true). */
+  useOverrides?: boolean;
+  /** Apply enabled constraints in list order (default true). */
+  applyConstraints?: boolean;
 }
 
 export const BONE_INFLUENCE_COLORS: readonly RGBA[] = [
@@ -84,6 +227,15 @@ export function getBoneInfluenceColor(boneIndex: number): RGBA {
       BONE_INFLUENCE_COLORS.length) %
       BONE_INFLUENCE_COLORS.length
   ];
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
 }
 
 function pointToSegmentDistSq(
@@ -116,15 +268,83 @@ export function normalizeAngleDeg(deg: number): number {
   return a;
 }
 
-export function evaluateEasing(t: number, easing: EasingMode): number {
-  const clamped = Math.max(0, Math.min(1, t));
-  if (easing === "step") {
-    return clamped >= 1 ? 1 : 0;
+function bezierComponent(u: number, p1: number, p2: number): number {
+  const mu = 1 - u;
+  return 3 * mu * mu * u * p1 + 3 * mu * u * u * p2 + u * u * u;
+}
+
+function bezierDerivative(u: number, p1: number, p2: number): number {
+  const mu = 1 - u;
+  return 3 * mu * mu * p1 + 6 * mu * u * (p2 - p1) + 3 * u * u * (1 - p2);
+}
+
+const DEFAULT_BEZIER_HANDLES: CubicBezierHandles = [0.25, 0.1, 0.25, 1];
+
+/**
+ * CSS-like cubic-bezier easing. Solves x(u) = t with Newton steps and a
+ * bisection fallback, then returns y(u). Endpoints are exactly 0 and 1.
+ */
+export function cubicBezierEase(
+  t: number,
+  curve: CubicBezierHandles = DEFAULT_BEZIER_HANDLES
+): number {
+  const x = clamp01(t);
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+
+  const handles =
+    Array.isArray(curve) && curve.length === 4 ? curve : DEFAULT_BEZIER_HANDLES;
+  const x1 = clamp01(handles[0]);
+  const y1 = handles[1];
+  const x2 = clamp01(handles[2]);
+  const y2 = handles[3];
+
+  let u = x;
+  for (let i = 0; i < 8; i++) {
+    const err = bezierComponent(u, x1, x2) - x;
+    if (Math.abs(err) < 1e-6) {
+      return bezierComponent(u, y1, y2);
+    }
+    const slope = bezierDerivative(u, x1, x2);
+    if (Math.abs(slope) < 1e-6) break;
+    const next = u - err / slope;
+    if (next < 0 || next > 1) break;
+    u = next;
   }
-  if (easing === "easeInOut") {
-    return clamped * clamped * (3 - 2 * clamped);
+
+  let lo = 0;
+  let hi = 1;
+  u = x;
+  for (let i = 0; i < 24; i++) {
+    const sample = bezierComponent(u, x1, x2);
+    if (Math.abs(sample - x) < 1e-7) break;
+    if (sample < x) lo = u;
+    else hi = u;
+    u = (lo + hi) / 2;
   }
-  return clamped;
+  return bezierComponent(u, y1, y2);
+}
+
+export function evaluateEasing(
+  t: number,
+  easing: EasingMode,
+  curve?: CubicBezierHandles
+): number {
+  const clamped = clamp01(t);
+  switch (easing) {
+    case "step":
+      return clamped >= 1 ? 1 : 0;
+    case "easeInOut":
+      return clamped * clamped * (3 - 2 * clamped);
+    case "easeIn":
+      return clamped * clamped;
+    case "easeOut":
+      return 1 - (1 - clamped) * (1 - clamped);
+    case "bezier":
+      return cubicBezierEase(clamped, curve);
+    default:
+      return clamped;
+  }
 }
 
 export function lerpAngleDeg(a: number, b: number, t: number): number {
@@ -306,6 +526,158 @@ export function warpLayerByBone(
   return out;
 }
 
+interface LocalBonePose {
+  localX: number;
+  localY: number;
+  rotationDeg: number;
+  scaleX: number;
+  scaleY: number;
+}
+
+function bindPoseOf(bone: Bone): BonePose {
+  return {
+    localX: bone.localX,
+    localY: bone.localY,
+    rotationDeg: bone.rotationDeg,
+    scaleX: bone.scaleX ?? 1,
+    scaleY: bone.scaleY ?? 1,
+    attachment: null,
+  };
+}
+
+function clampLocalAngle(bone: Bone, angle: number): number {
+  let clamped = normalizeAngleDeg(angle);
+  if (
+    bone.minAngleDeg !== undefined &&
+    Number.isFinite(bone.minAngleDeg) &&
+    clamped < bone.minAngleDeg
+  ) {
+    clamped = bone.minAngleDeg;
+  }
+  if (
+    bone.maxAngleDeg !== undefined &&
+    Number.isFinite(bone.maxAngleDeg) &&
+    clamped > bone.maxAngleDeg
+  ) {
+    clamped = bone.maxAngleDeg;
+  }
+  return normalizeAngleDeg(clamped);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Converts the legacy per-bone hard masks into sparse skin weights (hard w=1).
+ * A pixel touched by more than MAX_BONE_INFLUENCES masks keeps the first four.
+ */
+export function masksToBoneWeights(
+  masks: ReadonlyMap<string, BoneMask>
+): BoneWeights | null {
+  let width = 0;
+  let height = 0;
+  for (const mask of masks.values()) {
+    width = mask.width;
+    height = mask.height;
+    break;
+  }
+  if (width <= 0 || height <= 0) return null;
+
+  const entries = new Map<number, BoneWeightInfluence[]>();
+  for (const [boneId, mask] of masks.entries()) {
+    if (mask.width !== width || mask.height !== height) continue;
+    for (let i = 0; i < mask.data.length; i++) {
+      if (mask.data[i] === 0) continue;
+      const list = entries.get(i) ?? [];
+      if (list.some((influence) => influence.boneId === boneId)) continue;
+      if (list.length >= MAX_BONE_INFLUENCES) continue;
+      list.push({ boneId, w: 1 });
+      entries.set(i, list);
+    }
+  }
+  if (entries.size === 0) return null;
+  return { width, height, entries };
+}
+
+function serializeBoneWeights(weights: BoneWeights): RigWeightSnapshot {
+  const entries: RigWeightEntrySnapshot[] = [];
+  const indices = Array.from(weights.entries.keys()).sort((a, b) => a - b);
+  for (const index of indices) {
+    const influences = weights.entries.get(index);
+    if (!influences || influences.length === 0) continue;
+    entries.push({
+      i: index,
+      b: influences
+        .slice(0, MAX_BONE_INFLUENCES)
+        .map((influence) => [influence.boneId, influence.w]),
+    });
+  }
+  return { width: weights.width, height: weights.height, entries };
+}
+
+function parseBoneWeights(raw: unknown): BoneWeights | null {
+  if (!isRecord(raw)) return null;
+  const width = typeof raw.width === "number" ? Math.round(raw.width) : 0;
+  const height = typeof raw.height === "number" ? Math.round(raw.height) : 0;
+  if (width <= 0 || height <= 0) return null;
+  if (!Array.isArray(raw.entries)) return null;
+
+  const pixelCount = width * height;
+  const entries = new Map<number, BoneWeightInfluence[]>();
+  for (const entry of raw.entries) {
+    if (!isRecord(entry)) continue;
+    const index = typeof entry.i === "number" ? Math.round(entry.i) : -1;
+    if (index < 0 || index >= pixelCount) continue;
+    if (!Array.isArray(entry.b)) continue;
+
+    const influences: BoneWeightInfluence[] = [];
+    for (const pair of entry.b) {
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      const boneId = pair[0];
+      const weight = pair[1];
+      if (typeof boneId !== "string" || typeof weight !== "number") continue;
+      if (!Number.isFinite(weight) || weight <= 0) continue;
+      influences.push({ boneId, w: clamp01(weight) });
+      if (influences.length >= MAX_BONE_INFLUENCES) break;
+    }
+    if (influences.length > 0) entries.set(index, influences);
+  }
+  if (entries.size === 0) return null;
+  return { width, height, entries };
+}
+
+function sampleConstraintTrack(
+  track: readonly ConstraintTargetKeyframe[] | undefined,
+  frame: number,
+  fallbackX: number,
+  fallbackY: number
+): { x: number; y: number } {
+  if (!track || track.length === 0) {
+    return { x: fallbackX, y: fallbackY };
+  }
+  if (frame <= track[0].frame) {
+    return { x: track[0].targetX, y: track[0].targetY };
+  }
+  const last = track[track.length - 1];
+  if (frame >= last.frame) {
+    return { x: last.targetX, y: last.targetY };
+  }
+  for (let i = 0; i < track.length - 1; i++) {
+    const k0 = track[i];
+    const k1 = track[i + 1];
+    if (frame >= k0.frame && frame <= k1.frame) {
+      const span = Math.max(1, k1.frame - k0.frame);
+      const t = evaluateEasing((frame - k0.frame) / span, k0.easing ?? "linear", k0.curve);
+      return {
+        x: lerp(k0.targetX, k1.targetX, t),
+        y: lerp(k0.targetY, k1.targetY, t),
+      };
+    }
+  }
+  return { x: fallbackX, y: fallbackY };
+}
+
 export class RigState {
   bones: Bone[] = [];
   clips: RigClip[] = [
@@ -314,7 +686,14 @@ export class RigState {
   activeClipId = "clip-idle";
   currentPoseOverrides = new Map<string, BonePose>();
   boneMasks = new Map<string, BoneMask>();
+  constraints: RigConstraint[] = [];
+  slots: RigSlot[] = [];
+  poses: RigPose[] = [];
   private nextBoneNum = 1;
+  private revision = 0;
+  private springCache = new Map<string, number[]>();
+  private cachedWeights: BoneWeights | null = null;
+  private cachedWeightsRevision = -1;
 
   reset(): void {
     this.bones = [];
@@ -324,7 +703,20 @@ export class RigState {
     this.activeClipId = "clip-idle";
     this.currentPoseOverrides.clear();
     this.boneMasks.clear();
+    this.constraints = [];
+    this.slots = [];
+    this.poses = [];
     this.nextBoneNum = 1;
+    this.springCache.clear();
+    this.cachedWeights = null;
+    this.cachedWeightsRevision = -1;
+    this.revision++;
+  }
+
+  /** Invalidates cached evaluation data after direct field mutation. */
+  invalidateEvaluation(): void {
+    this.revision++;
+    this.springCache.clear();
   }
 
   getActiveClip(): RigClip {
@@ -341,6 +733,13 @@ export class RigState {
     length: number;
     rotationDeg: number;
     boundLayerId?: string | null;
+    scaleX?: number;
+    scaleY?: number;
+    color?: string;
+    hidden?: boolean;
+    locked?: boolean;
+    minAngleDeg?: number;
+    maxAngleDeg?: number;
   }): Bone {
     const num = this.nextBoneNum++;
     const bone: Bone = {
@@ -353,7 +752,15 @@ export class RigState {
       rotationDeg: normalizeAngleDeg(partial.rotationDeg),
       boundLayerId: partial.boundLayerId ?? null,
     };
+    if (partial.scaleX !== undefined) bone.scaleX = partial.scaleX;
+    if (partial.scaleY !== undefined) bone.scaleY = partial.scaleY;
+    if (partial.color !== undefined) bone.color = partial.color;
+    if (partial.hidden !== undefined) bone.hidden = partial.hidden;
+    if (partial.locked !== undefined) bone.locked = partial.locked;
+    if (partial.minAngleDeg !== undefined) bone.minAngleDeg = partial.minAngleDeg;
+    if (partial.maxAngleDeg !== undefined) bone.maxAngleDeg = partial.maxAngleDeg;
     this.bones.push(bone);
+    this.invalidateEvaluation();
     return bone;
   }
 
@@ -371,6 +778,14 @@ export class RigState {
       bone.rotationDeg = normalizeAngleDeg(patch.rotationDeg);
     }
     if (patch.boundLayerId !== undefined) bone.boundLayerId = patch.boundLayerId;
+    if (patch.scaleX !== undefined) bone.scaleX = patch.scaleX;
+    if (patch.scaleY !== undefined) bone.scaleY = patch.scaleY;
+    if (patch.color !== undefined) bone.color = patch.color;
+    if (patch.hidden !== undefined) bone.hidden = patch.hidden;
+    if (patch.locked !== undefined) bone.locked = patch.locked;
+    if (patch.minAngleDeg !== undefined) bone.minAngleDeg = patch.minAngleDeg;
+    if (patch.maxAngleDeg !== undefined) bone.maxAngleDeg = patch.maxAngleDeg;
+    this.invalidateEvaluation();
   }
 
   removeBone(id: string): void {
@@ -384,9 +799,13 @@ export class RigState {
     this.bones = this.bones.filter((b) => b.id !== id);
     this.currentPoseOverrides.delete(id);
     this.boneMasks.delete(id);
+    this.constraints = this.constraints.filter(
+      (constraint) => !constraintReferencesBone(constraint, id)
+    );
     for (const clip of this.clips) {
       delete clip.tracks[id];
     }
+    this.invalidateEvaluation();
   }
 
   getBoneMask(boneId: string): BoneMask | undefined {
@@ -404,6 +823,19 @@ export class RigState {
 
   clearBoneMask(boneId: string): void {
     this.boneMasks.delete(boneId);
+    this.invalidateEvaluation();
+  }
+
+  /**
+   * Sparse skin weights derived from the current hard masks (R0).
+   * Returns null when the rig has no painted weights.
+   */
+  getBoneWeights(): BoneWeights | null {
+    if (this.cachedWeightsRevision !== this.revision) {
+      this.cachedWeights = masksToBoneWeights(this.boneMasks);
+      this.cachedWeightsRevision = this.revision;
+    }
+    return this.cachedWeights;
   }
 
   private ensureBoneMask(boneId: string, width: number, height: number): BoneMask {
@@ -460,11 +892,15 @@ export class RigState {
         }
       }
     }
+    this.invalidateEvaluation();
   }
 
   autoAssignBoneMasks(src: PixelBuffer, frame = 0): void {
     this.boneMasks.clear();
-    if (this.bones.length === 0) return;
+    if (this.bones.length === 0) {
+      this.invalidateEvaluation();
+      return;
+    }
 
     const transforms = this.computeWorldTransforms(frame, "rest", false);
     const activeBones = this.bones
@@ -473,7 +909,10 @@ export class RigState {
         (item): item is { bone: Bone; t: BoneWorldTransform } =>
           item.t !== undefined
       );
-    if (activeBones.length === 0) return;
+    if (activeBones.length === 0) {
+      this.invalidateEvaluation();
+      return;
+    }
 
     const w = src.width;
     const h = src.height;
@@ -500,6 +939,19 @@ export class RigState {
         masks[bestIdx].data[y * w + x] = 1;
       }
     }
+    this.invalidateEvaluation();
+  }
+
+  private attachmentAtFrame(
+    track: readonly BoneKeyframe[],
+    frame: number
+  ): string | null {
+    let attachment: string | null = null;
+    for (const key of track) {
+      if (key.frame > frame) break;
+      if (key.attachment !== undefined) attachment = key.attachment;
+    }
+    return attachment;
   }
 
   getBonePoseAtFrame(
@@ -509,7 +961,14 @@ export class RigState {
   ): BonePose {
     const bone = this.bones.find((b) => b.id === boneId);
     if (!bone) {
-      return { localX: 0, localY: 0, rotationDeg: 0 };
+      return {
+        localX: 0,
+        localY: 0,
+        rotationDeg: 0,
+        scaleX: 1,
+        scaleY: 1,
+        attachment: null,
+      };
     }
 
     if (useOverrides) {
@@ -519,32 +978,29 @@ export class RigState {
       }
     }
 
+    const bind = bindPoseOf(bone);
     const clip = this.getActiveClip();
     const track = clip?.tracks[boneId];
     if (!track || track.length === 0) {
-      return {
-        localX: bone.localX,
-        localY: bone.localY,
-        rotationDeg: bone.rotationDeg,
-      };
+      return bind;
     }
 
+    const keyToPose = (key: BoneKeyframe): BonePose => ({
+      localX: key.localX ?? bone.localX,
+      localY: key.localY ?? bone.localY,
+      rotationDeg: key.rotationDeg,
+      scaleX: key.scaleX ?? bind.scaleX,
+      scaleY: key.scaleY ?? bind.scaleY,
+      attachment: this.attachmentAtFrame(track, key.frame),
+    });
+
     if (frame <= track[0].frame) {
-      const k = track[0];
-      return {
-        localX: k.localX ?? bone.localX,
-        localY: k.localY ?? bone.localY,
-        rotationDeg: k.rotationDeg,
-      };
+      return keyToPose(track[0]);
     }
 
     const last = track[track.length - 1];
     if (frame >= last.frame) {
-      return {
-        localX: last.localX ?? bone.localX,
-        localY: last.localY ?? bone.localY,
-        rotationDeg: last.rotationDeg,
-      };
+      return keyToPose(last);
     }
 
     for (let i = 0; i < track.length - 1; i++) {
@@ -553,30 +1009,31 @@ export class RigState {
       if (frame >= k0.frame && frame <= k1.frame) {
         const span = Math.max(1, k1.frame - k0.frame);
         const rawT = (frame - k0.frame) / span;
-        const t = evaluateEasing(rawT, k0.easing ?? "linear");
-        const x0 = k0.localX ?? bone.localX;
-        const y0 = k0.localY ?? bone.localY;
-        const x1 = k1.localX ?? bone.localX;
-        const y1 = k1.localY ?? bone.localY;
+        const t = evaluateEasing(rawT, k0.easing ?? "linear", k0.curve);
         return {
-          localX: x0 + (x1 - x0) * t,
-          localY: y0 + (y1 - y0) * t,
+          localX: lerp(k0.localX ?? bone.localX, k1.localX ?? bone.localX, t),
+          localY: lerp(k0.localY ?? bone.localY, k1.localY ?? bone.localY, t),
           rotationDeg: lerpAngleDeg(k0.rotationDeg, k1.rotationDeg, t),
+          scaleX: lerp(
+            k0.scaleX ?? bind.scaleX,
+            k1.scaleX ?? bind.scaleX,
+            t
+          ),
+          scaleY: lerp(
+            k0.scaleY ?? bind.scaleY,
+            k1.scaleY ?? bind.scaleY,
+            t
+          ),
+          attachment: this.attachmentAtFrame(track, frame),
         };
       }
     }
 
-    return {
-      localX: bone.localX,
-      localY: bone.localY,
-      rotationDeg: bone.rotationDeg,
-    };
+    return bind;
   }
 
-  computeWorldTransforms(
-    frame: number,
-    mode: "rest" | "pose",
-    useOverrides = true
+  private computeFk(
+    locals: ReadonlyMap<string, LocalBonePose>
   ): Map<string, BoneWorldTransform> {
     const result = new Map<string, BoneWorldTransform>();
     const byId = new Map(this.bones.map((b) => [b.id, b]));
@@ -591,48 +1048,9 @@ export class RigState {
       if (!bone) return null;
       visiting.add(boneId);
 
-      const local =
-        mode === "rest"
-          ? {
-              localX: bone.localX,
-              localY: bone.localY,
-              rotationDeg: bone.rotationDeg,
-            }
-          : this.getBonePoseAtFrame(bone.id, frame, useOverrides);
-
-      let worldX = local.localX;
-      let worldY = local.localY;
-      let worldRotationDeg = local.rotationDeg;
-
-      if (bone.parentId) {
-        const parent = resolve(bone.parentId);
-        if (parent) {
-          const pRad = (parent.worldRotationDeg * Math.PI) / 180;
-          const cos = Math.cos(pRad);
-          const sin = Math.sin(pRad);
-          worldX = parent.x + local.localX * cos - local.localY * sin;
-          worldY = parent.y + local.localX * sin + local.localY * cos;
-          worldRotationDeg = normalizeAngleDeg(
-            parent.worldRotationDeg + local.rotationDeg
-          );
-        }
-      }
-
-      const wRad = (worldRotationDeg * Math.PI) / 180;
-      const tipX = worldX + Math.cos(wRad) * bone.length;
-      const tipY = worldY + Math.sin(wRad) * bone.length;
-
-      const transform: BoneWorldTransform = {
-        id: bone.id,
-        x: worldX,
-        y: worldY,
-        tipX,
-        tipY,
-        worldRotationDeg,
-        length: bone.length,
-      };
+      const transform = this.computeWorldTransform(bone, locals, result);
       visiting.delete(boneId);
-      result.set(boneId, transform);
+      if (transform) result.set(boneId, transform);
       return transform;
     };
 
@@ -641,6 +1059,438 @@ export class RigState {
     }
 
     return result;
+  }
+
+  private computeWorldTransform(
+    bone: Bone,
+    locals: ReadonlyMap<string, LocalBonePose>,
+    resolved: ReadonlyMap<string, BoneWorldTransform>
+  ): BoneWorldTransform | null {
+    const local = locals.get(bone.id);
+    if (!local) return null;
+
+    let worldX = local.localX;
+    let worldY = local.localY;
+    let worldRotationDeg = local.rotationDeg;
+    let worldScaleX = local.scaleX;
+    let worldScaleY = local.scaleY;
+
+    if (bone.parentId) {
+      const parent = resolved.get(bone.parentId);
+      if (parent) {
+        const pRad = (parent.worldRotationDeg * Math.PI) / 180;
+        const cos = Math.cos(pRad);
+        const sin = Math.sin(pRad);
+        const sx = local.localX * parent.worldScaleX;
+        const sy = local.localY * parent.worldScaleY;
+        worldX = parent.x + sx * cos - sy * sin;
+        worldY = parent.y + sx * sin + sy * cos;
+        worldRotationDeg = normalizeAngleDeg(
+          parent.worldRotationDeg + local.rotationDeg
+        );
+        worldScaleX = parent.worldScaleX * local.scaleX;
+        worldScaleY = parent.worldScaleY * local.scaleY;
+      }
+    }
+
+    const wRad = (worldRotationDeg * Math.PI) / 180;
+    const tipX = worldX + Math.cos(wRad) * bone.length * worldScaleX;
+    const tipY = worldY + Math.sin(wRad) * bone.length * worldScaleX;
+
+    return {
+      id: bone.id,
+      x: worldX,
+      y: worldY,
+      tipX,
+      tipY,
+      worldRotationDeg,
+      length: bone.length,
+      worldScaleX,
+      worldScaleY,
+    };
+  }
+
+  private buildChildrenMap(): Map<string, string[]> {
+    const children = new Map<string, string[]>();
+    for (const bone of this.bones) {
+      if (!bone.parentId) continue;
+      const list = children.get(bone.parentId) ?? [];
+      list.push(bone.id);
+      children.set(bone.parentId, list);
+    }
+    return children;
+  }
+
+  private recomputeSubtree(
+    result: Map<string, BoneWorldTransform>,
+    locals: ReadonlyMap<string, LocalBonePose>,
+    rootId: string,
+    childrenByParent: ReadonlyMap<string, string[]>
+  ): void {
+    const byId = new Map(this.bones.map((b) => [b.id, b]));
+    const stack = [rootId];
+    const visited = new Set<string>();
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (id === undefined || visited.has(id)) continue;
+      visited.add(id);
+      const bone = byId.get(id);
+      if (!bone) continue;
+      const transform = this.computeWorldTransform(bone, locals, result);
+      if (transform) result.set(id, transform);
+      const children = childrenByParent.get(id);
+      if (children) {
+        for (const child of children) stack.push(child);
+      }
+    }
+  }
+
+  private findBone(boneId: string): Bone | undefined {
+    return this.bones.find((bone) => bone.id === boneId);
+  }
+
+  private blendLocalRotation(
+    locals: Map<string, LocalBonePose>,
+    boneId: string,
+    proposedDeg: number,
+    mix: number
+  ): void {
+    const local = locals.get(boneId);
+    if (!local) return;
+    local.rotationDeg = lerpAngleDeg(
+      local.rotationDeg,
+      normalizeAngleDeg(proposedDeg),
+      clamp01(mix)
+    );
+  }
+
+  private aimBone(
+    boneId: string,
+    targetX: number,
+    targetY: number,
+    offsetDeg: number,
+    mix: number,
+    locals: Map<string, LocalBonePose>,
+    transforms: ReadonlyMap<string, BoneWorldTransform>
+  ): string[] {
+    const bone = this.findBone(boneId);
+    const transform = transforms.get(boneId);
+    if (!bone || !transform) return [];
+    const parentDeg = bone.parentId
+      ? transforms.get(bone.parentId)?.worldRotationDeg ?? 0
+      : 0;
+    const desiredWorldDeg =
+      (Math.atan2(targetY - transform.y, targetX - transform.x) * 180) /
+        Math.PI +
+      offsetDeg;
+    this.blendLocalRotation(
+      locals,
+      boneId,
+      normalizeAngleDeg(desiredWorldDeg - parentDeg),
+      mix
+    );
+    return [boneId];
+  }
+
+  private springAngleAt(
+    constraint: Extract<RigConstraint, { type: "spring" }>,
+    frame: number
+  ): number {
+    const clip = this.getActiveClip();
+    const cacheKey = `${clip.id}::${constraint.id}::${this.revision}`;
+    let trajectory = this.springCache.get(cacheKey);
+    if (!trajectory) {
+      trajectory = [];
+      if (this.springCache.size >= 256) this.springCache.clear();
+      this.springCache.set(cacheKey, trajectory);
+    }
+
+    const targetFrame = Math.max(0, Math.floor(frame));
+    if (trajectory.length === 0) {
+      trajectory.push(
+        this.getBonePoseAtFrame(constraint.boneId, 0, false).rotationDeg
+      );
+    }
+
+    const stiffness =
+      Number.isFinite(constraint.stiffness) && constraint.stiffness >= 0
+        ? constraint.stiffness
+        : 0.25;
+    const damping =
+      Number.isFinite(constraint.damping) && constraint.damping >= 0
+        ? constraint.damping
+        : 0.18;
+    const gravity = Number.isFinite(constraint.gravity)
+      ? constraint.gravity
+      : 0;
+
+    for (let f = trajectory.length; f <= targetFrame; f++) {
+      const previous = trajectory[f - 1];
+      const velocity = f >= 2 ? previous - trajectory[f - 2] : 0;
+      const target = this.getBonePoseAtFrame(
+        constraint.boneId,
+        f,
+        false
+      ).rotationDeg;
+      const acceleration =
+        -stiffness * normalizeAngleDeg(previous - target) -
+        damping * velocity +
+        gravity;
+      trajectory.push(previous + velocity + acceleration);
+    }
+
+    return normalizeAngleDeg(trajectory[targetFrame]);
+  }
+
+  private applyConstraint(
+    constraint: RigConstraint,
+    frame: number,
+    mix: number,
+    locals: Map<string, LocalBonePose>,
+    transforms: ReadonlyMap<string, BoneWorldTransform>
+  ): string[] {
+    switch (constraint.type) {
+      case "ik": {
+        const chain = constraint.boneIds.filter((id) =>
+          this.bones.some((bone) => bone.id === id)
+        );
+        if (chain.length === 0) return [];
+        const target = this.getConstraintTargetAtFrame(constraint.id, frame);
+        if (!target) return [];
+        if (chain.length === 1) {
+          return this.aimBone(
+            chain[0],
+            target.x,
+            target.y,
+            0,
+            mix,
+            locals,
+            transforms
+          );
+        }
+
+        // R0 fast path: solve the last two bones of the chain. R3 replaces
+        // this with FABRIK for arbitrary chain lengths.
+        const childId = chain[chain.length - 1];
+        const rootId = chain[chain.length - 2];
+        const rootBone = this.findBone(rootId);
+        const childBone = this.findBone(childId);
+        const rootWorld = transforms.get(rootId);
+        if (!rootBone || !childBone || !rootWorld) return [];
+        if (childBone.parentId !== rootId) {
+          return this.aimBone(
+            childId,
+            target.x,
+            target.y,
+            0,
+            mix,
+            locals,
+            transforms
+          );
+        }
+
+        const grandParentDeg = rootBone.parentId
+          ? transforms.get(rootBone.parentId)?.worldRotationDeg ?? 0
+          : 0;
+        const solved = solveTwoBoneIK(
+          rootWorld.x,
+          rootWorld.y,
+          rootBone.length,
+          childBone.length,
+          target.x,
+          target.y,
+          constraint.bendSign
+        );
+        this.blendLocalRotation(
+          locals,
+          rootId,
+          normalizeAngleDeg(solved.rootWorldDeg - grandParentDeg),
+          mix
+        );
+        this.blendLocalRotation(locals, childId, solved.childLocalDeg, mix);
+        return [rootId, childId];
+      }
+
+      case "aim": {
+        const target = this.getConstraintTargetAtFrame(constraint.id, frame);
+        if (!target) return [];
+        return this.aimBone(
+          constraint.boneId,
+          target.x,
+          target.y,
+          constraint.offsetDeg,
+          mix,
+          locals,
+          transforms
+        );
+      }
+
+      case "copyRotation": {
+        const bone = this.findBone(constraint.boneId);
+        const source = transforms.get(constraint.sourceBoneId);
+        if (!bone || !source) return [];
+        const parentDeg = bone.parentId
+          ? transforms.get(bone.parentId)?.worldRotationDeg ?? 0
+          : 0;
+        this.blendLocalRotation(
+          locals,
+          constraint.boneId,
+          normalizeAngleDeg(source.worldRotationDeg - parentDeg),
+          mix
+        );
+        return [constraint.boneId];
+      }
+
+      case "copyTransform": {
+        const bone = this.findBone(constraint.boneId);
+        const source = transforms.get(constraint.sourceBoneId);
+        const local = locals.get(constraint.boneId);
+        if (!bone || !source || !local) return [];
+        const parent = bone.parentId ? transforms.get(bone.parentId) : undefined;
+        const blend = clamp01(mix);
+
+        let desiredX = source.x;
+        let desiredY = source.y;
+        let desiredRotation = source.worldRotationDeg;
+        let desiredScaleX = source.worldScaleX;
+        let desiredScaleY = source.worldScaleY;
+
+        if (parent) {
+          const pRad = (parent.worldRotationDeg * Math.PI) / 180;
+          const cos = Math.cos(pRad);
+          const sin = Math.sin(pRad);
+          const dx = source.x - parent.x;
+          const dy = source.y - parent.y;
+          const parentScaleX = Math.abs(parent.worldScaleX) < 1e-6
+            ? 1
+            : parent.worldScaleX;
+          const parentScaleY = Math.abs(parent.worldScaleY) < 1e-6
+            ? 1
+            : parent.worldScaleY;
+          desiredX = (dx * cos + dy * sin) / parentScaleX;
+          desiredY = (-dx * sin + dy * cos) / parentScaleY;
+          desiredRotation = normalizeAngleDeg(
+            source.worldRotationDeg - parent.worldRotationDeg
+          );
+          desiredScaleX = source.worldScaleX / parentScaleX;
+          desiredScaleY = source.worldScaleY / parentScaleY;
+        }
+
+        local.localX = lerp(local.localX, desiredX, blend);
+        local.localY = lerp(local.localY, desiredY, blend);
+        local.scaleX = lerp(local.scaleX, desiredScaleX, blend);
+        local.scaleY = lerp(local.scaleY, desiredScaleY, blend);
+        this.blendLocalRotation(locals, constraint.boneId, desiredRotation, blend);
+        return [constraint.boneId];
+      }
+
+      case "spring": {
+        const bone = this.findBone(constraint.boneId);
+        if (!bone) return [];
+        this.blendLocalRotation(
+          locals,
+          constraint.boneId,
+          this.springAngleAt(constraint, frame),
+          mix
+        );
+        return [constraint.boneId];
+      }
+    }
+  }
+
+  /** Target of a keyable IK/aim constraint at `frame`, or null. */
+  getConstraintTargetAtFrame(
+    constraintId: string,
+    frame: number
+  ): { x: number; y: number } | null {
+    const constraint = this.constraints.find((c) => c.id === constraintId);
+    if (!constraint) return null;
+    if (constraint.type !== "ik" && constraint.type !== "aim") return null;
+    const track = this.getActiveClip().constraintTracks?.[constraintId];
+    return sampleConstraintTrack(
+      track,
+      frame,
+      constraint.targetX,
+      constraint.targetY
+    );
+  }
+
+  /**
+   * Deterministic full evaluation: local pose (override ?? clip), FK with
+   * scale, enabled constraints in list order, rotation limits after each
+   * constraint. `computeWorldTransforms(frame, "pose")` wraps this method.
+   */
+  evaluate(
+    frame: number,
+    opts: RigEvaluateOptions = {}
+  ): Map<string, BoneWorldTransform> {
+    const useOverrides = opts.useOverrides ?? true;
+    const applyConstraints = opts.applyConstraints ?? true;
+
+    const locals = new Map<string, LocalBonePose>();
+    for (const bone of this.bones) {
+      const pose = this.getBonePoseAtFrame(bone.id, frame, useOverrides);
+      locals.set(bone.id, {
+        localX: pose.localX,
+        localY: pose.localY,
+        rotationDeg: pose.rotationDeg,
+        scaleX: pose.scaleX,
+        scaleY: pose.scaleY,
+      });
+    }
+
+    const result = this.computeFk(locals);
+    if (!applyConstraints || this.constraints.length === 0) {
+      return result;
+    }
+
+    const childrenByParent = this.buildChildrenMap();
+    for (const constraint of this.constraints) {
+      if (constraint.enabled === false) continue;
+      const mix = Number.isFinite(constraint.mix)
+        ? clamp01(constraint.mix)
+        : 1;
+      if (mix <= 0) continue;
+
+      const affected = this.applyConstraint(
+        constraint,
+        frame,
+        mix,
+        locals,
+        result
+      );
+      for (const boneId of affected) {
+        const bone = this.findBone(boneId);
+        const local = locals.get(boneId);
+        if (!bone || !local) continue;
+        local.rotationDeg = clampLocalAngle(bone, local.rotationDeg);
+        this.recomputeSubtree(result, locals, boneId, childrenByParent);
+      }
+    }
+
+    return result;
+  }
+
+  computeWorldTransforms(
+    frame: number,
+    mode: "rest" | "pose",
+    useOverrides = true
+  ): Map<string, BoneWorldTransform> {
+    if (mode === "rest") {
+      const locals = new Map<string, LocalBonePose>();
+      for (const bone of this.bones) {
+        const bind = bindPoseOf(bone);
+        locals.set(bone.id, {
+          localX: bind.localX,
+          localY: bind.localY,
+          rotationDeg: bind.rotationDeg,
+          scaleX: bind.scaleX,
+          scaleY: bind.scaleY,
+        });
+      }
+      return this.computeFk(locals);
+    }
+    return this.evaluate(frame, { useOverrides });
   }
 
   setPoseOverride(
@@ -656,17 +1506,25 @@ export class RigState {
         patch.rotationDeg !== undefined
           ? normalizeAngleDeg(patch.rotationDeg)
           : current.rotationDeg,
+      scaleX: patch.scaleX ?? current.scaleX,
+      scaleY: patch.scaleY ?? current.scaleY,
+      attachment:
+        patch.attachment !== undefined ? patch.attachment : current.attachment,
     });
+    this.invalidateEvaluation();
   }
 
   clearPoseOverrides(): void {
+    if (this.currentPoseOverrides.size === 0) return;
     this.currentPoseOverrides.clear();
+    this.invalidateEvaluation();
   }
 
   setKeyframe(
     boneId: string,
     frame: number,
-    easing: EasingMode = "linear"
+    easing: EasingMode = "linear",
+    curve?: CubicBezierHandles
   ): void {
     const pose = this.getBonePoseAtFrame(boneId, frame, true);
     const clip = this.getActiveClip();
@@ -680,7 +1538,11 @@ export class RigState {
       localX: pose.localX,
       localY: pose.localY,
       easing,
+      scaleX: pose.scaleX,
+      scaleY: pose.scaleY,
+      attachment: pose.attachment,
     };
+    if (curve) nextKey.curve = curve;
 
     const existingIdx = track.findIndex((k) => k.frame === frame);
     if (existingIdx >= 0) {
@@ -692,6 +1554,7 @@ export class RigState {
     if (frame + 1 > clip.frameCount) {
       clip.frameCount = frame + 1;
     }
+    this.invalidateEvaluation();
   }
 
   deleteKeyframe(boneId: string, frame: number): void {
@@ -699,6 +1562,7 @@ export class RigState {
     const track = clip.tracks[boneId];
     if (!track) return;
     clip.tracks[boneId] = track.filter((k) => k.frame !== frame);
+    this.invalidateEvaluation();
   }
 
   hasKeyframe(boneId: string, frame: number): boolean {
@@ -790,6 +1654,7 @@ export class RigState {
       { frame: 2, rotationDeg: 0, localX: segLen, localY: 0, easing: "easeInOut" },
       { frame: 3, rotationDeg: -8, localX: segLen, localY: 0, easing: "easeInOut" },
     ];
+    this.invalidateEvaluation();
 
     return root;
   }
@@ -824,20 +1689,55 @@ export class RigState {
       }
     }
 
+    const weights = this.getBoneWeights();
+
     return {
+      version: RIG_SNAPSHOT_VERSION,
       bones: this.bones.map((b) => ({ ...b })),
-      clips: this.clips.map((c) => ({
-        id: c.id,
-        name: c.name,
-        frameCount: c.frameCount,
-        tracks: Object.fromEntries(
-          Object.entries(c.tracks).map(([k, arr]) => [
-            k,
-            arr.map((kf) => ({ ...kf })),
+      clips: this.clips.map((c) => {
+        const clip: RigClip = {
+          id: c.id,
+          name: c.name,
+          frameCount: c.frameCount,
+          tracks: Object.fromEntries(
+            Object.entries(c.tracks).map(([k, arr]) => [
+              k,
+              arr.map((kf) => ({ ...kf })),
+            ])
+          ),
+        };
+        if (c.constraintTracks) {
+          clip.constraintTracks = Object.fromEntries(
+            Object.entries(c.constraintTracks).map(([k, arr]) => [
+              k,
+              arr.map((kf) => ({ ...kf })),
+            ])
+          );
+        }
+        if (c.loop !== undefined) clip.loop = c.loop;
+        return clip;
+      }),
+      activeClipId: this.activeClipId,
+      constraints: this.constraints.map(cloneConstraint),
+      slots: this.slots.map((slot) => ({
+        ...slot,
+        attachments: Object.fromEntries(
+          Object.entries(slot.attachments).map(([key, attachment]) => [
+            key,
+            { ...attachment },
           ])
         ),
       })),
-      activeClipId: this.activeClipId,
+      poses: this.poses.map((pose) => ({
+        ...pose,
+        bones: Object.fromEntries(
+          Object.entries(pose.bones).map(([boneId, bonePose]) => [
+            boneId,
+            { ...bonePose },
+          ])
+        ),
+      })),
+      weights: weights ? serializeBoneWeights(weights) : null,
       masks,
     };
   }
@@ -845,10 +1745,10 @@ export class RigState {
   fromSnapshot(snap: unknown): void {
     this.reset();
     if (!snap || typeof snap !== "object") return;
-    const raw = snap as Partial<RigSnapshot>;
+    const raw = snap as Record<string, unknown>;
 
     if (Array.isArray(raw.bones)) {
-      this.bones = raw.bones.map((b) => ({ ...b }));
+      this.bones = (raw.bones as Bone[]).map((b) => ({ ...b }));
       let maxNum = this.bones.length;
       for (const b of this.bones) {
         const m = /(\d+)$/.exec(b.id);
@@ -860,17 +1760,29 @@ export class RigState {
     }
 
     if (Array.isArray(raw.clips) && raw.clips.length > 0) {
-      this.clips = raw.clips.map((c) => ({
-        id: c.id,
-        name: c.name,
-        frameCount: Math.max(1, c.frameCount ?? 4),
-        tracks: Object.fromEntries(
-          Object.entries(c.tracks ?? {}).map(([k, arr]) => [
-            k,
-            Array.isArray(arr) ? arr.map((kf) => ({ ...kf })) : [],
-          ])
-        ),
-      }));
+      this.clips = (raw.clips as RigClip[]).map((c) => {
+        const clip: RigClip = {
+          id: c.id,
+          name: c.name,
+          frameCount: Math.max(1, c.frameCount ?? 4),
+          tracks: Object.fromEntries(
+            Object.entries(c.tracks ?? {}).map(([k, arr]) => [
+              k,
+              Array.isArray(arr) ? arr.map((kf) => ({ ...kf })) : [],
+            ])
+          ),
+        };
+        if (c.constraintTracks && typeof c.constraintTracks === "object") {
+          clip.constraintTracks = Object.fromEntries(
+            Object.entries(c.constraintTracks).map(([k, arr]) => [
+              k,
+              Array.isArray(arr) ? arr.map((kf) => ({ ...kf })) : [],
+            ])
+          );
+        }
+        if (typeof c.loop === "boolean") clip.loop = c.loop;
+        return clip;
+      });
     }
 
     if (
@@ -880,6 +1792,45 @@ export class RigState {
       this.activeClipId = raw.activeClipId;
     } else {
       this.activeClipId = this.clips[0].id;
+    }
+
+    if (Array.isArray(raw.constraints)) {
+      this.constraints = (raw.constraints as RigConstraint[])
+        .filter(
+          (constraint) =>
+            isRecord(constraint) &&
+            typeof constraint.id === "string" &&
+            typeof constraint.type === "string"
+        )
+        .map(cloneConstraint);
+    }
+
+    if (Array.isArray(raw.slots)) {
+      this.slots = (raw.slots as RigSlot[])
+        .filter((slot) => isRecord(slot) && typeof slot.id === "string")
+        .map((slot) => ({
+          ...slot,
+          attachments: Object.fromEntries(
+            Object.entries(slot.attachments ?? {}).map(([key, attachment]) => [
+              key,
+              { ...attachment },
+            ])
+          ),
+        }));
+    }
+
+    if (Array.isArray(raw.poses)) {
+      this.poses = (raw.poses as RigPose[])
+        .filter((pose) => isRecord(pose) && typeof pose.id === "string")
+        .map((pose) => ({
+          ...pose,
+          bones: Object.fromEntries(
+            Object.entries(pose.bones ?? {}).map(([boneId, bonePose]) => [
+              boneId,
+              { ...bonePose },
+            ])
+          ),
+        }));
     }
 
     if (Array.isArray(raw.masks)) {
@@ -909,6 +1860,67 @@ export class RigState {
         });
       }
     }
+
+    const weights = parseBoneWeights(raw.weights);
+    if (weights) {
+      this.cachedWeights = weights;
+      this.cachedWeightsRevision = this.revision;
+      if (this.boneMasks.size === 0) {
+        this.boneMasks = masksFromBoneWeights(weights);
+      }
+    }
+  }
+}
+
+function masksFromBoneWeights(weights: BoneWeights): Map<string, BoneMask> {
+  const masks = new Map<string, BoneMask>();
+  const pixelCount = weights.width * weights.height;
+  for (const [index, influences] of weights.entries) {
+    if (index < 0 || index >= pixelCount) continue;
+    for (const influence of influences) {
+      if (influence.w < 0.5) continue;
+      let mask = masks.get(influence.boneId);
+      if (!mask) {
+        mask = {
+          width: weights.width,
+          height: weights.height,
+          data: new Uint8Array(pixelCount),
+        };
+        masks.set(influence.boneId, mask);
+      }
+      mask.data[index] = 1;
+    }
+  }
+  return masks;
+}
+
+function cloneConstraint(constraint: RigConstraint): RigConstraint {
+  switch (constraint.type) {
+    case "ik":
+      return { ...constraint, boneIds: [...constraint.boneIds] };
+    case "aim":
+      return { ...constraint };
+    case "copyRotation":
+    case "copyTransform":
+      return { ...constraint };
+    case "spring":
+      return { ...constraint };
+  }
+}
+
+function constraintReferencesBone(
+  constraint: RigConstraint,
+  boneId: string
+): boolean {
+  switch (constraint.type) {
+    case "ik":
+      return constraint.boneIds.includes(boneId);
+    case "aim":
+    case "spring":
+      return constraint.boneId === boneId;
+    case "copyRotation":
+    case "copyTransform":
+      return constraint.boneId === boneId || constraint.sourceBoneId === boneId;
   }
 }
 

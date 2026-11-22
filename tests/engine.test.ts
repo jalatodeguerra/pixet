@@ -49,12 +49,17 @@ import {
   renderSpriteStack,
 } from "../src/engine/tools/rotate3d.ts";
 import {
+  cubicBezierEase,
+  evaluateEasing,
   lerpAngleDeg,
+  masksToBoneWeights,
   renderBoneInfluenceOverlay,
   RigState,
   solveTwoBoneIK,
   warpLayerByBone,
+  type RigConstraint,
 } from "../src/engine/rig/RigEngine.ts";
+import { RigHistory } from "../src/engine/rig/RigHistory.ts";
 import {
   extractPaletteFromBuffer,
   isSupportedImageFile,
@@ -1098,6 +1103,603 @@ test("RigState.toSnapshot and fromSnapshot round-trip bones, keyframes, and bone
     rotationDeg: 45,
   });
   assert.equal(extra.id, "bone-3");
+});
+
+test("evaluateEasing supports easeIn/easeOut/step and cubic bezier curves", () => {
+  assert.equal(evaluateEasing(0.5, "step"), 0);
+  assert.equal(evaluateEasing(1, "step"), 1);
+  assert.ok(Math.abs(evaluateEasing(0.5, "easeIn") - 0.25) < 1e-9);
+  assert.ok(Math.abs(evaluateEasing(0.5, "easeOut") - 0.75) < 1e-9);
+  assert.ok(Math.abs(evaluateEasing(0.5, "easeInOut") - 0.5) < 1e-9);
+
+  assert.equal(cubicBezierEase(0), 0);
+  assert.equal(cubicBezierEase(1), 1);
+  assert.ok(Math.abs(cubicBezierEase(0.5, [0, 0, 1, 1]) - 0.5) < 1e-6);
+  let previous = 0;
+  for (let i = 0; i <= 20; i++) {
+    const value = cubicBezierEase(i / 20, [0.42, 0, 0.58, 1]);
+    assert.ok(value >= previous - 1e-9);
+    previous = value;
+  }
+  assert.ok(Math.abs(evaluateEasing(0.5, "bezier", [0, 0, 1, 1]) - 0.5) < 1e-6);
+});
+
+test("masksToBoneWeights migrates hard masks and caps influences at four", () => {
+  assert.equal(masksToBoneWeights(new Map()), null);
+
+  const masks = new Map<string, { width: number; height: number; data: Uint8Array }>();
+  for (let i = 0; i < 6; i++) {
+    const data = new Uint8Array(16);
+    data[0] = 1;
+    masks.set(`bone-${i + 1}`, { width: 4, height: 4, data });
+  }
+  const weights = masksToBoneWeights(masks);
+  assert.ok(weights);
+  assert.equal(weights.width, 4);
+  assert.equal(weights.height, 4);
+  assert.equal(weights.entries.get(0)?.length, 4);
+  assert.ok(weights.entries.get(0)?.every((influence) => influence.w === 1));
+});
+
+test("RigState migrates v1 snapshots to v2 with hard weights and keeps masks", () => {
+  const rig = new RigState();
+  rig.fromSnapshot({
+    bones: [
+      {
+        id: "bone-1",
+        name: "Root",
+        parentId: null,
+        localX: 4,
+        localY: 4,
+        length: 6,
+        rotationDeg: 0,
+        boundLayerId: null,
+      },
+      {
+        id: "bone-2",
+        name: "Tip",
+        parentId: "bone-1",
+        localX: 6,
+        localY: 0,
+        length: 4,
+        rotationDeg: 15,
+        boundLayerId: null,
+      },
+    ],
+    clips: [{ id: "clip-idle", name: "idle", frameCount: 4, tracks: {} }],
+    activeClipId: "clip-idle",
+    // no version field: legacy v1 payload
+    masks: [
+      { boneId: "bone-1", width: 8, height: 8, indices: [0, 1] },
+      { boneId: "bone-2", width: 8, height: 8, indices: [1, 2] },
+    ],
+  });
+
+  assert.equal(rig.bones.length, 2);
+  assert.equal(rig.getBoneMask("bone-1")?.data[1], 1);
+  assert.equal(rig.getBoneMask("bone-2")?.data[2], 1);
+
+  const snap = rig.toSnapshot();
+  assert.equal(snap.version, 2);
+  assert.deepEqual(snap.constraints, []);
+  assert.deepEqual(snap.slots, []);
+  assert.deepEqual(snap.poses, []);
+  assert.ok(snap.weights);
+  assert.equal(snap.weights.width, 8);
+  assert.equal(snap.weights.height, 8);
+  assert.deepEqual(
+    snap.weights.entries.find((entry) => entry.i === 1)?.b,
+    [
+      ["bone-1", 1],
+      ["bone-2", 1],
+    ]
+  );
+
+  const weights = rig.getBoneWeights();
+  assert.equal(weights?.entries.get(0)?.[0]?.boneId, "bone-1");
+  assert.equal(weights?.entries.get(0)?.[0]?.w, 1);
+
+  const restored = new RigState();
+  restored.fromSnapshot(JSON.parse(JSON.stringify(snap)));
+  assert.equal(restored.getBoneMask("bone-2")?.data[2], 1);
+  assert.equal(restored.getBoneWeights()?.entries.get(0)?.[0]?.w, 1);
+});
+
+test("RigState forward kinematics includes scale in tips and child joints", () => {
+  const rig = new RigState();
+  const root = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 0,
+    localY: 0,
+    length: 10,
+    rotationDeg: 0,
+    scaleX: 2,
+    scaleY: 1,
+  });
+  const child = rig.addBone({
+    name: "Child",
+    parentId: root.id,
+    localX: 10,
+    localY: 0,
+    length: 5,
+    rotationDeg: 0,
+  });
+
+  const world = rig.computeWorldTransforms(0, "pose", false);
+  const rootWorld = world.get(root.id)!;
+  const childWorld = world.get(child.id)!;
+  assert.ok(Math.abs(rootWorld.tipX - 20) < 1e-6);
+  assert.equal(rootWorld.worldScaleX, 2);
+  assert.ok(Math.abs(childWorld.x - 20) < 1e-6);
+  assert.equal(childWorld.worldScaleX, 2);
+  assert.ok(Math.abs(childWorld.tipX - 30) < 1e-6);
+
+  // Keyframed scale interpolates and rest poses keep the bind scale
+  rig.setPoseOverride(root.id, { scaleX: 1, attachment: "closed" }, 0);
+  rig.setKeyframe(root.id, 0);
+  rig.setPoseOverride(root.id, { scaleX: 3, attachment: "open" }, 2);
+  rig.setKeyframe(root.id, 2);
+  rig.clearPoseOverrides();
+  const midway = rig.getBonePoseAtFrame(root.id, 1, false);
+  assert.ok(Math.abs(midway.scaleX - 2) < 1e-6);
+  assert.equal(midway.attachment, "closed");
+  assert.equal(rig.getBonePoseAtFrame(root.id, 2, false).attachment, "open");
+  assert.equal(rig.computeWorldTransforms(2, "rest", false).get(root.id)?.worldScaleX, 2);
+});
+
+test("RigState.evaluate matches computeWorldTransforms for unconstrained rigs", () => {
+  const rig = new RigState();
+  const root = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 5,
+    localY: 5,
+    length: 8,
+    rotationDeg: 10,
+  });
+  const child = rig.addBone({
+    name: "Child",
+    parentId: root.id,
+    localX: 8,
+    localY: 0,
+    length: 6,
+    rotationDeg: -20,
+  });
+  rig.addBone({
+    name: "Grand",
+    parentId: child.id,
+    localX: 6,
+    localY: 0,
+    length: 4,
+    rotationDeg: 30,
+  });
+
+  rig.setPoseOverride(root.id, { rotationDeg: -10, scaleX: 1.5 }, 0);
+  rig.setKeyframe(root.id, 0, "linear");
+  rig.setPoseOverride(root.id, { rotationDeg: 20, scaleX: 2 }, 4);
+  rig.setKeyframe(root.id, 4, "easeInOut");
+  rig.setPoseOverride(child.id, { localX: 9, rotationDeg: 15 }, 2);
+  rig.clearPoseOverrides();
+
+  for (let frame = 0; frame <= 4; frame++) {
+    for (const useOverrides of [true, false]) {
+      const evaluated = rig.evaluate(frame, { useOverrides });
+      const wrapped = rig.computeWorldTransforms(frame, "pose", useOverrides);
+      assert.equal(evaluated.size, wrapped.size);
+      for (const [boneId, expected] of wrapped.entries()) {
+        const actual = evaluated.get(boneId);
+        assert.ok(actual);
+        assert.ok(Math.abs(actual.x - expected.x) < 1e-9);
+        assert.ok(Math.abs(actual.y - expected.y) < 1e-9);
+        assert.ok(Math.abs(actual.tipX - expected.tipX) < 1e-9);
+        assert.ok(Math.abs(actual.tipY - expected.tipY) < 1e-9);
+        assert.ok(
+          Math.abs(actual.worldRotationDeg - expected.worldRotationDeg) < 1e-9
+        );
+        assert.ok(Math.abs(actual.worldScaleX - expected.worldScaleX) < 1e-9);
+        assert.ok(Math.abs(actual.worldScaleY - expected.worldScaleY) < 1e-9);
+      }
+    }
+  }
+
+  // Linear keyframe segment: -10 deg at F0 -> 20 deg at F4, so F2 is 5 deg.
+  const mid = rig.evaluate(2).get(root.id)!;
+  assert.ok(Math.abs(mid.worldRotationDeg - 5) < 1e-6);
+  // Rest is pure bind FK and ignores pose overrides/keyframes.
+  const rest = rig.computeWorldTransforms(4, "rest", false).get(root.id)!;
+  assert.equal(rest.worldRotationDeg, root.rotationDeg);
+  assert.equal(rest.worldScaleX, 1);
+});
+
+test("RigState.evaluate applies aim, copyRotation, copyTransform and rotation limits", () => {
+  const rig = new RigState();
+  const target = rig.addBone({
+    name: "Aim",
+    parentId: null,
+    localX: 0,
+    localY: 0,
+    length: 10,
+    rotationDeg: 0,
+  });
+
+  const aim: RigConstraint = {
+    id: "aim-1",
+    type: "aim",
+    name: "Aim",
+    enabled: true,
+    boneId: target.id,
+    targetX: 0,
+    targetY: 10,
+    offsetDeg: 0,
+    mix: 1,
+  };
+  rig.constraints = [aim];
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(target.id)!.worldRotationDeg - 90) < 1e-6
+  );
+  assert.ok(
+    Math.abs(
+      rig.evaluate(0, { applyConstraints: false }).get(target.id)!
+        .worldRotationDeg - 0
+    ) < 1e-6
+  );
+  rig.constraints = [{ ...aim, mix: 0.5 }];
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(target.id)!.worldRotationDeg - 45) < 1e-6
+  );
+  rig.constraints = [{ ...aim, enabled: false }];
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(target.id)!.worldRotationDeg - 0) < 1e-6
+  );
+
+  const limited = rig.addBone({
+    name: "Limited",
+    parentId: null,
+    localX: 0,
+    localY: 0,
+    length: 10,
+    rotationDeg: 0,
+    maxAngleDeg: 45,
+  });
+  rig.constraints = [{ ...aim, id: "aim-limited", boneId: limited.id }];
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(limited.id)!.worldRotationDeg - 45) < 1e-6
+  );
+
+  const source = rig.addBone({
+    name: "Source",
+    parentId: null,
+    localX: 20,
+    localY: 20,
+    length: 5,
+    rotationDeg: 30,
+  });
+  const copyRotation: RigConstraint = {
+    id: "copy-rot",
+    type: "copyRotation",
+    name: "Copy Rotation",
+    enabled: true,
+    boneId: target.id,
+    sourceBoneId: source.id,
+    mix: 1,
+  };
+  rig.constraints = [copyRotation];
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(target.id)!.worldRotationDeg - 30) < 1e-6
+  );
+
+  const transformSource = rig.addBone({
+    name: "TransformSource",
+    parentId: null,
+    localX: 7,
+    localY: 3,
+    length: 5,
+    rotationDeg: 20,
+    scaleX: 2,
+    scaleY: 3,
+  });
+  const transformTarget = rig.addBone({
+    name: "TransformTarget",
+    parentId: null,
+    localX: 0,
+    localY: 0,
+    length: 5,
+    rotationDeg: 0,
+  });
+  const copyTransform: RigConstraint = {
+    id: "copy-xf",
+    type: "copyTransform",
+    name: "Copy Transform",
+    enabled: true,
+    boneId: transformTarget.id,
+    sourceBoneId: transformSource.id,
+    mix: 1,
+  };
+  rig.constraints = [copyTransform];
+  const copied = rig.evaluate(0).get(transformTarget.id)!;
+  assert.ok(Math.abs(copied.x - 7) < 1e-9);
+  assert.ok(Math.abs(copied.y - 3) < 1e-9);
+  assert.ok(Math.abs(copied.worldRotationDeg - 20) < 1e-9);
+  assert.ok(Math.abs(copied.worldScaleX - 2) < 1e-9);
+  assert.ok(Math.abs(copied.worldScaleY - 3) < 1e-9);
+
+  rig.constraints = [{ ...copyTransform, mix: 0.5 }];
+  const halfCopied = rig.evaluate(0).get(transformTarget.id)!;
+  assert.ok(Math.abs(halfCopied.x - 3.5) < 1e-9);
+  assert.ok(Math.abs(halfCopied.worldRotationDeg - 10) < 1e-9);
+  assert.ok(Math.abs(halfCopied.worldScaleX - 1.5) < 1e-9);
+
+  // Constraints run in list order: the last one wins at mix = 1.
+  rig.constraints = [copyRotation, aim];
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(target.id)!.worldRotationDeg - 90) < 1e-6
+  );
+  rig.constraints = [aim, copyRotation];
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(target.id)!.worldRotationDeg - 30) < 1e-6
+  );
+});
+
+test("RigState IK constraint reaches a reachable target and keyed targets interpolate", () => {
+  const rig = new RigState();
+  const root = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 0,
+    localY: 0,
+    length: 10,
+    rotationDeg: 0,
+  });
+  const child = rig.addBone({
+    name: "Child",
+    parentId: root.id,
+    localX: 10,
+    localY: 0,
+    length: 10,
+    rotationDeg: 0,
+  });
+  const ik: RigConstraint = {
+    id: "ik-1",
+    type: "ik",
+    name: "IK",
+    enabled: true,
+    boneIds: [root.id, child.id],
+    targetX: 10,
+    targetY: 10,
+    bendSign: 1,
+    mix: 1,
+  };
+  rig.constraints = [ik];
+  const solved = rig.evaluate(0).get(child.id)!;
+  assert.ok(Math.abs(solved.tipX - 10) < 0.05);
+  assert.ok(Math.abs(solved.tipY - 10) < 0.05);
+
+  const aim: RigConstraint = {
+    id: "aim-keyed",
+    type: "aim",
+    name: "Keyed Aim",
+    enabled: true,
+    boneId: root.id,
+    targetX: 0,
+    targetY: 10,
+    offsetDeg: 0,
+    mix: 1,
+  };
+  rig.constraints = [aim];
+  rig.getActiveClip().constraintTracks = {
+    "aim-keyed": [
+      { frame: 0, targetX: 0, targetY: 10, easing: "linear" },
+      { frame: 2, targetX: 10, targetY: 0, easing: "linear" },
+    ],
+  };
+  assert.deepEqual(rig.getConstraintTargetAtFrame("aim-keyed", 1), {
+    x: 5,
+    y: 5,
+  });
+  assert.ok(
+    Math.abs(rig.evaluate(1).get(root.id)!.worldRotationDeg - 45) < 1e-6
+  );
+  assert.ok(
+    Math.abs(rig.evaluate(0).get(root.id)!.worldRotationDeg - 90) < 1e-6
+  );
+  assert.equal(rig.getConstraintTargetAtFrame("missing", 0), null);
+});
+
+test("RigState spring constraint is deterministic and settles toward its target", () => {
+  const build = () => {
+    const rig = new RigState();
+    const bone = rig.addBone({
+      name: "Tail",
+      parentId: null,
+      localX: 0,
+      localY: 0,
+      length: 10,
+      rotationDeg: 0,
+    });
+    rig.setPoseOverride(bone.id, { rotationDeg: 0 }, 0);
+    rig.setKeyframe(bone.id, 0);
+    rig.setPoseOverride(bone.id, { rotationDeg: 40 }, 1);
+    rig.setKeyframe(bone.id, 1);
+    rig.clearPoseOverrides();
+    const spring: RigConstraint = {
+      id: "spring-1",
+      type: "spring",
+      name: "Spring",
+      enabled: true,
+      boneId: bone.id,
+      stiffness: 0.2,
+      damping: 0.4,
+      gravity: 0,
+      mix: 1,
+    };
+    rig.constraints = [spring];
+    return { rig, bone };
+  };
+
+  const first = build();
+  const atTwenty = first.rig.evaluate(20).get(first.bone.id)!.worldRotationDeg;
+  const again = first.rig.evaluate(20).get(first.bone.id)!.worldRotationDeg;
+  assert.equal(again, atTwenty);
+  assert.notEqual(
+    first.rig.evaluate(5).get(first.bone.id)!.worldRotationDeg,
+    atTwenty
+  );
+
+  // Scrubbing in a different order must produce the same trajectory.
+  const second = build();
+  assert.equal(
+    Math.abs(second.rig.evaluate(20).get(second.bone.id)!.worldRotationDeg - atTwenty) <
+      1e-9,
+    true
+  );
+  const settled = first.rig.evaluate(300).get(first.bone.id)!.worldRotationDeg;
+  assert.ok(Math.abs(settled - 40) < 1);
+
+  // Direct constraint edits require invalidating the per-version cache.
+  const atFive = first.rig.evaluate(5).get(first.bone.id)!.worldRotationDeg;
+  const cachedSpring = first.rig.constraints[0];
+  if (cachedSpring.type === "spring") {
+    cachedSpring.stiffness = 0.05;
+  }
+  first.rig.invalidateEvaluation();
+  assert.notEqual(
+    first.rig.evaluate(5).get(first.bone.id)!.worldRotationDeg,
+    atFive
+  );
+});
+
+test("RigState v2 snapshot round-trips constraints, slots, poses and clip metadata", () => {
+  const rig = new RigState();
+  const root = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 4,
+    localY: 4,
+    length: 6,
+    rotationDeg: 0,
+  });
+  const aim: RigConstraint = {
+    id: "aim-1",
+    type: "aim",
+    name: "Aim",
+    enabled: true,
+    boneId: root.id,
+    targetX: 0,
+    targetY: 10,
+    offsetDeg: 0,
+    mix: 1,
+  };
+  rig.constraints = [aim];
+  rig.slots = [
+    {
+      id: "slot-hand",
+      name: "Hand",
+      boneId: root.id,
+      layerId: "layer-hand",
+      attachments: { open: { layerId: "layer-hand", frame: 2 } },
+      defaultAttachment: "open",
+    },
+  ];
+  rig.poses = [
+    {
+      id: "pose-wave",
+      name: "Wave",
+      bones: {
+        [root.id]: {
+          rotationDeg: 12,
+          localX: 4,
+          localY: 4,
+          scaleX: 1,
+          scaleY: 1,
+        },
+      },
+    },
+  ];
+  const clip = rig.getActiveClip();
+  clip.loop = true;
+  clip.constraintTracks = {
+    "aim-1": [
+      { frame: 0, targetX: 0, targetY: 10, easing: "linear" },
+      { frame: 2, targetX: 10, targetY: 0, easing: "linear" },
+    ],
+  };
+
+  const snap = rig.toSnapshot();
+  assert.equal(snap.version, 2);
+  const restored = new RigState();
+  restored.fromSnapshot(JSON.parse(JSON.stringify(snap)));
+
+  assert.deepEqual(restored.constraints, rig.constraints);
+  assert.deepEqual(restored.slots, rig.slots);
+  assert.deepEqual(restored.poses, rig.poses);
+  assert.equal(restored.getActiveClip().loop, true);
+  assert.deepEqual(restored.getConstraintTargetAtFrame("aim-1", 1), {
+    x: 5,
+    y: 5,
+  });
+  assert.ok(
+    Math.abs(restored.evaluate(1).get(root.id)!.worldRotationDeg - 45) < 1e-6
+  );
+});
+
+test("RigHistory undo/redo round-trip, redo clearing and 100-entry cap", () => {
+  const rig = new RigState();
+  const bone = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 4,
+    localY: 4,
+    length: 6,
+    rotationDeg: 0,
+  });
+  const history = new RigHistory();
+  assert.equal(history.canUndo, false);
+  assert.equal(history.canRedo, false);
+  assert.equal(history.undo(rig), null);
+  assert.equal(history.redo(rig), null);
+
+  history.push(rig, "Rename bone");
+  rig.updateBone(bone.id, { name: "Renamed" });
+  assert.equal(history.canUndo, true);
+  assert.equal(history.undo(rig), "Rename bone");
+  assert.equal(rig.bones[0].name, "Root");
+  assert.equal(history.canRedo, true);
+  assert.equal(history.redo(rig), "Rename bone");
+  assert.equal(rig.bones[0].name, "Renamed");
+
+  history.undo(rig);
+  history.push(rig, "Add bone");
+  rig.addBone({
+    name: "Child",
+    parentId: bone.id,
+    localX: 6,
+    localY: 0,
+    length: 4,
+    rotationDeg: 0,
+  });
+  assert.equal(history.canRedo, false);
+
+  const capRig = new RigState();
+  const capBone = capRig.addBone({
+    name: "Cap",
+    parentId: null,
+    localX: 0,
+    localY: 0,
+    length: 6,
+    rotationDeg: 0,
+  });
+  const capped = new RigHistory(100);
+  for (let i = 0; i < 105; i++) {
+    capped.push(capRig, `Edit ${i}`);
+    capRig.updateBone(capBone.id, { localX: i + 1 });
+  }
+  let undone = 0;
+  while (capped.undo(capRig) !== null) undone++;
+  assert.equal(undone, 100);
+  assert.equal(capped.canUndo, false);
+  capped.clear();
+  assert.equal(capped.canRedo, false);
 });
 
 test("shaderPreview: generateAutoNormalMap, apply2DLighting, and applyPaletteSwapLut", () => {

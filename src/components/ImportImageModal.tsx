@@ -9,6 +9,7 @@ import {
   resizePixelBufferNearest,
   sliceSpritesheet,
 } from "../engine/io/imageImport";
+import { resetRigHistory } from "../engine/rig/rigActions";
 import {
   type FrameItem,
   type LayerItem,
@@ -320,6 +321,7 @@ export function ImportImageModal() {
           ...sheetLayers.map((l) => l.cellIndices.length)
         );
         pixelEngine.resetForDocument(fw, fh);
+        resetRigHistory();
 
         const nextLayers: LayerItem[] = sheetLayers.map((sl, li) => {
           const layerId = `layer-sheet-${li + 1}`;
@@ -392,6 +394,7 @@ export function ImportImageModal() {
           : sliceSpritesheet(pending.buffer, fw, fh, skipEmpty);
 
       pixelEngine.resetForDocument(fw, fh);
+      resetRigHistory();
       const celsMap: Record<number, boolean> = {};
       const nextFrames: FrameItem[] = [];
 
@@ -451,6 +454,7 @@ export function ImportImageModal() {
     const resized = resizePixelBufferNearest(pending.buffer, w, h);
 
     pixelEngine.resetForDocument(w, h);
+    resetRigHistory();
     const cel = pixelEngine.getOrCreateCel("layer-import", 0);
     cel.data.set(resized.data);
     cel.markAllDirty();

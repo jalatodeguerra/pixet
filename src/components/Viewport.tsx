@@ -24,6 +24,11 @@ import {
 import { WebGL2Renderer } from "../engine/renderer/WebGL2Renderer";
 import { renderBoneInfluenceOverlay } from "../engine/rig/RigEngine";
 import {
+  beginRigGesture,
+  endRigGesture,
+  mutateRig,
+} from "../engine/rig/rigActions";
+import {
   buildIsoGridSvgPath,
   getIsoOrigin,
   plotIsoBox,
@@ -232,6 +237,7 @@ export function Viewport() {
     eraseMask?: boolean;
     lastPx?: number;
     lastPy?: number;
+    historyStarted?: boolean;
   } | null>(null);
   const [rigDraftBone, setRigDraftBone] = useState<{
     x0: number;
@@ -737,6 +743,15 @@ export function Viewport() {
     panDragRef.current.active = false;
   };
 
+  const ensureRigGesture = (
+    drag: { historyStarted?: boolean },
+    label: string
+  ) => {
+    if (drag.historyStarted) return;
+    beginRigGesture(label);
+    drag.historyStarted = true;
+  };
+
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (spacePressed || e.button === 1) return;
     if (e.button !== 0 && e.button !== 2) return;
@@ -767,16 +782,19 @@ export function Viewport() {
       }
       e.currentTarget.setPointerCapture(e.pointerId);
       const eraseMask = isSecondary;
-      pixelEngine.rig.paintBoneMask(
-        targetBoneId,
-        state.canvasWidth,
-        state.canvasHeight,
-        px,
-        py,
-        state.rigBrushSize / 2,
-        eraseMask,
-        true
-      );
+      beginRigGesture("Paint weights");
+      mutateRig("Paint weights", () => {
+        pixelEngine.rig.paintBoneMask(
+          targetBoneId,
+          state.canvasWidth,
+          state.canvasHeight,
+          px,
+          py,
+          state.rigBrushSize / 2,
+          eraseMask,
+          true
+        );
+      });
       rigDragRef.current = {
         kind: "weightPaint",
         boneId: targetBoneId,
@@ -790,9 +808,8 @@ export function Viewport() {
         eraseMask,
         lastPx: px,
         lastPy: py,
+        historyStarted: true,
       };
-      state.bumpRigVersion();
-      pixelEngine.emitChange();
       return;
     }
 
@@ -882,14 +899,15 @@ export function Viewport() {
         if (ikBoneId) {
           e.currentTarget.setPointerCapture(e.pointerId);
           state.setSelectedBoneId(ikBoneId);
-          pixelEngine.rig.applyTwoBoneIK(
-            ikBoneId,
-            sub.x,
-            sub.y,
-            state.currentFrame
-          );
-          state.bumpRigVersion();
-          pixelEngine.emitChange();
+          beginRigGesture("IK pose");
+          mutateRig("IK pose", () => {
+            pixelEngine.rig.applyTwoBoneIK(
+              ikBoneId,
+              sub.x,
+              sub.y,
+              state.currentFrame
+            );
+          });
           rigDragRef.current = {
             kind: "ik",
             boneId: ikBoneId,
@@ -900,6 +918,7 @@ export function Viewport() {
             origLocalY: 0,
             addTipX: sub.x,
             addTipY: sub.y,
+            historyStarted: true,
           };
         }
         return;
@@ -1428,25 +1447,26 @@ export function Viewport() {
     const rigDrag = rigDragRef.current;
     if (rigDrag) {
       if (rigDrag.kind === "weightPaint") {
+        ensureRigGesture(rigDrag, "Paint weights");
         const lastX = rigDrag.lastPx ?? px;
         const lastY = rigDrag.lastPy ?? py;
         const segment = plotBresenhamLine(lastX, lastY, px, py);
-        for (const pt of segment) {
-          pixelEngine.rig.paintBoneMask(
-            rigDrag.boneId,
-            state.canvasWidth,
-            state.canvasHeight,
-            pt.x,
-            pt.y,
-            state.rigBrushSize / 2,
-            Boolean(rigDrag.eraseMask),
-            true
-          );
-        }
+        mutateRig("Paint weights", () => {
+          for (const pt of segment) {
+            pixelEngine.rig.paintBoneMask(
+              rigDrag.boneId,
+              state.canvasWidth,
+              state.canvasHeight,
+              pt.x,
+              pt.y,
+              state.rigBrushSize / 2,
+              Boolean(rigDrag.eraseMask),
+              true
+            );
+          }
+        });
         rigDrag.lastPx = px;
         rigDrag.lastPy = py;
-        state.bumpRigVersion();
-        pixelEngine.emitChange();
         return;
       }
       const sub = getSubpixelCoords(e);
@@ -1460,24 +1480,26 @@ export function Viewport() {
           y1: sub.y,
         });
       } else if (rigDrag.kind === "ik") {
-        pixelEngine.rig.applyTwoBoneIK(
-          rigDrag.boneId,
-          sub.x,
-          sub.y,
-          state.currentFrame
-        );
-        state.bumpRigVersion();
-        pixelEngine.emitChange();
+        ensureRigGesture(rigDrag, "IK pose");
+        mutateRig("IK pose", () => {
+          pixelEngine.rig.applyTwoBoneIK(
+            rigDrag.boneId,
+            sub.x,
+            sub.y,
+            state.currentFrame
+          );
+        });
       } else if (rigDrag.kind === "moveBone") {
+        ensureRigGesture(rigDrag, "Move bone");
         const dx = sub.x - rigDrag.startX;
         const dy = sub.y - rigDrag.startY;
-        pixelEngine.rig.setPoseOverride(
-          rigDrag.boneId,
-          { localX: rigDrag.origLocalX + dx, localY: rigDrag.origLocalY + dy },
-          state.currentFrame
-        );
-        state.bumpRigVersion();
-        pixelEngine.emitChange();
+        mutateRig("Move bone", () => {
+          pixelEngine.rig.setPoseOverride(
+            rigDrag.boneId,
+            { localX: rigDrag.origLocalX + dx, localY: rigDrag.origLocalY + dy },
+            state.currentFrame
+          );
+        });
       } else if (rigDrag.kind === "rotateBone") {
         const transforms = pixelEngine.rig.computeWorldTransforms(
           state.currentFrame,
@@ -1486,15 +1508,16 @@ export function Viewport() {
         );
         const t = transforms.get(rigDrag.boneId);
         if (t) {
+          ensureRigGesture(rigDrag, "Rotate bone");
           const worldDeg =
             (Math.atan2(sub.y - t.y, sub.x - t.x) * 180) / Math.PI;
-          pixelEngine.rig.setPoseOverride(
-            rigDrag.boneId,
-            { rotationDeg: worldDeg - rigDrag.parentWorldDeg },
-            state.currentFrame
-          );
-          state.bumpRigVersion();
-          pixelEngine.emitChange();
+          mutateRig("Rotate bone", () => {
+            pixelEngine.rig.setPoseOverride(
+              rigDrag.boneId,
+              { rotationDeg: worldDeg - rigDrag.parentWorldDeg },
+              state.currentFrame
+            );
+          });
         }
       }
       return;
@@ -1855,6 +1878,7 @@ export function Viewport() {
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId);
       }
+      endRigGesture();
       if (rigDrag.kind === "addBone") {
         const dx = rigDrag.addTipX - rigDrag.startX;
         const dy = rigDrag.addTipY - rigDrag.startY;
@@ -1883,17 +1907,17 @@ export function Viewport() {
             localY = ox * sin + oy * cos;
             rotationDeg = worldDeg - parent.worldRotationDeg;
           }
-          const created = pixelEngine.rig.addBone({
-            parentId: parent ? parent.id : null,
-            localX,
-            localY,
-            length: Math.max(2, len),
-            rotationDeg,
-            boundLayerId: null,
-          });
+          const created = mutateRig("Add bone", () =>
+            pixelEngine.rig.addBone({
+              parentId: parent ? parent.id : null,
+              localX,
+              localY,
+              length: Math.max(2, len),
+              rotationDeg,
+              boundLayerId: null,
+            })
+          );
           st.setSelectedBoneId(created.id);
-          st.bumpRigVersion();
-          pixelEngine.emitChange();
         }
       }
       return;

@@ -31,6 +31,7 @@ import {
 } from "../engine/document/timelineActions";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { getBoneInfluenceColor } from "../engine/rig/RigEngine";
+import { mutateRig } from "../engine/rig/rigActions";
 import { useEditorStore } from "../store/editorStore";
 
 export function Timeline() {
@@ -53,7 +54,6 @@ export function Timeline() {
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
   const setSelectedBoneId = useEditorStore((s) => s.setSelectedBoneId);
-  const bumpRigVersion = useEditorStore((s) => s.bumpRigVersion);
 
   const setCurrentFrame = useEditorStore((s) => s.setCurrentFrame);
   const prevFrame = useEditorStore((s) => s.prevFrame);
@@ -526,12 +526,17 @@ export function Timeline() {
                           setSelectedBoneId(bone.id);
                           setCurrentFrame(frame.index);
                           if (hasKey) {
-                            pixelEngine.rig.deleteKeyframe(bone.id, frame.index);
+                            mutateRig("Delete keyframe", () =>
+                              pixelEngine.rig.deleteKeyframe(
+                                bone.id,
+                                frame.index
+                              )
+                            );
                           } else {
-                            pixelEngine.rig.setKeyframe(bone.id, frame.index);
+                            mutateRig("Set keyframe", () =>
+                              pixelEngine.rig.setKeyframe(bone.id, frame.index)
+                            );
                           }
-                          bumpRigVersion();
-                          pixelEngine.emitChange();
                         }}
                         onContextMenu={(e) => {
                           e.preventDefault();
@@ -542,12 +547,12 @@ export function Timeline() {
                               kind: "item",
                               label: "Set Keyframe",
                               action: () => {
-                                pixelEngine.rig.setKeyframe(
-                                  bone.id,
-                                  frame.index
+                                mutateRig("Set keyframe", () =>
+                                  pixelEngine.rig.setKeyframe(
+                                    bone.id,
+                                    frame.index
+                                  )
                                 );
-                                bumpRigVersion();
-                                pixelEngine.emitChange();
                               },
                             },
                             {
@@ -556,12 +561,12 @@ export function Timeline() {
                               disabled: !hasKey,
                               danger: true,
                               action: () => {
-                                pixelEngine.rig.deleteKeyframe(
-                                  bone.id,
-                                  frame.index
+                                mutateRig("Delete keyframe", () =>
+                                  pixelEngine.rig.deleteKeyframe(
+                                    bone.id,
+                                    frame.index
+                                  )
                                 );
-                                bumpRigVersion();
-                                pixelEngine.emitChange();
                               },
                             },
                           ]);

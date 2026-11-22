@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bone as BoneIcon,
   ChevronDown,
@@ -20,6 +20,12 @@ import { pixelEngine } from "../engine/document/PixelEngine";
 import { commitFloatingSelection } from "../engine/document/selectionActions";
 import { syncTimelineCels } from "../engine/document/timelineActions";
 import { type Bone, getBoneInfluenceColor } from "../engine/rig/RigEngine";
+import {
+  beginRigGesture,
+  cancelRigGesture,
+  endRigGesture,
+  mutateRig,
+} from "../engine/rig/rigActions";
 import { type RigTool, useEditorStore } from "../store/editorStore";
 
 function getBoneDepth(bones: readonly Bone[], bone: Bone): number {
@@ -53,7 +59,6 @@ export function RigPanel() {
   const rigBrushSize = useEditorStore((s) => s.rigBrushSize);
   const setRigBrushSize = useEditorStore((s) => s.setRigBrushSize);
   const rigVersion = useEditorStore((s) => s.rigVersion);
-  const bumpRigVersion = useEditorStore((s) => s.bumpRigVersion);
 
   const layers = useEditorStore((s) => s.layers);
   const frames = useEditorStore((s) => s.frames);
@@ -73,6 +78,8 @@ export function RigPanel() {
   const selectedBone =
     bones.find((b) => b.id === selectedBoneId) ?? bones[0] ?? null;
 
+  useEffect(() => () => cancelRigGesture(), []);
+
   // Read live pose for selected bone (recomputed cleanly via rigVersion + currentFrame)
   const selectedPose = useMemo(() => {
     void rigVersion;
@@ -85,39 +92,38 @@ export function RigPanel() {
   }, [selectedBone, currentFrame, rigVersion]);
 
   const handleStarterRig = () => {
-    const root = pixelEngine.rig.seedStarterRig(
-      canvasWidth,
-      canvasHeight,
-      rasterLayers.map((l) => l.id)
-    );
-    setSelectedBoneId(root.id);
-    bumpRigVersion();
-    pixelEngine.emitChange();
+    let rootId: string | null = null;
+    mutateRig("Create starter rig", () => {
+      rootId = pixelEngine.rig.seedStarterRig(
+        canvasWidth,
+        canvasHeight,
+        rasterLayers.map((l) => l.id)
+      ).id;
+    });
+    if (rootId) setSelectedBoneId(rootId);
     setStatusMessage("Created starter 2-bone idle rig");
   };
 
   const handleAddBone = () => {
     const parent = selectedBone;
-    const bone = pixelEngine.rig.addBone({
-      parentId: parent ? parent.id : null,
-      localX: parent ? parent.length : Math.round(canvasWidth / 2),
-      localY: parent ? 0 : Math.round(canvasHeight / 2),
-      length: Math.max(4, Math.round(canvasHeight * 0.2)),
-      rotationDeg: parent ? 0 : -90,
-      boundLayerId: null,
-    });
+    const bone = mutateRig("Add bone", () =>
+      pixelEngine.rig.addBone({
+        parentId: parent ? parent.id : null,
+        localX: parent ? parent.length : Math.round(canvasWidth / 2),
+        localY: parent ? 0 : Math.round(canvasHeight / 2),
+        length: Math.max(4, Math.round(canvasHeight * 0.2)),
+        rotationDeg: parent ? 0 : -90,
+        boundLayerId: null,
+      })
+    );
     setSelectedBoneId(bone.id);
-    bumpRigVersion();
-    pixelEngine.emitChange();
   };
 
   const handleDeleteBone = (boneId: string) => {
-    pixelEngine.rig.removeBone(boneId);
+    mutateRig("Delete bone", () => pixelEngine.rig.removeBone(boneId));
     if (selectedBoneId === boneId) {
       setSelectedBoneId(pixelEngine.rig.bones[0]?.id ?? null);
     }
-    bumpRigVersion();
-    pixelEngine.emitChange();
   };
 
   const handleUpdatePose = (patch: {
@@ -126,16 +132,16 @@ export function RigPanel() {
     localY?: number;
   }) => {
     if (!selectedBone) return;
-    pixelEngine.rig.setPoseOverride(selectedBone.id, patch, currentFrame);
-    bumpRigVersion();
-    pixelEngine.emitChange();
+    mutateRig("Pose bone", () =>
+      pixelEngine.rig.setPoseOverride(selectedBone.id, patch, currentFrame)
+    );
   };
 
   const handleSetKeyframe = () => {
     if (!selectedBone) return;
-    pixelEngine.rig.setKeyframe(selectedBone.id, currentFrame, "easeInOut");
-    bumpRigVersion();
-    pixelEngine.emitChange();
+    mutateRig("Set keyframe", () =>
+      pixelEngine.rig.setKeyframe(selectedBone.id, currentFrame, "easeInOut")
+    );
     setStatusMessage(
       `Keyframed "${selectedBone.name}" on frame ${currentFrame + 1}`
     );
@@ -143,10 +149,10 @@ export function RigPanel() {
 
   const handleDeleteKeyframe = () => {
     if (!selectedBone) return;
-    pixelEngine.rig.deleteKeyframe(selectedBone.id, currentFrame);
-    pixelEngine.rig.clearPoseOverrides();
-    bumpRigVersion();
-    pixelEngine.emitChange();
+    mutateRig("Delete keyframe", () => {
+      pixelEngine.rig.deleteKeyframe(selectedBone.id, currentFrame);
+      pixelEngine.rig.clearPoseOverrides();
+    });
   };
 
   const handleBakeToFrames = () => {
@@ -218,19 +224,19 @@ export function RigPanel() {
       setStatusMessage("Add bones before auto-weighting");
       return;
     }
-    const composited = pixelEngine.compositeFrame(layers, currentFrame);
-    const buf = new PixelBuffer(canvasWidth, canvasHeight, composited);
-    pixelEngine.rig.autoAssignBoneMasks(buf, currentFrame);
-    bumpRigVersion();
-    pixelEngine.emitChange();
+    mutateRig("Auto-weight", () => {
+      const composited = pixelEngine.compositeFrame(layers, currentFrame);
+      const buf = new PixelBuffer(canvasWidth, canvasHeight, composited);
+      pixelEngine.rig.autoAssignBoneMasks(buf, currentFrame);
+    });
     setStatusMessage("Auto-weighted pixels to nearest bones");
   };
 
   const handleClearMask = () => {
     if (!selectedBone) return;
-    pixelEngine.rig.clearBoneMask(selectedBone.id);
-    bumpRigVersion();
-    pixelEngine.emitChange();
+    mutateRig("Clear weights", () =>
+      pixelEngine.rig.clearBoneMask(selectedBone.id)
+    );
     setStatusMessage(`Cleared influence mask for "${selectedBone.name}"`);
   };
 
@@ -442,12 +448,15 @@ export function RigPanel() {
               <input
                 className="rig-text-input"
                 value={selectedBone.name}
-                onChange={(e) => {
-                  pixelEngine.rig.updateBone(selectedBone.id, {
-                    name: e.target.value,
-                  });
-                  bumpRigVersion();
-                }}
+                onFocus={() => beginRigGesture("Rename bone")}
+                onBlur={endRigGesture}
+                onChange={(e) =>
+                  mutateRig("Rename bone", () =>
+                    pixelEngine.rig.updateBone(selectedBone.id, {
+                      name: e.target.value,
+                    })
+                  )
+                }
               />
             </div>
 
@@ -456,13 +465,13 @@ export function RigPanel() {
               <select
                 className="palette-select"
                 value={selectedBone.boundLayerId ?? ""}
-                onChange={(e) => {
-                  pixelEngine.rig.updateBone(selectedBone.id, {
-                    boundLayerId: e.target.value || null,
-                  });
-                  bumpRigVersion();
-                  pixelEngine.emitChange();
-                }}
+                onChange={(e) =>
+                  mutateRig("Bind layer", () =>
+                    pixelEngine.rig.updateBone(selectedBone.id, {
+                      boundLayerId: e.target.value || null,
+                    })
+                  )
+                }
               >
                 <option value="">None (IK / Guide)</option>
                 {rasterLayers.map((l) => (
@@ -480,6 +489,9 @@ export function RigPanel() {
                 min={-180}
                 max={180}
                 value={Math.round(selectedPose.rotationDeg)}
+                onPointerDown={() => beginRigGesture("Pose bone")}
+                onPointerUp={endRigGesture}
+                onPointerCancel={endRigGesture}
                 onChange={(e) =>
                   handleUpdatePose({ rotationDeg: Number(e.target.value) })
                 }
@@ -496,13 +508,16 @@ export function RigPanel() {
                 min={2}
                 max={Math.max(16, Math.max(canvasWidth, canvasHeight))}
                 value={Math.round(selectedBone.length)}
-                onChange={(e) => {
-                  pixelEngine.rig.updateBone(selectedBone.id, {
-                    length: Number(e.target.value),
-                  });
-                  bumpRigVersion();
-                  pixelEngine.emitChange();
-                }}
+                onPointerDown={() => beginRigGesture("Resize bone")}
+                onPointerUp={endRigGesture}
+                onPointerCancel={endRigGesture}
+                onChange={(e) =>
+                  mutateRig("Resize bone", () =>
+                    pixelEngine.rig.updateBone(selectedBone.id, {
+                      length: Number(e.target.value),
+                    })
+                  )
+                }
               />
               <span className="mono-value">
                 {Math.round(selectedBone.length)}px

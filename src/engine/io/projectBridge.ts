@@ -11,6 +11,7 @@ import { PixelBuffer } from "../document/PixelBuffer.ts";
 import { pixelEngine } from "../document/PixelEngine.ts";
 import { commitFloatingSelection } from "../document/selectionActions.ts";
 import { syncTimelineCels } from "../document/timelineActions.ts";
+import { resetRigHistory } from "../rig/rigActions.ts";
 import { TilemapData } from "../tiles/TilemapEngine.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
@@ -381,6 +382,7 @@ export function hydrateProjectTransfer(
   });
 
   syncTimelineCels();
+  resetRigHistory();
   useEditorStore.getState().bumpTilesetVersion();
   useEditorStore.getState().bumpRigVersion();
   useEditorStore.getState().bumpGameDataVersion();

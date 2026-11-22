@@ -4,6 +4,7 @@ import { hexToRgba } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { commitFloatingSelection } from "../engine/document/selectionActions";
 import { syncTimelineCels } from "../engine/document/timelineActions";
+import { resetRigHistory } from "../engine/rig/rigActions";
 import { useEditorStore } from "../store/editorStore";
 
 type BgFill = "transparent" | "secondary" | "white";
@@ -47,6 +48,7 @@ export function NewSpriteModal() {
       : `${cleanName}.pixet`;
 
     pixelEngine.resetForDocument(w, h);
+    resetRigHistory();
     const cel = pixelEngine.getOrCreateCel("layer-1", 0);
 
     if (bgFill !== "transparent") {
