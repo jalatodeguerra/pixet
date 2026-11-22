@@ -26,6 +26,12 @@ export interface AnimEvent {
   payload?: string;
 }
 
+export interface GameDataSnapshot {
+  boxes: GameBox[];
+  sockets: GameSocket[];
+  events: AnimEvent[];
+}
+
 export class GameDataState {
   boxes: GameBox[] = [];
   sockets: GameSocket[] = [];
@@ -170,5 +176,38 @@ export class GameDataState {
       null,
       2
     );
+  }
+
+  toSnapshot(): GameDataSnapshot {
+    return {
+      boxes: this.boxes.map((b) => ({ ...b })),
+      sockets: this.sockets.map((s) => ({ ...s })),
+      events: this.events.map((e) => ({ ...e })),
+    };
+  }
+
+  fromSnapshot(snap: unknown): void {
+    this.reset();
+    if (!snap || typeof snap !== "object") return;
+    const raw = snap as Partial<GameDataSnapshot>;
+
+    if (Array.isArray(raw.boxes)) {
+      this.boxes = raw.boxes.map((b) => ({ ...b }));
+    }
+    if (Array.isArray(raw.sockets)) {
+      this.sockets = raw.sockets.map((s) => ({ ...s }));
+    }
+    if (Array.isArray(raw.events)) {
+      this.events = raw.events.map((e) => ({ ...e }));
+    }
+
+    let maxNum = this.boxes.length + this.sockets.length + this.events.length;
+    for (const item of [...this.boxes, ...this.sockets, ...this.events]) {
+      const m = /(\d+)$/.exec(item.id);
+      if (m) {
+        maxNum = Math.max(maxNum, Number(m[1]));
+      }
+    }
+    this.nextId = maxNum + 1;
   }
 }

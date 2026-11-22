@@ -2210,3 +2210,122 @@
   flex: 1;
   min-width: 0;
 }
+
+/* 2D HSV Color Picker (Canvas-rendered, flat zero-gradient chrome) */
+.color-picker-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.color-sv-wrap {
+  position: relative;
+  width: 100%;
+  height: 112px;
+  border: 1px solid var(--border-subtle);
+  cursor: crosshair;
+  user-select: none;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.color-sv-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.color-sv-cursor {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin-left: -4px;
+  margin-top: -4px;
+  border: 1px solid #ffffff;
+  outline: 1px solid #000000;
+  pointer-events: none;
+}
+
+.color-hue-wrap {
+  position: relative;
+  width: 100%;
+  height: 12px;
+  border: 1px solid var(--border-subtle);
+  cursor: ew-resize;
+  user-select: none;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.color-hue-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.color-hue-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #ffffff;
+  outline: 1px solid #000000;
+  pointer-events: none;
+}
+
+/* Timeline Rig Keyframe Dope Sheet */
+.timeline-rig-row {
+  display: flex;
+  align-items: stretch;
+  min-width: max-content;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.timeline-rig-row .timeline-label-col {
+  justify-content: flex-start;
+  gap: 6px;
+  background: var(--bg-surface);
+}
+
+.timeline-rig-row.active .timeline-label-col {
+  color: var(--text-primary);
+  background: var(--accent-soft);
+}
+
+.rig-bone-swatch {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+
+.rig-dope-cell {
+  width: 34px;
+  height: 24px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.rig-dope-cell:hover {
+  background: var(--bg-elevated);
+}
+
+.rig-dope-cell.active-col {
+  background: rgba(76, 139, 245, 0.08);
+}
+
+.rig-dope-diamond {
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  transform: rotate(45deg);
+}
+
+.rig-dope-diamond.keyed {
+  border-color: #eab308;
+  background: #eab308;
+}

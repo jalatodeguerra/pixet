@@ -30,6 +30,7 @@ import {
   toggleLinkCelAction,
 } from "../engine/document/timelineActions";
 import { pixelEngine } from "../engine/document/PixelEngine";
+import { getBoneInfluenceColor } from "../engine/rig/RigEngine";
 import { useEditorStore } from "../store/editorStore";
 
 export function Timeline() {
@@ -48,6 +49,11 @@ export function Timeline() {
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const timelineHeight = useEditorStore((s) => s.timelineHeight);
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
+  const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const rigVersion = useEditorStore((s) => s.rigVersion);
+  const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
+  const setSelectedBoneId = useEditorStore((s) => s.setSelectedBoneId);
+  const bumpRigVersion = useEditorStore((s) => s.bumpRigVersion);
 
   const setCurrentFrame = useEditorStore((s) => s.setCurrentFrame);
   const prevFrame = useEditorStore((s) => s.prevFrame);
@@ -475,6 +481,101 @@ export function Timeline() {
               <Plus size={13} />
             </button>
           </div>
+
+          {workspaceMode === "rig" &&
+            pixelEngine.rig.bones.map((bone, boneIdx) => {
+              const [r, g, b] = getBoneInfluenceColor(boneIdx);
+              const isBoneSelected = bone.id === selectedBoneId;
+              return (
+                <div
+                  key={`rig-${bone.id}-${rigVersion}`}
+                  className={`timeline-rig-row ${isBoneSelected ? "active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="timeline-label-col"
+                    title={`Bone: ${bone.name}`}
+                    onClick={() => setSelectedBoneId(bone.id)}
+                  >
+                    <span
+                      className="rig-bone-swatch"
+                      style={{ backgroundColor: `rgb(${r}, ${g}, ${b})` }}
+                    />
+                    <span className="layer-name" style={{ textAlign: "left" }}>
+                      {bone.name}
+                    </span>
+                  </button>
+
+                  {frames.map((frame) => {
+                    const hasKey = pixelEngine.rig.hasKeyframe(
+                      bone.id,
+                      frame.index
+                    );
+                    const activeCol = frame.index === currentFrame;
+                    return (
+                      <button
+                        key={`rig-${bone.id}-${frame.id}`}
+                        type="button"
+                        className={`rig-dope-cell ${activeCol ? "active-col" : ""}`}
+                        title={`${bone.name} · Frame ${frame.index + 1}${hasKey ? " (Keyframed · Double-click to delete)" : " (Double-click to set keyframe)"}`}
+                        onClick={() => {
+                          setSelectedBoneId(bone.id);
+                          setCurrentFrame(frame.index);
+                        }}
+                        onDoubleClick={() => {
+                          setSelectedBoneId(bone.id);
+                          setCurrentFrame(frame.index);
+                          if (hasKey) {
+                            pixelEngine.rig.deleteKeyframe(bone.id, frame.index);
+                          } else {
+                            pixelEngine.rig.setKeyframe(bone.id, frame.index);
+                          }
+                          bumpRigVersion();
+                          pixelEngine.emitChange();
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setSelectedBoneId(bone.id);
+                          setCurrentFrame(frame.index);
+                          openContextMenu(e.clientX, e.clientY, [
+                            {
+                              kind: "item",
+                              label: "Set Keyframe",
+                              action: () => {
+                                pixelEngine.rig.setKeyframe(
+                                  bone.id,
+                                  frame.index
+                                );
+                                bumpRigVersion();
+                                pixelEngine.emitChange();
+                              },
+                            },
+                            {
+                              kind: "item",
+                              label: "Delete Keyframe",
+                              disabled: !hasKey,
+                              danger: true,
+                              action: () => {
+                                pixelEngine.rig.deleteKeyframe(
+                                  bone.id,
+                                  frame.index
+                                );
+                                bumpRigVersion();
+                                pixelEngine.emitChange();
+                              },
+                            },
+                          ]);
+                        }}
+                      >
+                        <span
+                          className={`rig-dope-diamond ${hasKey ? "keyed" : ""}`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
 
           {layers.map((layer) => {
             const isLayerActive = layer.id === activeLayerId;

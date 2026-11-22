@@ -18,6 +18,7 @@ import {
   Unlock,
   Upload,
 } from "lucide-react";
+import { ColorPicker } from "./ColorPicker";
 import { GameDataPanel } from "./GameDataPanel";
 import { RigPanel } from "./RigPanel";
 import { TilesetPanel } from "./TilesetPanel";
@@ -376,6 +377,8 @@ export function RightSidebar() {
               </div>
             </div>
           </div>
+
+          <ColorPicker hex={primaryColor} onChange={setPrimaryColor} />
 
           <div className="hsv-sliders">
             <label className="hsv-row">

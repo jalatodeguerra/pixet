@@ -84,6 +84,8 @@ interface RustDocument {
   }[];
   tileset?: RustTilesetMeta | null;
   tile_projection?: "orthogonal" | "isometric";
+  rig?: unknown;
+  game_data?: unknown;
 }
 
 export interface ProjectTransfer {
@@ -254,6 +256,16 @@ export function serializeProjectTransfer(): ProjectTransfer {
       tile_count: tiles.length,
     },
     tile_projection: pixelEngine.tileProjection,
+    rig:
+      pixelEngine.rig.bones.length > 0
+        ? pixelEngine.rig.toSnapshot()
+        : undefined,
+    game_data:
+      pixelEngine.gameData.boxes.length > 0 ||
+      pixelEngine.gameData.sockets.length > 0 ||
+      pixelEngine.gameData.events.length > 0
+        ? pixelEngine.gameData.toSnapshot()
+        : undefined,
   };
 
   return { document, cels: celsMap, tiles };
@@ -268,6 +280,13 @@ export function hydrateProjectTransfer(
   const h = doc.size.height;
 
   pixelEngine.resetForDocument(w, h);
+
+  if (doc.rig !== undefined) {
+    pixelEngine.rig.fromSnapshot(doc.rig);
+  }
+  if (doc.game_data !== undefined) {
+    pixelEngine.gameData.fromSnapshot(doc.game_data);
+  }
 
   for (const [key, b64] of Object.entries(transfer.cels)) {
     const raw = base64ToBytes(b64);
@@ -356,6 +375,8 @@ export function hydrateProjectTransfer(
 
   syncTimelineCels();
   useEditorStore.getState().bumpTilesetVersion();
+  useEditorStore.getState().bumpRigVersion();
+  useEditorStore.getState().bumpGameDataVersion();
   pixelEngine.emitChange();
 }
 

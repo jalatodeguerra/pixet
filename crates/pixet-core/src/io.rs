@@ -242,3 +242,36 @@ pub fn load_pixet(path: impl AsRef<Path>) -> Result<ProjectData, PixetError> {
     let bytes = fs::read(path)?;
     read_pixet_bytes(&bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn pixet_zip_round_trip_preserves_rig_and_game_data() {
+        let mut doc = Document::new_default(16, 16);
+        doc.rig = Some(json!({
+            "bones": [{ "id": "bone-1", "name": "Root", "parentId": null, "localX": 8, "localY": 12, "length": 6, "rotationDeg": -90, "boundLayerId": null }],
+            "activeClipId": "clip-idle",
+            "clips": [{ "id": "clip-idle", "name": "idle", "frameCount": 4, "tracks": {} }],
+            "masks": [{ "boneId": "bone-1", "width": 16, "height": 16, "indices": [0, 17] }]
+        }));
+        doc.game_data = Some(json!({
+            "boxes": [{ "id": "box-1", "frame": 0, "kind": "hitbox", "name": "slash", "x": 2, "y": 2, "w": 6, "h": 4 }],
+            "sockets": [{ "id": "sock-1", "frame": 0, "name": "hand", "x": 10, "y": 8 }],
+            "events": [{ "id": "evt-1", "frame": 1, "name": "sfx_swing" }]
+        }));
+
+        let project = ProjectData {
+            document: doc.clone(),
+            cels: HashMap::new(),
+            tiles: Vec::new(),
+        };
+
+        let bytes = write_pixet_bytes(&project).expect("write .pixet");
+        let loaded = read_pixet_bytes(&bytes).expect("read .pixet");
+        assert_eq!(loaded.document.rig, doc.rig);
+        assert_eq!(loaded.document.game_data, doc.game_data);
+    }
+}

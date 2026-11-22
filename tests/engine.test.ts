@@ -1025,4 +1025,72 @@ test("GameDataState tracks boxes, sockets, events, frame copy, and JSON export",
   assert.equal(parsed.boxes.length, 2);
   assert.equal(parsed.sockets.length, 2);
   assert.equal(parsed.events.length, 1);
+
+  // Snapshot round-trip for .pixet persistence
+  const snap = gd.toSnapshot();
+  const restored = new GameDataState();
+  restored.fromSnapshot(JSON.parse(JSON.stringify(snap)));
+  assert.equal(restored.boxes.length, 2);
+  assert.equal(restored.sockets.length, 2);
+  assert.equal(restored.events.length, 1);
+  // Adding another box should advance ID without colliding
+  const nextBox = restored.addBox({
+    frame: 2,
+    kind: "hurtbox",
+    name: "body",
+    x: 0,
+    y: 0,
+    w: 4,
+    h: 4,
+  });
+  assert.ok(!restored.boxes.slice(0, -1).some((b) => b.id === nextBox.id));
+});
+
+test("RigState.toSnapshot and fromSnapshot round-trip bones, keyframes, and boneMasks", () => {
+  const rig = new RigState();
+  const root = rig.addBone({
+    name: "Spine",
+    parentId: null,
+    localX: 8,
+    localY: 12,
+    length: 6,
+    rotationDeg: -90,
+  });
+  const child = rig.addBone({
+    name: "Head",
+    parentId: root.id,
+    localX: 6,
+    localY: 0,
+    length: 4,
+    rotationDeg: 10,
+  });
+  rig.setPoseOverride(root.id, { rotationDeg: -75 }, 1);
+  rig.setKeyframe(root.id, 1, "easeInOut");
+  rig.paintBoneMask(root.id, 16, 16, 8, 10, 2, false, true);
+  rig.paintBoneMask(child.id, 16, 16, 8, 4, 1, false, true);
+
+  const snap = rig.toSnapshot();
+  const clonedSnap = JSON.parse(JSON.stringify(snap));
+
+  const restored = new RigState();
+  restored.fromSnapshot(clonedSnap);
+
+  assert.equal(restored.bones.length, 2);
+  assert.equal(restored.bones[0].name, "Spine");
+  assert.equal(restored.bones[1].parentId, root.id);
+  assert.equal(restored.hasKeyframe(root.id, 1), true);
+  assert.equal(restored.hasKeyframe(root.id, 0), false);
+  assert.equal(restored.getBoneMask(root.id)?.data[10 * 16 + 8], 1);
+  assert.equal(restored.getBoneMask(child.id)?.data[4 * 16 + 8], 1);
+
+  // Adding a new bone after restore should generate a fresh non-colliding ID
+  const extra = restored.addBone({
+    name: "Arm",
+    parentId: root.id,
+    localX: 3,
+    localY: 0,
+    length: 4,
+    rotationDeg: 45,
+  });
+  assert.equal(extra.id, "bone-3");
 });

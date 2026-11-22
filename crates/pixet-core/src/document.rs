@@ -123,6 +123,10 @@ pub struct Document {
     pub tileset: Option<TilesetMeta>,
     #[serde(default)]
     pub tile_projection: TileProjection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rig: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_data: Option<serde_json::Value>,
 }
 
 impl Document {
@@ -186,6 +190,8 @@ impl Document {
             }],
             tileset: None,
             tile_projection: TileProjection::Orthogonal,
+            rig: None,
+            game_data: None,
         }
     }
 

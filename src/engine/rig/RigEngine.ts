@@ -55,6 +55,20 @@ export interface BoneMask {
   data: Uint8Array;
 }
 
+export interface RigMaskSnapshot {
+  boneId: string;
+  width: number;
+  height: number;
+  indices: number[];
+}
+
+export interface RigSnapshot {
+  bones: Bone[];
+  clips: RigClip[];
+  activeClipId: string;
+  masks: RigMaskSnapshot[];
+}
+
 export const BONE_INFLUENCE_COLORS: readonly RGBA[] = [
   [91, 140, 255, 255],
   [239, 100, 97, 255],
@@ -791,6 +805,110 @@ export class RigState {
       null,
       2
     );
+  }
+
+  toSnapshot(): RigSnapshot {
+    const masks: RigMaskSnapshot[] = [];
+    for (const [boneId, mask] of this.boneMasks.entries()) {
+      const indices: number[] = [];
+      for (let i = 0; i < mask.data.length; i++) {
+        if (mask.data[i] > 0) indices.push(i);
+      }
+      if (indices.length > 0) {
+        masks.push({
+          boneId,
+          width: mask.width,
+          height: mask.height,
+          indices,
+        });
+      }
+    }
+
+    return {
+      bones: this.bones.map((b) => ({ ...b })),
+      clips: this.clips.map((c) => ({
+        id: c.id,
+        name: c.name,
+        frameCount: c.frameCount,
+        tracks: Object.fromEntries(
+          Object.entries(c.tracks).map(([k, arr]) => [
+            k,
+            arr.map((kf) => ({ ...kf })),
+          ])
+        ),
+      })),
+      activeClipId: this.activeClipId,
+      masks,
+    };
+  }
+
+  fromSnapshot(snap: unknown): void {
+    this.reset();
+    if (!snap || typeof snap !== "object") return;
+    const raw = snap as Partial<RigSnapshot>;
+
+    if (Array.isArray(raw.bones)) {
+      this.bones = raw.bones.map((b) => ({ ...b }));
+      let maxNum = this.bones.length;
+      for (const b of this.bones) {
+        const m = /(\d+)$/.exec(b.id);
+        if (m) {
+          maxNum = Math.max(maxNum, Number(m[1]));
+        }
+      }
+      this.nextBoneNum = maxNum + 1;
+    }
+
+    if (Array.isArray(raw.clips) && raw.clips.length > 0) {
+      this.clips = raw.clips.map((c) => ({
+        id: c.id,
+        name: c.name,
+        frameCount: Math.max(1, c.frameCount ?? 4),
+        tracks: Object.fromEntries(
+          Object.entries(c.tracks ?? {}).map(([k, arr]) => [
+            k,
+            Array.isArray(arr) ? arr.map((kf) => ({ ...kf })) : [],
+          ])
+        ),
+      }));
+    }
+
+    if (
+      typeof raw.activeClipId === "string" &&
+      this.clips.some((c) => c.id === raw.activeClipId)
+    ) {
+      this.activeClipId = raw.activeClipId;
+    } else {
+      this.activeClipId = this.clips[0].id;
+    }
+
+    if (Array.isArray(raw.masks)) {
+      for (const m of raw.masks) {
+        if (
+          !m ||
+          typeof m.boneId !== "string" ||
+          typeof m.width !== "number" ||
+          typeof m.height !== "number" ||
+          m.width <= 0 ||
+          m.height <= 0 ||
+          !Array.isArray(m.indices)
+        ) {
+          continue;
+        }
+        const len = m.width * m.height;
+        const data = new Uint8Array(len);
+        for (const idx of m.indices) {
+          if (Number.isInteger(idx) && idx >= 0 && idx < len) {
+            data[idx] = 1;
+          }
+        }
+        this.boneMasks.set(m.boneId, {
+          width: m.width,
+          height: m.height,
+          data,
+        });
+      }
+    }
   }
 }
 
