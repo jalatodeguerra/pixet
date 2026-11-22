@@ -17,6 +17,20 @@ export function RigRenderPanel() {
   const toggleRigPixelSnap = useEditorStore((s) => s.toggleRigPixelSnap);
   const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
   const toggleRigRotSprite = useEditorStore((s) => s.toggleRigRotSprite);
+  const rigCleanupOrphans = useEditorStore((s) => s.rigCleanupOrphans);
+  const rigCleanupHoles = useEditorStore((s) => s.rigCleanupHoles);
+  const rigCleanupPaletteLock = useEditorStore((s) => s.rigCleanupPaletteLock);
+  const rigCleanupOutline = useEditorStore((s) => s.rigCleanupOutline);
+  const toggleRigCleanupOrphans = useEditorStore(
+    (s) => s.toggleRigCleanupOrphans
+  );
+  const toggleRigCleanupHoles = useEditorStore((s) => s.toggleRigCleanupHoles);
+  const toggleRigCleanupPaletteLock = useEditorStore(
+    (s) => s.toggleRigCleanupPaletteLock
+  );
+  const toggleRigCleanupOutline = useEditorStore(
+    (s) => s.toggleRigCleanupOutline
+  );
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const documentName = useEditorStore((s) => s.documentName);
@@ -34,6 +48,12 @@ export function RigRenderPanel() {
     const snapshotLayers = state.layers.slice();
 
     const bakedBuffers: Uint8ClampedArray[] = [];
+    const cleanup = {
+      removeOrphans: state.rigCleanupOrphans,
+      fillHoles: state.rigCleanupHoles,
+      paletteLock: state.rigCleanupPaletteLock,
+      preserveOutline: state.rigCleanupOutline,
+    };
     for (let f = 0; f < bakeCount; f++) {
       const composited = pixelEngine.compositeRigFrame(
         snapshotLayers,
@@ -42,6 +62,7 @@ export function RigRenderPanel() {
           pixelSnap: state.rigPixelSnap,
           rotSprite: state.rigRotSprite,
           mode: "pose",
+          cleanup,
         },
         false
       );
@@ -115,6 +136,45 @@ export function RigRenderPanel() {
         </label>
       </div>
 
+      {/* R6 post-deformation pixel cleanup. */}
+      <div className="rig-cleanup-box">
+        <span className="rig-cleanup-title">Pixel Cleanup (post-deform)</span>
+        <div className="rig-cleanup-options">
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupOrphans}
+              onChange={toggleRigCleanupOrphans}
+            />
+            <span>Orphans</span>
+          </label>
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupHoles}
+              onChange={toggleRigCleanupHoles}
+            />
+            <span>Fill Holes</span>
+          </label>
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupPaletteLock}
+              onChange={toggleRigCleanupPaletteLock}
+            />
+            <span>Palette Lock</span>
+          </label>
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupOutline}
+              onChange={toggleRigCleanupOutline}
+            />
+            <span>Outline</span>
+          </label>
+        </div>
+      </div>
+
       <div className="rig-output-actions">
         <button
           type="button"
@@ -137,7 +197,8 @@ export function RigRenderPanel() {
       </div>
 
       <span className="rotate3d-hint">
-        Pixel cleanup, mesh deformation and smooth weights arrive in R6.
+        Cleanup runs after skinning/deformation. Mesh deformation tooling
+        arrives in a later milestone.
       </span>
     </RigPanelSection>
   );

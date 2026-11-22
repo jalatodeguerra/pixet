@@ -215,15 +215,18 @@ export function useRigPointer({
       const eraseMask = e.button === 2;
       beginRigGesture("Paint weights");
       mutateRig("Paint weights", () => {
-        rig.paintBoneMask(
+        rig.paintBoneWeights(
           targetBoneId,
           state.canvasWidth,
           state.canvasHeight,
           pt.px,
           pt.py,
           state.rigBrushSize / 2,
-          eraseMask,
-          true
+          {
+            strength: state.rigWeightStrength,
+            mode: eraseMask ? "subtract" : state.rigWeightMode,
+            falloff: state.rigWeightFalloff,
+          }
         );
       });
       dragRef.current = {
@@ -421,15 +424,18 @@ export function useRigPointer({
       const segment = plotBresenhamLine(lastX, lastY, pt.px, pt.py);
       mutateRig("Paint weights", () => {
         for (const point of segment) {
-          rig.paintBoneMask(
+          rig.paintBoneWeights(
             drag.boneId,
             state.canvasWidth,
             state.canvasHeight,
             point.x,
             point.y,
             state.rigBrushSize / 2,
-            Boolean(drag.eraseMask),
-            true
+            {
+              strength: state.rigWeightStrength,
+              mode: drag.eraseMask ? "subtract" : state.rigWeightMode,
+              falloff: state.rigWeightFalloff,
+            }
           );
         }
       });

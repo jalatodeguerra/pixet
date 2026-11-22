@@ -61,6 +61,29 @@ import {
 } from "../src/engine/rig/RigEngine.ts";
 import { RigHistory } from "../src/engine/rig/RigHistory.ts";
 import {
+  autoAssignWeights,
+  buildBoneTransformMap,
+  influenceSum,
+  paintWeightBrush,
+  skinLayerPixels,
+  type AutoWeightBone,
+} from "../src/engine/rig/skinning.ts";
+import {
+  createAutoGridMesh,
+  createGridMesh,
+  renderRigMesh,
+  sampleMeshOffsets,
+  upsertMeshKeyframe,
+} from "../src/engine/rig/mesh.ts";
+import {
+  applyPixelCleanup,
+  collectPalette,
+  fillSinglePixelHoles,
+  packRgba,
+  removeOrphanPixels,
+  snapToPalette,
+} from "../src/engine/rig/pixelCleanup.ts";
+import {
   extractPaletteFromBuffer,
   isSupportedImageFile,
   placeBufferCentered,
@@ -1781,4 +1804,472 @@ test("shaderPreview: generateAutoNormalMap, apply2DLighting, and applyPaletteSwa
     0, 255, 0, 128,
     0, 0, 0, 0,
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// R6 — smooth weights, mesh deformation & pixel cleanup
+// ---------------------------------------------------------------------------
+
+const R6_BONES: AutoWeightBone[] = [
+  { id: "bone-1", x: 8, y: 0, tipX: 8, tipY: 8 },
+  { id: "bone-2", x: 8, y: 8, tipX: 8, tipY: 16 },
+];
+
+function makeR6Sprite(size = 16): PixelBuffer {
+  const buf = new PixelBuffer(size, size);
+  for (let y = 2; y < size - 2; y++) {
+    for (let x = 4; x < size - 4; x++) {
+      buf.setPixel(x, y, 40 + x * 3, 90 + y * 2, 160, 255);
+    }
+  }
+  buf.setPixel(6, 6, 255, 0, 0, 255);
+  buf.setPixel(9, 9, 0, 255, 0, 255);
+  return buf;
+}
+
+test("R6 auto weights keep <=4 influences per pixel and normalize to 1", () => {
+  const src = makeR6Sprite(16);
+  const weights = autoAssignWeights(src, R6_BONES);
+  assert.ok(weights);
+  assert.ok(weights.entries.size > 0);
+
+  let softPixels = 0;
+  for (const influences of weights.entries.values()) {
+    assert.ok(influences.length <= 4);
+    assert.ok(Math.abs(influenceSum(influences) - 1) < 1e-9);
+    if (influences.some((influence) => influence.w < 0.99)) softPixels++;
+  }
+  assert.ok(softPixels > 0, "auto weights should produce soft blends");
+
+  // Every brush mode keeps the map normalized and capped at 4.
+  for (const mode of ["add", "subtract", "smooth", "replace"] as const) {
+    paintWeightBrush(weights, "bone-1", {
+      cx: 8,
+      cy: 8,
+      radius: 4,
+      strength: 0.7,
+      mode,
+      falloff: "linear",
+    });
+    for (const influences of weights.entries.values()) {
+      assert.ok(influences.length <= 4);
+      assert.ok(Math.abs(influenceSum(influences) - 1) < 1e-9);
+      assert.ok(influences.every((influence) => influence.w > 0));
+    }
+  }
+});
+
+test("R6 RigState soft weight painting normalizes and survives snapshot round-trip", () => {
+  const src = makeR6Sprite(16);
+  const rig = new RigState();
+  rig.addBone({
+    name: "Upper",
+    parentId: null,
+    localX: 8,
+    localY: 0,
+    length: 8,
+    rotationDeg: 90,
+  });
+  rig.addBone({
+    name: "Lower",
+    parentId: null,
+    localX: 8,
+    localY: 8,
+    length: 8,
+    rotationDeg: 90,
+  });
+  rig.autoAssignBoneWeights(src, 0);
+  rig.paintBoneWeights("bone-1", 16, 16, 8, 8, 4, {
+    strength: 0.6,
+    mode: "add",
+    falloff: "linear",
+  });
+
+  const weights = rig.getBoneWeights();
+  assert.ok(weights);
+  for (const influences of weights.entries.values()) {
+    assert.ok(Math.abs(influenceSum(influences) - 1) < 1e-9);
+  }
+
+  // The legacy hard-mask brush keeps the soft map normalized too.
+  rig.paintBoneMask("bone-1", 16, 16, 8, 8, 2, false, true);
+  for (const influences of rig.getBoneWeights()!.entries.values()) {
+    assert.ok(Math.abs(influenceSum(influences) - 1) < 1e-9);
+  }
+  assert.equal(rig.hasAnyBoneMask(), true);
+
+  // Selected-bone weight heatmap uses weight-proportional alpha.
+  const heat = new PixelBuffer(16, 16);
+  renderBoneInfluenceOverlay(rig, heat, "bone-1", { mode: "heatmap" });
+  assert.ok(heat.getPixel(8, 8)[3] > 0);
+
+  const mesh = createAutoGridMesh(src, {
+    id: "mesh-1",
+    name: "Body Mesh",
+    layerId: "layer-body",
+    cellSize: 4,
+  });
+  assert.ok(mesh);
+  rig.addMesh(mesh);
+  rig.setMeshVertexOffset("mesh-1", 0, 1, -2);
+  rig.setMeshKeyframe(
+    "mesh-1",
+    2,
+    mesh.vertices.map(() => [0.5, 0.5] as [number, number])
+  );
+
+  const snapped = rig.toSnapshot();
+  assert.equal(snapped.version, 2);
+  assert.ok(snapped.weights);
+  assert.equal(snapped.meshes.length, 1);
+  assert.ok(snapped.clips[0].meshTracks?.["mesh-1"]);
+
+  const restored = new RigState();
+  restored.fromSnapshot(JSON.parse(JSON.stringify(snapped)));
+  const restoredWeights = restored.getBoneWeights();
+  assert.ok(restoredWeights);
+  assert.ok(
+    Array.from(restoredWeights.entries.values()).some((influences) =>
+      influences.some((influence) => influence.w < 0.99)
+    ),
+    "soft weights must not collapse to hard masks after reload"
+  );
+  assert.equal(restored.meshes.length, 1);
+  assert.equal(restored.meshes[0].vertices[0].offsetX, 1);
+  assert.equal(restored.getActiveClip().meshTracks?.["mesh-1"]?.length, 1);
+});
+
+test("R6 inverse-triangle sampler maps an identity mesh to an identical image", () => {
+  const src = makeR6Sprite(12);
+  const mesh = createGridMesh({
+    id: "mesh-identity",
+    bounds: { x: 0, y: 0, width: 12, height: 12 },
+    cellSize: 4,
+  });
+  const out = renderRigMesh(src, mesh);
+  assert.deepEqual(Array.from(out.data), Array.from(src.data));
+
+  // A pure FFD translation shifts the pixels by exactly one cell pixel.
+  const offsets = mesh.vertices.map(() => [1, 0] as [number, number]);
+  const shifted = renderRigMesh(src, mesh, { offsets, pixelSnap: true });
+  assert.deepEqual(shifted.getPixel(7, 6), [255, 0, 0, 255]);
+  // The pixel formerly at (6,6) now samples its left neighbour.
+  assert.deepEqual(shifted.getPixel(6, 6), [55, 102, 160, 255]);
+});
+
+test("R6 mesh FFD offsets interpolate between keyframes", () => {
+  const mesh = createGridMesh({
+    id: "mesh-anim",
+    bounds: { x: 0, y: 0, width: 8, height: 8 },
+    cellSize: 4,
+  });
+  const zeros = mesh.vertices.map(() => [0, 0] as [number, number]);
+  const ones = mesh.vertices.map(() => [2, -2] as [number, number]);
+  let track = upsertMeshKeyframe([], mesh, 0, zeros);
+  track = upsertMeshKeyframe(track, mesh, 2, ones);
+  const mid = sampleMeshOffsets(mesh, track, 1);
+  assert.deepEqual(mid[0], [1, -1]);
+  assert.deepEqual(mid[mid.length - 1], [1, -1]);
+});
+
+test("R6 skinLayerPixels stays hole-free and palette-preserving under LBS", () => {
+  const src = makeR6Sprite(16);
+  const weights = autoAssignWeights(src, R6_BONES);
+  assert.ok(weights);
+
+  const rest = new Map([
+    [
+      "bone-1",
+      {
+        id: "bone-1",
+        x: 8,
+        y: 0,
+        tipX: 8,
+        tipY: 8,
+        worldRotationDeg: 90,
+        length: 8,
+        worldScaleX: 1,
+        worldScaleY: 1,
+      },
+    ],
+    [
+      "bone-2",
+      {
+        id: "bone-2",
+        x: 8,
+        y: 8,
+        tipX: 8,
+        tipY: 16,
+        worldRotationDeg: 90,
+        length: 8,
+        worldScaleX: 1,
+        worldScaleY: 1,
+      },
+    ],
+  ]);
+  const identity = buildBoneTransformMap(rest, rest);
+  const identical = skinLayerPixels(src, weights, identity, { pixelSnap: true });
+  assert.deepEqual(Array.from(identical.data), Array.from(src.data));
+
+  const posed = new Map(rest);
+  posed.set("bone-1", {
+    ...rest.get("bone-1")!,
+    worldRotationDeg: 60,
+  });
+  const deform = buildBoneTransformMap(rest, posed);
+  const bent = skinLayerPixels(src, weights, deform, { pixelSnap: true });
+  assert.notDeepEqual(Array.from(bent.data), Array.from(src.data));
+
+  const palette = new Set(
+    collectPalette(src).map((color) =>
+      packRgba(color[0], color[1], color[2], color[3])
+    )
+  );
+  let opaque = 0;
+  for (let i = 0; i < bent.data.length; i += 4) {
+    if (bent.data[i + 3] === 0) continue;
+    opaque++;
+    const packed = packRgba(
+      bent.data[i],
+      bent.data[i + 1],
+      bent.data[i + 2],
+      bent.data[i + 3]
+    );
+    assert.ok(palette.has(packed), "LBS must only sample existing colors");
+  }
+  assert.ok(opaque > 0);
+});
+
+test("R6 hole fill fixes a known 1-px gap and orphan removal drops isolated pixels", () => {
+  const gap = new PixelBuffer(5, 5);
+  for (let y = 1; y <= 3; y++) {
+    for (let x = 1; x <= 3; x++) {
+      if (x === 2 && y === 2) continue;
+      gap.setPixel(x, y, 20, 40, 60, 255);
+    }
+  }
+  const filled = fillSinglePixelHoles(gap);
+  assert.deepEqual(filled.getPixel(2, 2), [20, 40, 60, 255]);
+
+  const isolated = new PixelBuffer(5, 5);
+  isolated.setPixel(2, 2, 255, 0, 0, 255);
+  isolated.setPixel(0, 0, 0, 255, 0, 255);
+  isolated.setPixel(1, 0, 0, 255, 0, 255);
+  const cleaned = removeOrphanPixels(isolated);
+  assert.deepEqual(cleaned.getPixel(2, 2), [0, 0, 0, 0]);
+  assert.deepEqual(cleaned.getPixel(0, 0), [0, 255, 0, 255]);
+});
+
+test("R6 palette lock never introduces colors outside the source cel", () => {
+  const source = new PixelBuffer(8, 8);
+  source.setPixel(0, 0, 10, 20, 30, 255);
+  source.setPixel(1, 0, 200, 100, 50, 255);
+  source.setPixel(2, 0, 90, 90, 220, 255);
+  const palette = collectPalette(source);
+  const known = new Set(
+    palette.map((color) => packRgba(color[0], color[1], color[2], color[3]))
+  );
+
+  const deformed = new PixelBuffer(8, 8);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      deformed.setPixel(x, y, (x * 31) % 256, (y * 47) % 256, (x + y) * 9, 255);
+    }
+  }
+
+  const locked = snapToPalette(deformed, palette);
+  for (let i = 0; i < locked.data.length; i += 4) {
+    if (locked.data[i + 3] === 0) continue;
+    const packed = packRgba(
+      locked.data[i],
+      locked.data[i + 1],
+      locked.data[i + 2],
+      locked.data[i + 3]
+    );
+    assert.ok(known.has(packed), "palette lock introduced a new color");
+  }
+
+  // The full cleanup pass (outline + palette lock) also stays in-palette.
+  const cleaned = applyPixelCleanup(
+    deformed,
+    {
+      removeOrphans: false,
+      fillHoles: true,
+      paletteLock: true,
+      preserveOutline: true,
+    },
+    { palette }
+  );
+  for (let i = 0; i < cleaned.data.length; i += 4) {
+    if (cleaned.data[i + 3] === 0) continue;
+    const packed = packRgba(
+      cleaned.data[i],
+      cleaned.data[i + 1],
+      cleaned.data[i + 2],
+      cleaned.data[i + 3]
+    );
+    assert.ok(known.has(packed), "cleanup introduced a new color");
+  }
+});
+
+test("R6 compositeRigFrame uses LBS for soft weights and keeps image colors", () => {
+  const engine = new PixelEngine(16, 16);
+  const cel = engine.getOrCreateCel("layer-body", 0);
+  cel.data.set(makeR6Sprite(16).data);
+  cel.markAllDirty();
+  for (let i = 0; i < 2; i++) {
+    engine.rig.addBone({
+      name: `Bone ${i + 1}`,
+      parentId: null,
+      localX: 8,
+      localY: i * 8,
+      length: 8,
+      rotationDeg: 90,
+    });
+  }
+  engine.rig.autoAssignBoneWeights(cel, 0);
+  engine.rig.setPoseOverride("bone-1", { rotationDeg: 70 }, 0);
+
+  const output = engine.compositeRigFrame(
+    [
+      {
+        id: "layer-body",
+        kind: "raster",
+        visible: true,
+        opacity: 100,
+        blendMode: "Normal",
+      },
+    ],
+    0,
+    { pixelSnap: true, rotSprite: true },
+    true
+  );
+  const palette = new Set(
+    collectPalette(cel).map((color) =>
+      packRgba(color[0], color[1], color[2], color[3])
+    )
+  );
+  let opaque = 0;
+  for (let i = 0; i < output.length; i += 4) {
+    if (output[i + 3] === 0) continue;
+    opaque++;
+    const packed = packRgba(output[i], output[i + 1], output[i + 2], output[i + 3]);
+    assert.ok(palette.has(packed));
+  }
+  assert.ok(opaque > 0);
+});
+
+test("R1 rest-mode preview is isolated from the R6 deform cache", () => {
+  const engine = new PixelEngine(16, 16);
+  const cel = engine.getOrCreateCel("layer-body", 0);
+  cel.data.set(makeR6Sprite(16).data);
+  cel.markAllDirty();
+  engine.rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 8,
+    localY: 8,
+    length: 8,
+    rotationDeg: 90,
+  });
+  engine.rig.autoAssignBoneWeights(cel, 0);
+  engine.rig.setPoseOverride("bone-1", { rotationDeg: 70 }, 0);
+  const layers = [
+    {
+      id: "layer-body",
+      kind: "raster" as const,
+      visible: true,
+      opacity: 100,
+      blendMode: "Normal" as const,
+    },
+  ];
+
+  const posed = new Uint8ClampedArray(
+    engine.compositeRigFrame(layers, 0, { pixelSnap: true, rotSprite: true }, true)
+  );
+  const rest = new Uint8ClampedArray(
+    engine.compositeRigFrame(
+      layers,
+      0,
+      { pixelSnap: true, rotSprite: true, mode: "rest" },
+      true
+    )
+  );
+  assert.notDeepEqual(Array.from(posed), Array.from(rest));
+
+  // Switching back to pose must not reuse the rest-mode cached buffer.
+  const posedAgain = new Uint8ClampedArray(
+    engine.compositeRigFrame(layers, 0, { pixelSnap: true, rotSprite: true }, true)
+  );
+  assert.deepEqual(Array.from(posedAgain), Array.from(posed));
+});
+
+test("R6 rig skinning benchmark 128x128 with 10 bones (logs timing only)", () => {
+  const engine = new PixelEngine(128, 128);
+  const cel = engine.getOrCreateCel("layer-body", 0);
+  for (let y = 16; y < 112; y++) {
+    for (let x = 32; x < 96; x++) {
+      cel.setPixel(x, y, 60 + ((x * 7) % 150), 80 + ((y * 5) % 140), 190, 255);
+    }
+  }
+
+  const boneIds: string[] = [];
+  let parentId: string | null = null;
+  for (let i = 0; i < 10; i++) {
+    const bone = engine.rig.addBone({
+      name: `Chain ${i + 1}`,
+      parentId,
+      localX: i === 0 ? 64 : 8,
+      localY: i === 0 ? 16 : 0,
+      length: 9.6,
+      rotationDeg: i === 0 ? 90 : 0,
+    });
+    boneIds.push(bone.id);
+    parentId = bone.id;
+  }
+  engine.rig.autoAssignBoneWeights(cel, 0);
+
+  const layers = [
+    {
+      id: "layer-body",
+      kind: "raster",
+      visible: true,
+      opacity: 100,
+      blendMode: "Normal" as const,
+    },
+  ];
+
+  const coldTimes: number[] = [];
+  for (let i = 0; i < 12; i++) {
+    engine.rig.setPoseOverride(boneIds[5], { rotationDeg: 6 + i * 2 }, 0);
+    const start = performance.now();
+    engine.compositeRigFrame(layers, 0, { pixelSnap: true, rotSprite: true }, true);
+    coldTimes.push(performance.now() - start);
+  }
+
+  const warmTimes: number[] = [];
+  for (let i = 0; i < 8; i++) {
+    const start = performance.now();
+    engine.compositeRigFrame(layers, 0, { pixelSnap: true, rotSprite: true }, true);
+    warmTimes.push(performance.now() - start);
+  }
+
+  const average = (values: number[]): number =>
+    values.reduce((sum, value) => sum + value, 0) / values.length;
+  const coldAvg = average(coldTimes);
+  const warmAvg = average(warmTimes);
+  const coldMin = Math.min(...coldTimes);
+  const warmMin = Math.min(...warmTimes);
+  console.log(
+    `[R6 benchmark] 128x128 soft LBS, 10 bones: cold avg ${coldAvg.toFixed(2)} ms ` +
+      `(min ${coldMin.toFixed(2)} ms), cached avg ${warmAvg.toFixed(2)} ms ` +
+      `(min ${warmMin.toFixed(2)} ms), target < 8 ms`
+  );
+
+  // Never fail CI on timing — only assert the frame was produced.
+  assert.equal(
+    engine.compositeRigFrame(layers, 0, { pixelSnap: true, rotSprite: true }, true)
+      .length,
+    128 * 128 * 4
+  );
 });

@@ -23,6 +23,10 @@ export function FloatingPreview() {
   const rigMode = useEditorStore((s) => s.rigMode);
   const rigPixelSnap = useEditorStore((s) => s.rigPixelSnap);
   const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
+  const rigCleanupOrphans = useEditorStore((s) => s.rigCleanupOrphans);
+  const rigCleanupHoles = useEditorStore((s) => s.rigCleanupHoles);
+  const rigCleanupPaletteLock = useEditorStore((s) => s.rigCleanupPaletteLock);
+  const rigCleanupOutline = useEditorStore((s) => s.rigCleanupOutline);
   const light2dEnabled = useEditorStore((s) => s.light2dEnabled);
   const light2dX = useEditorStore((s) => s.light2dX);
   const light2dY = useEditorStore((s) => s.light2dY);
@@ -69,6 +73,12 @@ export function FloatingPreview() {
           pixelSnap: state.rigPixelSnap,
           rotSprite: state.rigRotSprite,
           mode: state.rigMode === "setup" ? "rest" : "pose",
+          cleanup: {
+            removeOrphans: state.rigCleanupOrphans,
+            fillHoles: state.rigCleanupHoles,
+            paletteLock: state.rigCleanupPaletteLock,
+            preserveOutline: state.rigCleanupOutline,
+          },
         },
         light2d: {
           enabled: state.light2dEnabled,
@@ -111,6 +121,10 @@ export function FloatingPreview() {
     rigMode,
     rigPixelSnap,
     rigRotSprite,
+    rigCleanupOrphans,
+    rigCleanupHoles,
+    rigCleanupPaletteLock,
+    rigCleanupOutline,
     light2dEnabled,
     light2dX,
     light2dY,

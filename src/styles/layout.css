@@ -2557,3 +2557,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* R6 pixel cleanup controls, surfaced in the R1 Rig Render panel. */
+.rig-cleanup-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.rig-cleanup-title {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.rig-cleanup-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}

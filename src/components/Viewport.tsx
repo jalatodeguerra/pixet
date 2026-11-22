@@ -201,6 +201,11 @@ export function Viewport() {
   const rigShowBones = useEditorStore((s) => s.rigShowBones);
   const rigShowInfluence = useEditorStore((s) => s.rigShowInfluence);
   const rigVersion = useEditorStore((s) => s.rigVersion);
+  const rigWeightOverlay = useEditorStore((s) => s.rigWeightOverlay);
+  const rigCleanupOrphans = useEditorStore((s) => s.rigCleanupOrphans);
+  const rigCleanupHoles = useEditorStore((s) => s.rigCleanupHoles);
+  const rigCleanupPaletteLock = useEditorStore((s) => s.rigCleanupPaletteLock);
+  const rigCleanupOutline = useEditorStore((s) => s.rigCleanupOutline);
   const showFloatingPreview = useEditorStore((s) => s.showFloatingPreview);
   const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
   const showGameDataOverlay = useEditorStore((s) => s.showGameDataOverlay);
@@ -280,6 +285,12 @@ export function Viewport() {
             pixelSnap: state.rigPixelSnap,
             rotSprite: state.rigRotSprite,
             mode: state.rigMode === "setup" ? "rest" : "pose",
+            cleanup: {
+              removeOrphans: state.rigCleanupOrphans,
+              fillHoles: state.rigCleanupHoles,
+              paletteLock: state.rigCleanupPaletteLock,
+              preserveOutline: state.rigCleanupOutline,
+            },
           },
           light2d: {
             enabled: state.light2dEnabled,
@@ -308,7 +319,8 @@ export function Viewport() {
         renderBoneInfluenceOverlay(
           pixelEngine.rig,
           pixelEngine.overlayBuffer,
-          state.selectedBoneId
+          state.selectedBoneId,
+          { mode: state.rigWeightOverlay }
         );
       } else if (state.workspaceMode !== "rig" && !strokeRef.current) {
         pixelEngine.clearOverlay();
@@ -450,6 +462,11 @@ export function Viewport() {
     rigPixelSnap,
     rigRotSprite,
     rigShowInfluence,
+    rigWeightOverlay,
+    rigCleanupOrphans,
+    rigCleanupHoles,
+    rigCleanupPaletteLock,
+    rigCleanupOutline,
     selectedBoneId,
     rigTool,
     light2dEnabled,
@@ -511,7 +528,8 @@ export function Viewport() {
         renderBoneInfluenceOverlay(
           pixelEngine.rig,
           pixelEngine.overlayBuffer,
-          state.selectedBoneId
+          state.selectedBoneId,
+          { mode: state.rigWeightOverlay }
         );
       }
       if (
@@ -1832,7 +1850,8 @@ export function Viewport() {
         renderBoneInfluenceOverlay(
           pixelEngine.rig,
           pixelEngine.overlayBuffer,
-          state.selectedBoneId
+          state.selectedBoneId,
+          { mode: state.rigWeightOverlay }
         );
       }
       renderOverlayOnly();

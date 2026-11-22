@@ -24,6 +24,8 @@ export interface RigToolDef {
   setupOnly?: boolean;
   /** Milestone that will implement the tool's behaviour. */
   milestone?: string;
+  /** Overrides the default "coming in <milestone>" disabled tooltip. */
+  note?: string;
 }
 
 export const RIG_TOOL_DEFS: RigToolDef[] = [
@@ -60,6 +62,7 @@ export const RIG_TOOL_DEFS: RigToolDef[] = [
     shortcut: "M",
     icon: Grid3x3,
     milestone: "R6",
+    note: "mesh UI not wired yet",
   },
 ];
 
@@ -85,6 +88,7 @@ export function rigToolDisabledReason(
   def: RigToolDef,
   rigMode: RigMode
 ): string | null {
+  if (def.note) return def.note;
   if (def.milestone) return `coming in ${def.milestone}`;
   if (def.setupOnly && rigMode !== "setup") return "available in Setup mode";
   return null;

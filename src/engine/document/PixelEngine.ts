@@ -19,6 +19,17 @@ import {
   RigState,
   warpLayerByBone,
 } from "../rig/RigEngine.ts";
+import {
+  applyPixelCleanup,
+  hasPixelCleanup,
+  packRgba,
+} from "../rig/pixelCleanup.ts";
+import {
+  buildBoneTransformMap,
+  skinLayerPixels,
+  weightsAreHard,
+} from "../rig/skinning.ts";
+import { renderRigMesh } from "../rig/mesh.ts";
 import { GameDataState } from "../gamedev/GameDataEngine.ts";
 import {
   type LayerMapRole,
@@ -117,6 +128,8 @@ export class PixelEngine {
   tileProjection: "orthogonal" | "isometric" = "orthogonal";
 
   private listeners = new Set<() => void>();
+  /** R6 deformed-layer cache keyed by (frame, rig revision, cel revision, ...). */
+  private rigDeformCache = new Map<string, PixelBuffer>();
 
   constructor(width = 32, height = 32) {
     this.width = width;
@@ -143,6 +156,7 @@ export class PixelEngine {
     this.rig.reset();
     this.gameData.reset();
     this.history.clear();
+    this.rigDeformCache.clear();
     this.selection = null;
     this.floating = null;
   }
@@ -204,6 +218,7 @@ export class PixelEngine {
     this.selection = null;
     this.floating = null;
     this.history.clear();
+    this.rigDeformCache.clear();
     this.emitChange();
   }
 
@@ -754,6 +769,12 @@ export class PixelEngine {
       }
     }
 
+    // R6 soft skinning + mesh deformation share the same bone transforms.
+    const weights = this.rig.getBoneWeights();
+    const boneTransforms = buildBoneTransformMap(restMap, poseMap);
+    const activeClip = this.rig.getActiveClip();
+    const rigRevision = this.rig.revisionId;
+
     for (let li = layers.length - 1; li >= 0; li--) {
       const layer = layers[li];
       if (layer.kind === "group") continue;
@@ -798,6 +819,62 @@ export class PixelEngine {
         }
       }
       if (!cel) continue;
+      const sourceCel = cel;
+      const celWeights =
+        weights &&
+        weights.width === sourceCel.width &&
+        weights.height === sourceCel.height
+          ? weights
+          : null;
+      const mesh = this.rig.getMeshForLayer(layer.id);
+      const deformKey = `${layer.id}|${frameIndex}|${rigRevision}|${sourceCel.revision}|${opts.mode ?? "pose"}|${useOverrides ? 1 : 0}|${opts.pixelSnap ? 1 : 0}|${opts.rotSprite ? 1 : 0}`;
+
+      // R6 mesh deformation (FFD + skin weights) via inverse triangles.
+      if (mesh) {
+        const warped = this.getRigDeformedBuffer(
+          `${deformKey}|mesh:${mesh.id}`,
+          () =>
+            renderRigMesh(sourceCel, mesh, {
+              transforms: boneTransforms,
+              weights: celWeights,
+              track: activeClip.meshTracks?.[mesh.id] ?? null,
+              frame: frameIndex,
+              pixelSnap: opts.pixelSnap,
+            })
+        );
+        compositeSourceOnto(
+          dst,
+          this.width,
+          this.height,
+          warped,
+          0,
+          0,
+          effective.opacity,
+          layer.blendMode
+        );
+        continue;
+      }
+
+      // R6 soft weights use LBS (inverse-mapped lattice, hole-free sampling).
+      // Hard weights keep the fast per-bone warpLayerByBone path below.
+      if (celWeights && !weightsAreHard(celWeights)) {
+        const warped = this.getRigDeformedBuffer(`${deformKey}|lbs`, () =>
+          skinLayerPixels(sourceCel, celWeights, boneTransforms, {
+            pixelSnap: opts.pixelSnap,
+          })
+        );
+        compositeSourceOnto(
+          dst,
+          this.width,
+          this.height,
+          warped,
+          0,
+          0,
+          effective.opacity,
+          layer.blendMode
+        );
+        continue;
+      }
 
       const boneId = layerToBoneId.get(layer.id);
       const matchingMaskedBones = this.rig.hasAnyBoneMask()
@@ -883,7 +960,10 @@ export class PixelEngine {
         const rest = restMap.get(boneId);
         const posed = poseMap.get(boneId);
         if (rest && posed) {
-          sourceBuf = warpLayerByBone(cel, rest, posed, opts);
+          sourceBuf = this.getRigDeformedBuffer(
+            `${deformKey}|warp:${boneId}`,
+            () => warpLayerByBone(sourceCel, rest, posed, opts)
+          );
         }
       }
 
@@ -899,7 +979,56 @@ export class PixelEngine {
       );
     }
 
+    const cleanup = opts.cleanup;
+    if (cleanup && hasPixelCleanup(cleanup)) {
+      const source = new PixelBuffer(this.width, this.height, this.compositeBuffer);
+      const cleaned = applyPixelCleanup(source, cleanup, {
+        palette: this.collectRigSourcePalette(layers, frameIndex),
+      });
+      this.compositeBuffer.set(cleaned.data);
+    }
+
     return this.compositeBuffer;
+  }
+
+  /** Caches a deformed layer buffer keyed by frame + rig + cel revision. */
+  private getRigDeformedBuffer(
+    key: string,
+    build: () => PixelBuffer
+  ): PixelBuffer {
+    const cached = this.rigDeformCache.get(key);
+    if (cached) return cached;
+    const buffer = build();
+    this.rigDeformCache.set(key, buffer);
+    while (this.rigDeformCache.size > 48) {
+      const oldest = this.rigDeformCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.rigDeformCache.delete(oldest);
+    }
+    return buffer;
+  }
+
+  /** Merged opaque palette of the source cels (R6 palette lock + outline). */
+  private collectRigSourcePalette(
+    layers: readonly LayerCompositingInfo[],
+    frameIndex: number
+  ): RGBA[] {
+    const palette = new Map<number, RGBA>();
+    for (const layer of layers) {
+      if (layer.kind === "group" || layer.kind === "tilemap") continue;
+      const cel =
+        this.getCel(layer.id, frameIndex) ?? this.getCel(layer.id, 0);
+      if (!cel) continue;
+      const data = cel.data;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] === 0) continue;
+        const packed = packRgba(data[i], data[i + 1], data[i + 2], data[i + 3]);
+        if (!palette.has(packed)) {
+          palette.set(packed, [data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        }
+      }
+    }
+    return Array.from(palette.values());
   }
 
   compositeFrameWithShaderPreview(
