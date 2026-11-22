@@ -20,6 +20,7 @@ import {
   Unlock,
   Upload,
 } from "lucide-react";
+import { RigPanel } from "./RigPanel";
 import { TilesetPanel } from "./TilesetPanel";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import {
@@ -47,6 +48,9 @@ const BLEND_MODES: BlendMode[] = [
 export function RightSidebar() {
   const rightPanelWidth = useEditorStore((s) => s.rightPanelWidth);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const rigVersion = useEditorStore((s) => s.rigVersion);
+  const rigPixelSnap = useEditorStore((s) => s.rigPixelSnap);
+  const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
 
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
@@ -108,10 +112,13 @@ export function RightSidebar() {
     if (!ctx) return;
 
     const state = useEditorStore.getState();
-    const composite = pixelEngine.compositeFrame(
-      state.layers,
-      state.currentFrame
-    );
+    const composite =
+      state.workspaceMode === "rig" && pixelEngine.rig.bones.length > 0
+        ? pixelEngine.compositeRigFrame(state.layers, state.currentFrame, {
+            pixelSnap: state.rigPixelSnap,
+            rotSprite: state.rigRotSprite,
+          })
+        : pixelEngine.compositeFrame(state.layers, state.currentFrame);
     const img = new ImageData(
       new Uint8ClampedArray(composite),
       pixelEngine.width,
@@ -122,7 +129,17 @@ export function RightSidebar() {
 
   useEffect(() => {
     drawPreview();
-  }, [canvasWidth, canvasHeight, currentFrame, layers, drawPreview]);
+  }, [
+    canvasWidth,
+    canvasHeight,
+    currentFrame,
+    layers,
+    workspaceMode,
+    rigVersion,
+    rigPixelSnap,
+    rigRotSprite,
+    drawPreview,
+  ]);
 
   useEffect(() => {
     return pixelEngine.subscribe(drawPreview);
@@ -254,6 +271,9 @@ export function RightSidebar() {
 
       {/* Tileset Inspector in Tiles Mode */}
       {workspaceMode === "tiles" && <TilesetPanel />}
+
+      {/* 2D Rig Inspector in Rig Mode */}
+      {workspaceMode === "rig" && <RigPanel />}
 
       {/* Color & Palette */}
       <section className="panel-section">

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 
 export type WorkspaceMode = "draw" | "tiles" | "rig";
+export type RigTool = "select" | "addBone" | "ik";
 
 export type ToolId =
   | "pencil"
@@ -115,6 +116,13 @@ interface EditorState {
   exportModalOpen: boolean;
   rotate3dModalOpen: boolean;
 
+  rigTool: RigTool;
+  selectedBoneId: string | null;
+  rigPixelSnap: boolean;
+  rigRotSprite: boolean;
+  rigShowBones: boolean;
+  rigVersion: number;
+
   layers: LayerItem[];
   activeLayerId: string;
 
@@ -223,6 +231,12 @@ interface EditorState {
   setDocumentName: (name: string) => void;
   setExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
+  setRigTool: (tool: RigTool) => void;
+  setSelectedBoneId: (boneId: string | null) => void;
+  toggleRigPixelSnap: () => void;
+  toggleRigRotSprite: () => void;
+  toggleRigShowBones: () => void;
+  bumpRigVersion: () => void;
   loadProjectState: (payload: {
     documentName: string;
     filePath: string | null;
@@ -298,6 +312,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   colorMode: "RGBA",
   exportModalOpen: false,
   rotate3dModalOpen: false,
+
+  rigTool: "select",
+  selectedBoneId: null,
+  rigPixelSnap: true,
+  rigRotSprite: true,
+  rigShowBones: true,
+  rigVersion: 0,
 
   layers: [
     {
@@ -892,6 +913,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setDocumentName: (documentName) => set({ documentName }),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
   setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
+  setRigTool: (rigTool) => set({ rigTool }),
+  setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
+  toggleRigPixelSnap: () => set((s) => ({ rigPixelSnap: !s.rigPixelSnap })),
+  toggleRigRotSprite: () => set((s) => ({ rigRotSprite: !s.rigRotSprite })),
+  toggleRigShowBones: () => set((s) => ({ rigShowBones: !s.rigShowBones })),
+  bumpRigVersion: () => set((s) => ({ rigVersion: s.rigVersion + 1 })),
   loadProjectState: (payload) =>
     set({
       documentName: payload.documentName,
@@ -911,6 +938,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       canUndo: false,
       canRedo: false,
       hasSelection: false,
+      selectedBoneId: null,
     }),
 }));
 

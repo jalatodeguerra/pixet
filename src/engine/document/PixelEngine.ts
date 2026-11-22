@@ -14,6 +14,11 @@ import {
   TilemapData,
   Tileset,
 } from "../tiles/TilemapEngine.ts";
+import {
+  type RigRenderOptions,
+  RigState,
+  warpLayerByBone,
+} from "../rig/RigEngine.ts";
 import type {
   FloatingSelection,
   SelectionMask,
@@ -89,6 +94,7 @@ export class PixelEngine {
   readonly celLinks = new Map<string, number>();
   readonly tileset = new Tileset("tileset-default", "Main Tileset", 16, 16);
   readonly tilemaps = new Map<string, TilemapData>();
+  readonly rig = new RigState();
   readonly history = new TileHistory(100);
   compositeBuffer: Uint8ClampedArray;
   overlayBuffer: PixelBuffer;
@@ -125,6 +131,7 @@ export class PixelEngine {
     this.cels.clear();
     this.celLinks.clear();
     this.tilemaps.clear();
+    this.rig.reset();
     this.history.clear();
     this.selection = null;
     this.floating = null;
@@ -644,6 +651,107 @@ export class PixelEngine {
     frameIndex: number
   ): Uint8ClampedArray {
     this.compositeLayersInto(this.compositeBuffer, layers, frameIndex, true);
+    return this.compositeBuffer;
+  }
+
+  compositeRigFrame(
+    layers: readonly LayerCompositingInfo[],
+    frameIndex: number,
+    opts: RigRenderOptions,
+    useOverrides = true
+  ): Uint8ClampedArray {
+    if (this.rig.bones.length === 0) {
+      return this.compositeFrame(layers, frameIndex);
+    }
+
+    const dst = this.compositeBuffer;
+    dst.fill(0);
+
+    const byId = new Map<string, LayerCompositingInfo>();
+    for (const l of layers) {
+      byId.set(l.id, l);
+    }
+
+    const restMap = this.rig.computeWorldTransforms(frameIndex, "rest", false);
+    const poseMap = this.rig.computeWorldTransforms(
+      frameIndex,
+      "pose",
+      useOverrides
+    );
+    const layerToBoneId = new Map<string, string>();
+    for (const bone of this.rig.bones) {
+      if (bone.boundLayerId) {
+        layerToBoneId.set(bone.boundLayerId, bone.id);
+      }
+    }
+
+    for (let li = layers.length - 1; li >= 0; li--) {
+      const layer = layers[li];
+      if (layer.kind === "group") continue;
+
+      const effective = resolveLayerEffective(layer, byId);
+      if (!effective.visible || effective.opacity <= 0) continue;
+
+      if (layer.kind === "tilemap") {
+        const tm = this.getTilemap(layer.id, frameIndex);
+        if (tm) {
+          if (this.tileProjection === "isometric") {
+            renderIsometricTilemapToBuffer(
+              tm,
+              this.tileset,
+              dst,
+              this.width,
+              this.height,
+              effective.opacity,
+              layer.blendMode
+            );
+          } else {
+            renderTilemapToBuffer(
+              tm,
+              this.tileset,
+              dst,
+              this.width,
+              this.height,
+              effective.opacity,
+              layer.blendMode
+            );
+          }
+        }
+        continue;
+      }
+
+      let cel = this.getCel(layer.id, frameIndex);
+      if ((!cel || cel.isEmpty()) && frameIndex > 0) {
+        // Allow 1-frame drawn parts bound to bones to animate across all frames
+        const fallback = this.getCel(layer.id, 0);
+        if (fallback && !fallback.isEmpty()) {
+          cel = fallback;
+        }
+      }
+      if (!cel) continue;
+
+      const boneId = layerToBoneId.get(layer.id);
+      let sourceBuf = cel;
+      if (boneId) {
+        const rest = restMap.get(boneId);
+        const posed = poseMap.get(boneId);
+        if (rest && posed) {
+          sourceBuf = warpLayerByBone(cel, rest, posed, opts);
+        }
+      }
+
+      compositeSourceOnto(
+        dst,
+        this.width,
+        this.height,
+        sourceBuf,
+        0,
+        0,
+        effective.opacity,
+        layer.blendMode
+      );
+    }
+
     return this.compositeBuffer;
   }
 

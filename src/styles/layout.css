@@ -1504,3 +1504,212 @@
   font-weight: 600;
   color: var(--text-primary);
 }
+
+/* Phase 3: 2D Pixel Rigging Overlay & Inspector */
+.viewport-rig-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.rig-bone-shape {
+  fill: rgba(255, 255, 255, 0.22);
+  stroke: rgba(15, 15, 23, 0.85);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.rig-bone-shape.selected {
+  fill: rgba(91, 140, 255, 0.36);
+  stroke: #5b8cff;
+}
+
+.rig-bone-joint {
+  fill: #e4e4ec;
+  stroke: #0f0f17;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.rig-bone-joint.selected {
+  fill: #5b8cff;
+  stroke: #ffffff;
+}
+
+.rig-bone-joint.keyed {
+  stroke: #fbf236;
+  stroke-width: 2;
+}
+
+.rig-bone-tip {
+  fill: rgba(255, 255, 255, 0.78);
+  stroke: #0f0f17;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.rig-bone-tip.selected {
+  fill: #8fb3ff;
+  stroke: #0f0f17;
+}
+
+.rig-bone-draft {
+  stroke: #5b8cff;
+  stroke-width: 1.8;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.rig-tool-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.rig-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rig-hierarchy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.rig-empty-note {
+  padding: 8px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.rig-bone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-root);
+  padding: 3px;
+}
+
+.rig-bone-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding-right: 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.rig-bone-row:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.rig-bone-row.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.rig-bone-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rig-key-dot {
+  width: 6px;
+  height: 6px;
+  transform: rotate(45deg);
+  background: #fbf236;
+  flex-shrink: 0;
+}
+
+.rig-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.rig-inspector-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.rig-text-input {
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-root);
+  color: var(--text-primary);
+  font-size: 11px;
+  outline: none;
+}
+
+.rig-text-input:focus {
+  border-color: var(--accent);
+}
+
+.rig-slider-row {
+  display: grid;
+  grid-template-columns: 48px 1fr 38px;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.rig-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.rig-key-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rig-key-actions > .mini-btn:first-child {
+  flex: 1;
+  justify-content: center;
+}
+
+.rig-output-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.rig-output-actions > .mini-btn {
+  justify-content: center;
+}

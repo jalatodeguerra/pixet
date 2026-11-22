@@ -155,12 +155,35 @@ export function Viewport() {
   const onionPrevFrames = useEditorStore((s) => s.onionPrevFrames);
   const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
   const onionOpacity = useEditorStore((s) => s.onionOpacity);
+  const rigTool = useEditorStore((s) => s.rigTool);
+  const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
+  const rigPixelSnap = useEditorStore((s) => s.rigPixelSnap);
+  const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
+  const rigShowBones = useEditorStore((s) => s.rigShowBones);
+  const rigVersion = useEditorStore((s) => s.rigVersion);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapGhostRef = useRef<HTMLCanvasElement>(null);
   const wrapScratchRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<WebGL2Renderer | null>(null);
   const strokeRef = useRef<ActiveStroke | null>(null);
+  const rigDragRef = useRef<{
+    kind: "rotateBone" | "moveBone" | "addBone" | "ik";
+    boneId: string;
+    startX: number;
+    startY: number;
+    parentWorldDeg: number;
+    origLocalX: number;
+    origLocalY: number;
+    addTipX: number;
+    addTipY: number;
+  } | null>(null);
+  const [rigDraftBone, setRigDraftBone] = useState<{
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  } | null>(null);
 
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState(false);
@@ -193,10 +216,13 @@ export function Viewport() {
       } else {
         renderer.setShowOnion(false);
       }
-      const composite = pixelEngine.compositeFrame(
-        state.layers,
-        state.currentFrame
-      );
+      const composite =
+        state.workspaceMode === "rig" && pixelEngine.rig.bones.length > 0
+          ? pixelEngine.compositeRigFrame(state.layers, state.currentFrame, {
+              pixelSnap: state.rigPixelSnap,
+              rotSprite: state.rigRotSprite,
+            })
+          : pixelEngine.compositeFrame(state.layers, state.currentFrame);
       renderer.uploadFrame(pixelEngine.width, pixelEngine.height, composite);
       renderer.uploadOverlay(
         pixelEngine.width,
@@ -313,7 +339,12 @@ export function Viewport() {
     }
   }, [activeTool]);
 
-  // Re-composite when layers, active frame, wrap, or onion skin settings change
+  // Clear unsaved rig pose overrides when changing frames
+  useEffect(() => {
+    pixelEngine.rig.clearPoseOverrides();
+  }, [currentFrame]);
+
+  // Re-composite when layers, active frame, wrap, onion skin, or rig state change
   useEffect(() => {
     renderCanvas();
   }, [
@@ -324,6 +355,10 @@ export function Viewport() {
     onionPrevFrames,
     onionNextFrames,
     onionOpacity,
+    workspaceMode,
+    rigVersion,
+    rigPixelSnap,
+    rigRotSprite,
     renderCanvas,
   ]);
 
@@ -361,10 +396,19 @@ export function Viewport() {
     };
   };
 
+  const getSubpixelCoords = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) / zoom,
+      y: (e.clientY - rect.top) / zoom,
+    };
+  };
+
   const updateHoverOverlay = (px: number, py: number) => {
     const state = useEditorStore.getState();
     pixelEngine.clearOverlay();
     if (
+      state.workspaceMode === "rig" ||
       px < 0 ||
       py < 0 ||
       px >= state.canvasWidth ||
@@ -559,6 +603,135 @@ export function Viewport() {
 
     if (e.altKey || state.activeTool === "eyedropper") {
       sampleColorAt(px, py, isSecondary);
+      return;
+    }
+
+    if (state.workspaceMode === "rig" && e.button === 0) {
+      const sub = getSubpixelCoords(e);
+      const hitRadius = Math.max(1.8, 9 / zoom);
+      const transforms = pixelEngine.rig.computeWorldTransforms(
+        state.currentFrame,
+        "pose",
+        true
+      );
+
+      if (state.rigTool === "addBone") {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        rigDragRef.current = {
+          kind: "addBone",
+          boneId: state.selectedBoneId ?? "",
+          startX: sub.x,
+          startY: sub.y,
+          parentWorldDeg: 0,
+          origLocalX: 0,
+          origLocalY: 0,
+          addTipX: sub.x,
+          addTipY: sub.y,
+        };
+        setRigDraftBone({ x0: sub.x, y0: sub.y, x1: sub.x, y1: sub.y });
+        return;
+      }
+
+      if (state.rigTool === "ik") {
+        let ikBoneId: string | null = null;
+        let bestDist = hitRadius * 1.4;
+        for (const bone of pixelEngine.rig.bones) {
+          if (!bone.parentId) continue;
+          const t = transforms.get(bone.id);
+          if (!t) continue;
+          const d = Math.hypot(sub.x - t.tipX, sub.y - t.tipY);
+          if (d <= bestDist) {
+            bestDist = d;
+            ikBoneId = bone.id;
+          }
+        }
+        if (!ikBoneId && state.selectedBoneId) {
+          const sel = pixelEngine.rig.bones.find(
+            (b) => b.id === state.selectedBoneId
+          );
+          if (sel?.parentId) ikBoneId = sel.id;
+        }
+        if (ikBoneId) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          state.setSelectedBoneId(ikBoneId);
+          pixelEngine.rig.applyTwoBoneIK(
+            ikBoneId,
+            sub.x,
+            sub.y,
+            state.currentFrame
+          );
+          state.bumpRigVersion();
+          pixelEngine.emitChange();
+          rigDragRef.current = {
+            kind: "ik",
+            boneId: ikBoneId,
+            startX: sub.x,
+            startY: sub.y,
+            parentWorldDeg: 0,
+            origLocalX: 0,
+            origLocalY: 0,
+            addTipX: sub.x,
+            addTipY: sub.y,
+          };
+        }
+        return;
+      }
+
+      // Default Rig Pose/Select tool: check tips first, then origins
+      let hitBoneId: string | null = null;
+      let hitMode: "rotateBone" | "moveBone" = "rotateBone";
+      let bestDist = hitRadius;
+
+      for (const bone of pixelEngine.rig.bones) {
+        const t = transforms.get(bone.id);
+        if (!t) continue;
+        const dTip = Math.hypot(sub.x - t.tipX, sub.y - t.tipY);
+        if (dTip <= bestDist) {
+          bestDist = dTip;
+          hitBoneId = bone.id;
+          hitMode = "rotateBone";
+        }
+      }
+
+      if (!hitBoneId) {
+        for (const bone of pixelEngine.rig.bones) {
+          const t = transforms.get(bone.id);
+          if (!t) continue;
+          const dOrig = Math.hypot(sub.x - t.x, sub.y - t.y);
+          if (dOrig <= hitRadius) {
+            hitBoneId = bone.id;
+            hitMode = bone.parentId ? "rotateBone" : "moveBone";
+            break;
+          }
+        }
+      }
+
+      if (hitBoneId) {
+        const bone = pixelEngine.rig.bones.find((b) => b.id === hitBoneId);
+        if (bone) {
+          const parentWorldDeg = bone.parentId
+            ? (transforms.get(bone.parentId)?.worldRotationDeg ?? 0)
+            : 0;
+          const pose = pixelEngine.rig.getBonePoseAtFrame(
+            bone.id,
+            state.currentFrame,
+            true
+          );
+          state.setSelectedBoneId(bone.id);
+          e.currentTarget.setPointerCapture(e.pointerId);
+          rigDragRef.current = {
+            kind: hitMode,
+            boneId: bone.id,
+            startX: sub.x,
+            startY: sub.y,
+            parentWorldDeg,
+            origLocalX: pose.localX,
+            origLocalY: pose.localY,
+            addTipX: sub.x,
+            addTipY: sub.y,
+          };
+        }
+      }
       return;
     }
 
@@ -984,6 +1157,59 @@ export function Viewport() {
       setCursorPos(null);
     }
 
+    const rigDrag = rigDragRef.current;
+    if (rigDrag) {
+      const sub = getSubpixelCoords(e);
+      if (rigDrag.kind === "addBone") {
+        rigDrag.addTipX = sub.x;
+        rigDrag.addTipY = sub.y;
+        setRigDraftBone({
+          x0: rigDrag.startX,
+          y0: rigDrag.startY,
+          x1: sub.x,
+          y1: sub.y,
+        });
+      } else if (rigDrag.kind === "ik") {
+        pixelEngine.rig.applyTwoBoneIK(
+          rigDrag.boneId,
+          sub.x,
+          sub.y,
+          state.currentFrame
+        );
+        state.bumpRigVersion();
+        pixelEngine.emitChange();
+      } else if (rigDrag.kind === "moveBone") {
+        const dx = sub.x - rigDrag.startX;
+        const dy = sub.y - rigDrag.startY;
+        pixelEngine.rig.setPoseOverride(
+          rigDrag.boneId,
+          { localX: rigDrag.origLocalX + dx, localY: rigDrag.origLocalY + dy },
+          state.currentFrame
+        );
+        state.bumpRigVersion();
+        pixelEngine.emitChange();
+      } else if (rigDrag.kind === "rotateBone") {
+        const transforms = pixelEngine.rig.computeWorldTransforms(
+          state.currentFrame,
+          "pose",
+          true
+        );
+        const t = transforms.get(rigDrag.boneId);
+        if (t) {
+          const worldDeg =
+            (Math.atan2(sub.y - t.y, sub.x - t.x) * 180) / Math.PI;
+          pixelEngine.rig.setPoseOverride(
+            rigDrag.boneId,
+            { rotationDeg: worldDeg - rigDrag.parentWorldDeg },
+            state.currentFrame
+          );
+          state.bumpRigVersion();
+          pixelEngine.emitChange();
+        }
+      }
+      return;
+    }
+
     const stroke = strokeRef.current;
     if (!stroke) {
       if (!spacePressed) {
@@ -1261,6 +1487,57 @@ export function Viewport() {
   };
 
   const finishStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rigDrag = rigDragRef.current;
+    if (rigDrag) {
+      rigDragRef.current = null;
+      setRigDraftBone(null);
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      if (rigDrag.kind === "addBone") {
+        const dx = rigDrag.addTipX - rigDrag.startX;
+        const dy = rigDrag.addTipY - rigDrag.startY;
+        const len = Math.hypot(dx, dy);
+        if (len >= 1.5) {
+          const st = useEditorStore.getState();
+          const transforms = pixelEngine.rig.computeWorldTransforms(
+            st.currentFrame,
+            "pose",
+            true
+          );
+          const worldDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+          const parent = rigDrag.boneId
+            ? transforms.get(rigDrag.boneId)
+            : undefined;
+          let localX = rigDrag.startX;
+          let localY = rigDrag.startY;
+          let rotationDeg = worldDeg;
+          if (parent) {
+            const pRad = (-parent.worldRotationDeg * Math.PI) / 180;
+            const cos = Math.cos(pRad);
+            const sin = Math.sin(pRad);
+            const ox = rigDrag.startX - parent.x;
+            const oy = rigDrag.startY - parent.y;
+            localX = ox * cos - oy * sin;
+            localY = ox * sin + oy * cos;
+            rotationDeg = worldDeg - parent.worldRotationDeg;
+          }
+          const created = pixelEngine.rig.addBone({
+            parentId: parent ? parent.id : null,
+            localX,
+            localY,
+            length: Math.max(2, len),
+            rotationDeg,
+            boundLayerId: null,
+          });
+          st.setSelectedBoneId(created.id);
+          st.bumpRigVersion();
+          pixelEngine.emitChange();
+        }
+      }
+      return;
+    }
+
     const stroke = strokeRef.current;
     if (!stroke) return;
     strokeRef.current = null;
@@ -1446,9 +1723,13 @@ export function Viewport() {
 
   const cursorStyle = spacePressed
     ? "grab"
-    : activeTool === "move"
-      ? "move"
-      : "crosshair";
+    : workspaceMode === "rig"
+      ? rigTool === "select"
+        ? "default"
+        : "crosshair"
+      : activeTool === "move"
+        ? "move"
+        : "crosshair";
 
   const activeLayerObj = layers.find((l) => l.id === activeLayerId);
   const showTileGridOverlay =
@@ -1459,6 +1740,42 @@ export function Viewport() {
     const isoTileH = Math.max(4, Math.floor(tileWidth / 2));
     return buildIsoGridSvgPath(canvasWidth, canvasHeight, tileWidth, isoTileH);
   }, [showIsoGrid, canvasWidth, canvasHeight, tileWidth]);
+
+  const rigBonesOverlay = useMemo(() => {
+    void rigVersion;
+    if (workspaceMode !== "rig" || !rigShowBones) return [];
+    const transforms = pixelEngine.rig.computeWorldTransforms(
+      currentFrame,
+      "pose",
+      true
+    );
+    return pixelEngine.rig.bones
+      .map((bone) => {
+        const t = transforms.get(bone.id);
+        if (!t) return null;
+        const dx = t.tipX - t.x;
+        const dy = t.tipY - t.y;
+        const len = Math.max(0.01, Math.hypot(dx, dy));
+        const nx = -dy / len;
+        const ny = dx / len;
+        const halfBase = Math.min(1.1, Math.max(0.45, len * 0.14));
+        const b1x = t.x + nx * halfBase;
+        const b1y = t.y + ny * halfBase;
+        const b2x = t.x - nx * halfBase;
+        const b2y = t.y - ny * halfBase;
+        return {
+          id: bone.id,
+          x: t.x,
+          y: t.y,
+          tipX: t.tipX,
+          tipY: t.tipY,
+          polygon: `${t.x},${t.y} ${b1x},${b1y} ${t.tipX},${t.tipY} ${b2x},${b2y}`,
+          selected: bone.id === selectedBoneId,
+          keyed: pixelEngine.rig.hasKeyframe(bone.id, currentFrame),
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+  }, [workspaceMode, rigShowBones, currentFrame, rigVersion, selectedBoneId]);
 
   return (
     <section className="viewport-container" aria-label="Canvas Viewport">
@@ -1571,6 +1888,44 @@ export function Viewport() {
                   points={dragPreview.points
                     .map((p) => `${p.x + 0.5},${p.y + 0.5}`)
                     .join(" ")}
+                />
+              )}
+            </svg>
+          )}
+
+          {workspaceMode === "rig" && rigShowBones && (
+            <svg
+              className="viewport-rig-svg"
+              viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
+              preserveAspectRatio="none"
+            >
+              {rigBonesOverlay.map((b) => (
+                <g key={b.id}>
+                  <polygon
+                    className={`rig-bone-shape ${b.selected ? "selected" : ""}`}
+                    points={b.polygon}
+                  />
+                  <circle
+                    className={`rig-bone-joint ${b.selected ? "selected" : ""} ${b.keyed ? "keyed" : ""}`}
+                    cx={b.x}
+                    cy={b.y}
+                    r={0.85}
+                  />
+                  <circle
+                    className={`rig-bone-tip ${b.selected ? "selected" : ""}`}
+                    cx={b.tipX}
+                    cy={b.tipY}
+                    r={0.7}
+                  />
+                </g>
+              ))}
+              {rigDraftBone && (
+                <line
+                  className="rig-bone-draft"
+                  x1={rigDraftBone.x0}
+                  y1={rigDraftBone.y0}
+                  x2={rigDraftBone.x1}
+                  y2={rigDraftBone.y1}
                 />
               )}
             </svg>

@@ -47,6 +47,12 @@ import {
   render25DSprite,
   renderSpriteStack,
 } from "../src/engine/tools/rotate3d.ts";
+import {
+  lerpAngleDeg,
+  RigState,
+  solveTwoBoneIK,
+  warpLayerByBone,
+} from "../src/engine/rig/RigEngine.ts";
 
 test("plotBresenhamLine produces connected endpoints", () => {
   const pts = plotBresenhamLine(0, 0, 4, 2);
@@ -682,4 +688,116 @@ test("renderSpriteStack shifts upper layers upward and bakeTurntableFrames produ
     },
   });
   assert.equal(bakedStack.length, 6);
+});
+
+test("RigState forward kinematics propagates parent transforms to child bones", () => {
+  const rig = new RigState();
+  const root = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 10,
+    localY: 10,
+    length: 8,
+    rotationDeg: 0,
+  });
+  const child = rig.addBone({
+    name: "Child",
+    parentId: root.id,
+    localX: 8,
+    localY: 0,
+    length: 6,
+    rotationDeg: 0,
+  });
+
+  // Rotate root 90 degrees downward -> root tip is at (10, 18), child tip at (10, 24)
+  rig.setPoseOverride(root.id, { rotationDeg: 90 }, 0);
+  const world = rig.computeWorldTransforms(0, "pose", true);
+  const rw = world.get(root.id)!;
+  const cw = world.get(child.id)!;
+
+  assert.ok(Math.abs(rw.tipX - 10) < 1e-6);
+  assert.ok(Math.abs(rw.tipY - 18) < 1e-6);
+  assert.ok(Math.abs(cw.x - 10) < 1e-6);
+  assert.ok(Math.abs(cw.y - 18) < 1e-6);
+  assert.ok(Math.abs(cw.tipX - 10) < 1e-6);
+  assert.ok(Math.abs(cw.tipY - 24) < 1e-6);
+});
+
+test("solveTwoBoneIK reaches interior targets accurately and clamps beyond max reach", () => {
+  const ik = solveTwoBoneIK(0, 0, 10, 10, 10, 10, 1);
+  const rad1 = (ik.rootWorldDeg * Math.PI) / 180;
+  const rad2 = ((ik.rootWorldDeg + ik.childLocalDeg) * Math.PI) / 180;
+  const endX = Math.cos(rad1) * 10 + Math.cos(rad2) * 10;
+  const endY = Math.sin(rad1) * 10 + Math.sin(rad2) * 10;
+
+  assert.ok(Math.abs(endX - 10) < 0.05);
+  assert.ok(Math.abs(endY - 10) < 0.05);
+
+  // Far out-of-reach target should clamp without NaN
+  const far = solveTwoBoneIK(0, 0, 10, 10, 100, 0, 1);
+  assert.ok(Number.isFinite(far.rootWorldDeg));
+  assert.ok(Number.isFinite(far.childLocalDeg));
+});
+
+test("RigState keyframe interpolation uses shortest arc and step easing", () => {
+  assert.ok(Math.abs(lerpAngleDeg(170, -170, 0.5) - 180) < 1e-6 || Math.abs(lerpAngleDeg(170, -170, 0.5) + 180) < 1e-6);
+  assert.ok(Math.abs(lerpAngleDeg(-10, 10, 0.5) - 0) < 1e-6);
+
+  const rig = new RigState();
+  const root = rig.addBone({
+    name: "Arm",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 8,
+    rotationDeg: 0,
+  });
+
+  rig.setPoseOverride(root.id, { rotationDeg: -10 }, 0);
+  rig.setKeyframe(root.id, 0, "linear");
+  rig.setPoseOverride(root.id, { rotationDeg: 10 }, 2);
+  rig.setKeyframe(root.id, 2, "step");
+  rig.setPoseOverride(root.id, { rotationDeg: 90 }, 4);
+  rig.setKeyframe(root.id, 4, "linear");
+  rig.clearPoseOverrides();
+
+  const midLinear = rig.getBonePoseAtFrame(root.id, 1, false);
+  assert.ok(Math.abs(midLinear.rotationDeg - 0) < 1e-6);
+
+  const midStep = rig.getBonePoseAtFrame(root.id, 3, false);
+  assert.ok(Math.abs(midStep.rotationDeg - 10) < 1e-6);
+});
+
+test("warpLayerByBone deforms pixel cel with RotSprite & serializes rig JSON", () => {
+  const cel = new PixelBuffer(16, 16);
+  for (let y = 4; y <= 8; y++) {
+    for (let x = 7; x <= 9; x++) {
+      cel.setPixel(x, y, 80, 200, 120, 255);
+    }
+  }
+
+  const rig = new RigState();
+  const bone = rig.addBone({
+    name: "Limb",
+    parentId: null,
+    localX: 8,
+    localY: 8,
+    length: 6,
+    rotationDeg: -90,
+  });
+
+  const rest = rig.computeWorldTransforms(0, "rest", false).get(bone.id)!;
+  rig.setPoseOverride(bone.id, { rotationDeg: -45 }, 0);
+  const posed = rig.computeWorldTransforms(0, "pose", true).get(bone.id)!;
+
+  const warped = warpLayerByBone(cel, rest, posed, {
+    pixelSnap: true,
+    rotSprite: true,
+  });
+  assert.ok(countOpaquePixels(warped) > 0);
+
+  const json = JSON.parse(rig.serializeRuntimeJson(16, 16));
+  assert.equal(json.schema, "pixet-rig-v1");
+  assert.equal(json.bones.length, 1);
+  assert.equal(json.bones[0].name, "Limb");
 });
