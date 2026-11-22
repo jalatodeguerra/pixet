@@ -12,6 +12,7 @@ import {
   Folder,
   FolderPlus,
   Grid2x2,
+  GripVertical,
   Lock,
   Pause,
   Play,
@@ -23,6 +24,13 @@ import {
 import { RigPanel } from "./RigPanel";
 import { TilesetPanel } from "./TilesetPanel";
 import { pixelEngine } from "../engine/document/PixelEngine";
+import {
+  copySelection,
+  copySelectionToNewLayer,
+  cutSelection,
+  cutSelectionToNewLayer,
+  pasteClipboard,
+} from "../engine/document/selectionActions";
 import {
   BlendMode,
   getLayerDepth,
@@ -91,12 +99,16 @@ export function RightSidebar() {
   const moveLayer = useEditorStore((s) => s.moveLayer);
   const toggleGroupExpanded = useEditorStore((s) => s.toggleGroupExpanded);
   const setLayerParent = useEditorStore((s) => s.setLayerParent);
+  const openContextMenu = useEditorStore((s) => s.openContextMenu);
 
   const [hexInput, setHexInput] = useState(primaryColor);
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
-  const [dragOverLayerId, setDragOverLayerId] = useState<string | null>(null);
+  const [layerDropTarget, setLayerDropTarget] = useState<{
+    id: string;
+    pos: "before" | "after" | "inside";
+  } | null>(null);
 
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const paletteFileRef = useRef<HTMLInputElement>(null);
@@ -607,45 +619,145 @@ export function RightSidebar() {
               const active = layer.id === activeLayerId;
               const depth = getLayerDepth(layers, layer);
               const isEditing = editingLayerId === layer.id;
-              const isDragOver =
-                dragOverLayerId === layer.id && draggedLayerId !== layer.id;
+              const dropPos =
+                layerDropTarget?.id === layer.id &&
+                draggedLayerId !== layer.id
+                  ? layerDropTarget.pos
+                  : null;
+              const dropClass = dropPos ? `drag-over-${dropPos}` : "";
+              const isDraggingThis = draggedLayerId === layer.id;
 
               return (
                 <div
                   key={layer.id}
                   draggable={!isEditing}
-                  className={`layer-row ${active ? "active" : ""} ${isDragOver ? "drag-over" : ""}`}
-                  style={{ paddingLeft: 7 + depth * 14 }}
+                  className={`layer-row ${active ? "active" : ""} ${isDraggingThis ? "dragging" : ""} ${dropClass}`}
+                  style={{ paddingLeft: 5 + depth * 14 }}
                   onClick={() => selectLayer(layer.id)}
-                  onDragStart={() => setDraggedLayerId(layer.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    selectLayer(layer.id);
+                    const hasClip = Boolean(pixelEngine.clipboard);
+                    openContextMenu(e.clientX, e.clientY, [
+                      { kind: "item", label: "New Layer", action: () => addLayer() },
+                      { kind: "item", label: "New Group", action: () => addGroupLayer() },
+                      { kind: "item", label: "New Tilemap Layer", action: () => addTilemapLayer() },
+                      { kind: "separator" },
+                      { kind: "item", label: "Duplicate Layer", action: () => handleDuplicateLayer() },
+                      {
+                        kind: "item",
+                        label: "Rename Layer",
+                        action: () => {
+                          setEditingLayerId(layer.id);
+                          setEditingName(layer.name);
+                        },
+                      },
+                      { kind: "separator" },
+                      { kind: "item", label: "Cut", shortcut: "Ctrl+X", action: () => { cutSelection(); } },
+                      { kind: "item", label: "Copy", shortcut: "Ctrl+C", action: () => { copySelection(); } },
+                      { kind: "item", label: "Paste", shortcut: "Ctrl+V", disabled: !hasClip, action: () => { pasteClipboard(); } },
+                      { kind: "item", label: "Cut to New Layer", shortcut: "Ctrl+Shift+X", action: () => { cutSelectionToNewLayer(); } },
+                      { kind: "item", label: "Copy to New Layer", shortcut: "Ctrl+J", action: () => { copySelectionToNewLayer(); } },
+                      { kind: "separator" },
+                      {
+                        kind: "item",
+                        label: "Move Up",
+                        disabled: index <= 0,
+                        action: () => moveLayer(index, index - 1),
+                      },
+                      {
+                        kind: "item",
+                        label: "Move Down",
+                        disabled: index >= layers.length - 1,
+                        action: () => moveLayer(index, index + 1),
+                      },
+                      {
+                        kind: "item",
+                        label: layer.visible ? "Hide Layer" : "Show Layer",
+                        action: () => toggleLayerVisible(layer.id),
+                      },
+                      {
+                        kind: "item",
+                        label: layer.locked ? "Unlock Layer" : "Lock Layer",
+                        action: () => toggleLayerLocked(layer.id),
+                      },
+                      { kind: "separator" },
+                      {
+                        kind: "item",
+                        label: "Delete Layer",
+                        disabled: layers.length <= 1,
+                        danger: true,
+                        action: () => deleteActiveLayer(),
+                      },
+                    ]);
+                  }}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("text/plain", layer.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    setDraggedLayerId(layer.id);
+                  }}
                   onDragOver={(e) => {
                     e.preventDefault();
-                    setDragOverLayerId(layer.id);
+                    e.dataTransfer.dropEffect = "move";
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const ratio =
+                      (e.clientY - rect.top) / Math.max(1, rect.height);
+                    let pos: "before" | "after" | "inside";
+                    if (layer.kind === "group") {
+                      pos =
+                        ratio < 0.28
+                          ? "before"
+                          : ratio > 0.72
+                            ? "after"
+                            : "inside";
+                    } else {
+                      pos = ratio < 0.5 ? "before" : "after";
+                    }
+                    setLayerDropTarget({ id: layer.id, pos });
                   }}
-                  onDragLeave={() => {
-                    if (dragOverLayerId === layer.id) setDragOverLayerId(null);
+                  onDragLeave={(e) => {
+                    if (
+                      !e.currentTarget.contains(e.relatedTarget as Node | null) &&
+                      layerDropTarget?.id === layer.id
+                    ) {
+                      setLayerDropTarget(null);
+                    }
                   }}
                   onDrop={(e) => {
                     e.preventDefault();
-                    setDragOverLayerId(null);
-                    if (!draggedLayerId || draggedLayerId === layer.id) return;
-                    const fromIdx = layers.findIndex(
-                      (l) => l.id === draggedLayerId
-                    );
-                    if (fromIdx < 0) return;
-                    if (layer.kind === "group") {
-                      setLayerParent(draggedLayerId, layer.id);
-                    } else {
-                      setLayerParent(draggedLayerId, layer.parentId);
-                    }
-                    moveLayer(fromIdx, index);
+                    const pos = layerDropTarget?.pos ?? "before";
+                    setLayerDropTarget(null);
+                    const sourceId =
+                      draggedLayerId || e.dataTransfer.getData("text/plain");
                     setDraggedLayerId(null);
+                    if (!sourceId || sourceId === layer.id) return;
+
+                    const fromIdx = layers.findIndex((l) => l.id === sourceId);
+                    if (fromIdx < 0) return;
+
+                    if (pos === "inside" && layer.kind === "group") {
+                      setLayerParent(sourceId, layer.id);
+                    } else {
+                      setLayerParent(sourceId, layer.parentId);
+                    }
+
+                    const rawTo =
+                      pos === "before"
+                        ? fromIdx < index
+                          ? index - 1
+                          : index
+                        : fromIdx < index
+                          ? index
+                          : index + 1;
+                    const toIdx = Math.max(0, Math.min(layers.length - 1, rawTo));
+                    moveLayer(fromIdx, toIdx);
                   }}
                   onDragEnd={() => {
                     setDraggedLayerId(null);
-                    setDragOverLayerId(null);
+                    setLayerDropTarget(null);
                   }}
                 >
+                  <GripVertical size={11} className="layer-drag-handle" />
                   <button
                     type="button"
                     className="icon-action-btn"

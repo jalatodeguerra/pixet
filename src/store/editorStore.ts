@@ -57,6 +57,23 @@ export interface CursorPoint {
   y: number;
 }
 
+export type ContextMenuItem =
+  | {
+      kind: "item";
+      label: string;
+      shortcut?: string;
+      disabled?: boolean;
+      danger?: boolean;
+      action: () => void;
+    }
+  | { kind: "separator" };
+
+export interface ContextMenuState {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+}
+
 export const DEFAULT_PALETTE = [
   "#0f0f17",
   "#232136",
@@ -117,6 +134,7 @@ interface EditorState {
   exportModalOpen: boolean;
   rotate3dModalOpen: boolean;
   pendingImportImage: PendingImageImport | null;
+  contextMenu: ContextMenuState | null;
 
   rigTool: RigTool;
   selectedBoneId: string | null;
@@ -236,6 +254,8 @@ interface EditorState {
   setExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
   setPendingImportImage: (img: PendingImageImport | null) => void;
+  openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
+  closeContextMenu: () => void;
   setRigTool: (tool: RigTool) => void;
   setSelectedBoneId: (boneId: string | null) => void;
   toggleRigPixelSnap: () => void;
@@ -320,6 +340,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   exportModalOpen: false,
   rotate3dModalOpen: false,
   pendingImportImage: null,
+  contextMenu: null,
 
   rigTool: "select",
   selectedBoneId: null,
@@ -924,6 +945,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
   setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
   setPendingImportImage: (pendingImportImage) => set({ pendingImportImage }),
+  openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
+  closeContextMenu: () => set({ contextMenu: null }),
   setRigTool: (rigTool) => set({ rigTool }),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
   toggleRigPixelSnap: () => set((s) => ({ rigPixelSnap: !s.rigPixelSnap })),

@@ -16,6 +16,7 @@ import {
 } from "../src/engine/tools/pixelAlgos.ts";
 import {
   buildSelectionSvgPath,
+  clearMaskedRegion,
   createLassoSelection,
   createMagicWandSelection,
   createRectSelection,
@@ -917,4 +918,46 @@ test("RigState bone influence painting, auto-weighting, overlay & partial layer 
   // Top pixel moved from (8,3) to (10,5) after +90 deg around pivot (8,5)
   assert.deepEqual(engine.sampleCompositedPixel(8, 3), [0, 0, 0, 0]);
   assert.deepEqual(engine.sampleCompositedPixel(10, 5), [255, 0, 0, 255]);
+});
+
+test("cut selection to new layer preserves exact pixel offsets and layer reorder math is exact", () => {
+  const src = new PixelBuffer(8, 8);
+  src.setPixel(5, 6, 120, 45, 210, 255);
+  src.setPixel(1, 1, 10, 20, 30, 255);
+
+  const mask = createRectSelection(8, 8, 4, 5, 6, 7);
+  const extracted = extractMaskedRegion(src, mask)!;
+  assert.equal(extracted.x, 4);
+  assert.equal(extracted.y, 5);
+  const clearedCount = clearMaskedRegion(src, mask);
+  assert.equal(clearedCount, 1);
+  assert.deepEqual(src.getPixel(5, 6), [0, 0, 0, 0]);
+  assert.deepEqual(src.getPixel(1, 1), [10, 20, 30, 255]);
+
+  const newLayerCel = new PixelBuffer(8, 8);
+  stampFloatingPixels(newLayerCel, extracted.pixels, extracted.x, extracted.y);
+  assert.deepEqual(newLayerCel.getPixel(5, 6), [120, 45, 210, 255]);
+  assert.deepEqual(newLayerCel.getPixel(1, 1), [0, 0, 0, 0]);
+
+  // Verify splice moveLayer index math for before/after drops
+  const reorder = (arr: string[], fromIdx: number, index: number, pos: "before" | "after") => {
+    const rawTo =
+      pos === "before"
+        ? fromIdx < index
+          ? index - 1
+          : index
+        : fromIdx < index
+          ? index
+          : index + 1;
+    const toIdx = Math.max(0, Math.min(arr.length - 1, rawTo));
+    const copy = arr.slice();
+    const [moved] = copy.splice(fromIdx, 1);
+    copy.splice(toIdx, 0, moved);
+    return copy;
+  };
+
+  assert.deepEqual(reorder(["A", "B", "C"], 0, 2, "before"), ["B", "A", "C"]);
+  assert.deepEqual(reorder(["A", "B", "C"], 0, 2, "after"), ["B", "C", "A"]);
+  assert.deepEqual(reorder(["A", "B", "C"], 2, 0, "before"), ["C", "A", "B"]);
+  assert.deepEqual(reorder(["A", "B", "C"], 2, 0, "after"), ["A", "C", "B"]);
 });

@@ -9,8 +9,16 @@ import { pixelEngine } from "../engine/document/PixelEngine";
 import { syncHistoryAndCelState } from "../engine/document/historyActions";
 import {
   commitFloatingSelection,
+  copySelection,
+  copySelectionToNewLayer,
+  cutSelection,
+  cutSelectionToNewLayer,
+  deleteSelection,
   deselectAll,
   liftSelectionForMove,
+  pasteClipboard,
+  selectAllCanvas,
+  transformSelectionOrCel,
 } from "../engine/document/selectionActions";
 import { WebGL2Renderer } from "../engine/renderer/WebGL2Renderer";
 import { renderBoneInfluenceOverlay } from "../engine/rig/RigEngine";
@@ -697,6 +705,9 @@ export function Viewport() {
       pixelEngine.emitChange();
       return;
     }
+
+    // Left click draws; Alt+Right samples BG color; plain Right-click opens context menu
+    if (e.button !== 0) return;
 
     if (state.workspaceMode === "rig" && e.button === 0) {
       const sub = getSubpixelCoords(e);
@@ -1847,6 +1858,37 @@ export function Viewport() {
     }
   };
 
+  const handleCanvasContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const state = useEditorStore.getState();
+    if (state.workspaceMode === "rig" && state.rigTool === "weightPaint") {
+      return;
+    }
+    const hasClip = Boolean(pixelEngine.clipboard);
+    const hasSel = Boolean(
+      pixelEngine.floating ||
+        (pixelEngine.selection && !pixelEngine.selection.isEmpty())
+    );
+    state.openContextMenu(e.clientX, e.clientY, [
+      { kind: "item", label: "Cut", shortcut: "Ctrl+X", action: () => { cutSelection(); } },
+      { kind: "item", label: "Copy", shortcut: "Ctrl+C", action: () => { copySelection(); } },
+      { kind: "item", label: "Paste", shortcut: "Ctrl+V", disabled: !hasClip, action: () => { pasteClipboard(); } },
+      { kind: "separator" },
+      { kind: "item", label: "Cut to New Layer", shortcut: "Ctrl+Shift+X", action: () => { cutSelectionToNewLayer(); } },
+      { kind: "item", label: "Copy to New Layer", shortcut: "Ctrl+J", action: () => { copySelectionToNewLayer(); } },
+      { kind: "item", label: "Delete Selection", shortcut: "Del", disabled: !hasSel, danger: true, action: () => { deleteSelection(); } },
+      { kind: "separator" },
+      { kind: "item", label: "Select All", shortcut: "Ctrl+A", action: () => selectAllCanvas() },
+      { kind: "item", label: "Deselect", shortcut: "Ctrl+D", disabled: !hasSel, action: () => deselectAll() },
+      { kind: "separator" },
+      { kind: "item", label: "Flip Horizontal", action: () => transformSelectionOrCel("flipH") },
+      { kind: "item", label: "Flip Vertical", action: () => transformSelectionOrCel("flipV") },
+      { kind: "item", label: "Rotate 90° CW", action: () => transformSelectionOrCel("rotateCW") },
+      { kind: "item", label: "3D Rotate & Turntable...", shortcut: "Ctrl+3", action: () => state.setRotate3dModalOpen(true) },
+    ]);
+  };
+
   const cursorStyle = spacePressed
     ? "grab"
     : workspaceMode === "rig"
@@ -1921,6 +1963,7 @@ export function Viewport() {
         className="viewport-stage"
         style={{ cursor: spacePressed ? "grab" : undefined }}
         onWheel={handleWheel}
+        onContextMenu={handleCanvasContextMenu}
         onMouseDown={handleStageMouseDown}
         onMouseMove={handleStageMouseMove}
         onMouseUp={handleStageMouseUp}
@@ -1953,7 +1996,7 @@ export function Viewport() {
             ref={canvasRef}
             className="viewport-canvas"
             style={{ cursor: cursorStyle }}
-            onContextMenu={(e) => e.preventDefault()}
+            onContextMenu={handleCanvasContextMenu}
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handleCanvasPointerMove}
             onPointerUp={finishStroke}

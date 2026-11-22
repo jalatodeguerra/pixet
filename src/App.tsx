@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { ContextMenu } from "./components/ContextMenu";
 import { ExportModal } from "./components/ExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { RightSidebar } from "./components/RightSidebar";
@@ -15,7 +16,9 @@ import { performRedo, performUndo } from "./engine/document/historyActions";
 import {
   commitFloatingSelection,
   copySelection,
+  copySelectionToNewLayer,
   cutSelection,
+  cutSelectionToNewLayer,
   deleteSelection,
   deselectAll,
   pasteClipboard,
@@ -116,7 +119,16 @@ export function App() {
         }
         if (ctrlKey === "x") {
           e.preventDefault();
-          cutSelection();
+          if (e.shiftKey) {
+            cutSelectionToNewLayer();
+          } else {
+            cutSelection();
+          }
+          return;
+        }
+        if (ctrlKey === "j") {
+          e.preventDefault();
+          copySelectionToNewLayer();
           return;
         }
         if (ctrlKey === "v") {
@@ -379,6 +391,7 @@ export function App() {
       <ExportModal />
       <Rotate3DModal />
       <ImportImageModal />
+      <ContextMenu />
       {isDragOver && (
         <div className="dropzone-overlay">
           <div className="dropzone-card">

@@ -11,7 +11,9 @@ import {
 import { performRedo, performUndo } from "../engine/document/historyActions";
 import {
   copySelection,
+  copySelectionToNewLayer,
   cutSelection,
+  cutSelectionToNewLayer,
   deselectAll,
   pasteClipboard,
   selectAllCanvas,
@@ -103,6 +105,8 @@ export function TopBar() {
       { label: "Cut", shortcut: "Ctrl+X", action: () => { cutSelection(); setOpenMenu(null); } },
       { label: "Copy", shortcut: "Ctrl+C", action: () => { copySelection(); setOpenMenu(null); } },
       { label: "Paste", shortcut: "Ctrl+V", action: () => { pasteClipboard(); setOpenMenu(null); } },
+      { label: "Cut to New Layer", shortcut: "Ctrl+Shift+X", action: () => { cutSelectionToNewLayer(); setOpenMenu(null); } },
+      { label: "Copy to New Layer", shortcut: "Ctrl+J", action: () => { copySelectionToNewLayer(); setOpenMenu(null); } },
       { label: "Select All", shortcut: "Ctrl+A", action: () => { selectAllCanvas(); setOpenMenu(null); } },
       { label: "Deselect", shortcut: "Ctrl+D", action: () => { deselectAll(); setOpenMenu(null); } },
       { label: "Flip Horizontal", action: () => { transformSelectionOrCel("flipH"); setOpenMenu(null); } },

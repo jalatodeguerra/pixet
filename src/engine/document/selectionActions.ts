@@ -5,6 +5,7 @@ import {
 import { PixelBuffer } from "./PixelBuffer.ts";
 import { pixelEngine } from "./PixelEngine.ts";
 import { syncHistoryAndCelState } from "./historyActions.ts";
+import { syncTimelineCels } from "./timelineActions.ts";
 import {
   clearMaskedRegion,
   createFullSelection,
@@ -294,6 +295,119 @@ export function pasteClipboard(): boolean {
   state.setActiveTool("move");
   state.setStatusMessage("Pasted as floating selection");
   pixelEngine.emitChange();
+  return true;
+}
+
+export function copySelectionToNewLayer(): boolean {
+  const state = useEditorStore.getState();
+  const layer = state.layers.find((l) => l.id === state.activeLayerId);
+  if (!layer || layer.kind === "group") {
+    state.setStatusMessage("Select a raster layer first");
+    return false;
+  }
+
+  let pixels: PixelBuffer | null = null;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  if (pixelEngine.floating) {
+    pixels = pixelEngine.floating.pixels.clone();
+    offsetX = pixelEngine.floating.offsetX;
+    offsetY = pixelEngine.floating.offsetY;
+  } else {
+    const cel = pixelEngine.getCel(layer.id, state.currentFrame);
+    if (!cel || cel.isEmpty()) return false;
+    if (pixelEngine.selection && !pixelEngine.selection.isEmpty()) {
+      const extracted = extractMaskedRegion(cel, pixelEngine.selection);
+      if (!extracted) return false;
+      pixels = extracted.pixels;
+      offsetX = extracted.x;
+      offsetY = extracted.y;
+    } else {
+      pixels = cel.clone();
+    }
+  }
+
+  const frameIndex = state.currentFrame;
+  const newLayerId = state.addNamedLayer(`${layer.name} (Copy)`);
+  const dstCel = pixelEngine.getOrCreateCel(newLayerId, frameIndex);
+  stampFloatingPixels(dstCel, pixels, offsetX, offsetY);
+  syncTimelineCels();
+  pixelEngine.emitChange();
+  state.setStatusMessage("Copied to new layer");
+  return true;
+}
+
+export function cutSelectionToNewLayer(): boolean {
+  const state = useEditorStore.getState();
+  const layer = state.layers.find((l) => l.id === state.activeLayerId);
+  if (
+    !layer ||
+    layer.kind === "group" ||
+    isLayerEffectivelyLocked(state.layers, layer.id)
+  ) {
+    state.setStatusMessage("Select an unlocked raster layer to cut");
+    return false;
+  }
+
+  const frameIndex = state.currentFrame;
+  let pixels: PixelBuffer | null = null;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  if (pixelEngine.floating) {
+    const fl = pixelEngine.floating;
+    pixels = fl.pixels.clone();
+    offsetX = fl.offsetX;
+    offsetY = fl.offsetY;
+    pixelEngine.floating = null;
+    const srcCel = pixelEngine.getOrCreateCel(
+      fl.sourceLayerId,
+      fl.sourceFrameIndex
+    );
+    if (fl.liftedFromCel && pixelEngine.history.hasActiveTransaction) {
+      if (!pixelEngine.history.commitTransaction(srcCel)) {
+        pixelEngine.history.cancelTransaction();
+      }
+      syncHistoryAndCelState(fl.sourceLayerId, fl.sourceFrameIndex);
+    }
+  } else {
+    const srcCel = pixelEngine.getOrCreateCel(layer.id, frameIndex);
+    if (srcCel.isEmpty()) return false;
+    const mask =
+      pixelEngine.selection && !pixelEngine.selection.isEmpty()
+        ? pixelEngine.selection
+        : createFullSelection(srcCel.width, srcCel.height);
+    const extracted = extractMaskedRegion(srcCel, mask);
+    if (!extracted) return false;
+    pixels = extracted.pixels;
+    offsetX = extracted.x;
+    offsetY = extracted.y;
+
+    pixelEngine.history.beginTransaction(
+      layer.id,
+      frameIndex,
+      "Cut to New Layer"
+    );
+    const cleared = clearMaskedRegion(srcCel, mask, (cx, cy) =>
+      pixelEngine.history.capturePixelTile(srcCel, cx, cy)
+    );
+    if (cleared > 0 && pixelEngine.history.commitTransaction(srcCel)) {
+      syncHistoryAndCelState(layer.id, frameIndex);
+    } else {
+      pixelEngine.history.cancelTransaction();
+    }
+  }
+
+  const newLayerId = state.addNamedLayer(`${layer.name} (Cut)`);
+  const dstCel = pixelEngine.getOrCreateCel(newLayerId, frameIndex);
+  stampFloatingPixels(dstCel, pixels, offsetX, offsetY);
+
+  pixelEngine.selection = null;
+  state.setHasSelection(false);
+  syncTimelineCels();
+  pixelEngine.emitChange();
+  state.setStatusMessage("Cut to new layer");
   return true;
 }
 
