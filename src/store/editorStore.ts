@@ -149,6 +149,7 @@ interface EditorState {
 
   layers: LayerItem[];
   activeLayerId: string;
+  selectedLayerIds: string[];
 
   frames: FrameItem[];
   currentFrame: number;
@@ -204,6 +205,10 @@ interface EditorState {
   removeColorFromPalette: (hex: string) => void;
 
   selectLayer: (id: string) => void;
+  selectLayerRange: (targetId: string) => void;
+  toggleSelectLayer: (targetId: string) => void;
+  groupSelectedLayers: (layerIds?: string[]) => void;
+  ungroupLayer: (groupId: string) => void;
   toggleLayerVisible: (id: string) => void;
   toggleLayerLocked: (id: string) => void;
   toggleLayerAlphaLock: (id: string) => void;
@@ -400,6 +405,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     },
   ],
   activeLayerId: "layer-outline",
+  selectedLayerIds: ["layer-outline"],
 
   frames: [
     { id: "frame-1", index: 0, durationMs: 100 },
@@ -497,7 +503,133 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
     }),
 
-  selectLayer: (activeLayerId) => set({ activeLayerId }),
+  selectLayer: (activeLayerId) =>
+    set({ activeLayerId, selectedLayerIds: [activeLayerId] }),
+  selectLayerRange: (targetId) =>
+    set((s) => {
+      const visible = s.layers.filter(
+        (l) => !isLayerHiddenByCollapsedGroup(s.layers, l)
+      );
+      const anchorIdx = visible.findIndex((l) => l.id === s.activeLayerId);
+      const targetIdx = visible.findIndex((l) => l.id === targetId);
+      if (targetIdx < 0) return s;
+      if (anchorIdx < 0) {
+        return { activeLayerId: targetId, selectedLayerIds: [targetId] };
+      }
+      const lo = Math.min(anchorIdx, targetIdx);
+      const hi = Math.max(anchorIdx, targetIdx);
+      return {
+        selectedLayerIds: visible.slice(lo, hi + 1).map((l) => l.id),
+      };
+    }),
+  toggleSelectLayer: (targetId) =>
+    set((s) => {
+      const exists = s.selectedLayerIds.includes(targetId);
+      if (exists && s.selectedLayerIds.length <= 1) {
+        return { activeLayerId: targetId, selectedLayerIds: [targetId] };
+      }
+      const next = exists
+        ? s.selectedLayerIds.filter((id) => id !== targetId)
+        : [...s.selectedLayerIds, targetId];
+      return {
+        activeLayerId: targetId,
+        selectedLayerIds: next,
+      };
+    }),
+  groupSelectedLayers: (layerIds) =>
+    set((s) => {
+      const candidateIds = new Set(
+        layerIds && layerIds.length > 0 ? layerIds : s.selectedLayerIds
+      );
+      if (candidateIds.size === 0) return s;
+
+      const byId = new Map(s.layers.map((l) => [l.id, l]));
+      const hasSelectedAncestor = (layer: LayerItem): boolean => {
+        let cur = layer.parentId;
+        const visited = new Set<string>([layer.id]);
+        while (cur && !visited.has(cur)) {
+          if (candidateIds.has(cur)) return true;
+          visited.add(cur);
+          cur = byId.get(cur)?.parentId ?? null;
+        }
+        return false;
+      };
+
+      const roots = s.layers.filter(
+        (l) => candidateIds.has(l.id) && !hasSelectedAncestor(l)
+      );
+      if (roots.length === 0) return s;
+      const rootSet = new Set(roots.map((r) => r.id));
+
+      const isUnderSelectedRoot = (layer: LayerItem): boolean => {
+        if (rootSet.has(layer.id)) return true;
+        let cur = layer.parentId;
+        const visited = new Set<string>([layer.id]);
+        while (cur && !visited.has(cur)) {
+          if (rootSet.has(cur)) return true;
+          visited.add(cur);
+          cur = byId.get(cur)?.parentId ?? null;
+        }
+        return false;
+      };
+
+      const firstIdx = s.layers.findIndex((l) => rootSet.has(l.id));
+      if (firstIdx < 0) return s;
+
+      const newGroupId = `group-${layerCounter++}`;
+      const newGroup: LayerItem = {
+        id: newGroupId,
+        name: `Group ${s.layers.filter((l) => l.kind === "group").length + 1}`,
+        kind: "group",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: roots[0].parentId ?? null,
+        expanded: true,
+        cels: {},
+      };
+
+      const movedItems = s.layers
+        .filter((l) => isUnderSelectedRoot(l))
+        .map((l) => (rootSet.has(l.id) ? { ...l, parentId: newGroupId } : l));
+      const remaining = s.layers.filter((l) => !isUnderSelectedRoot(l));
+
+      let insertIdx = 0;
+      for (let i = 0; i < firstIdx; i++) {
+        if (!isUnderSelectedRoot(s.layers[i])) insertIdx++;
+      }
+
+      const nextLayers = remaining.slice();
+      nextLayers.splice(insertIdx, 0, newGroup, ...movedItems);
+
+      return {
+        layers: nextLayers,
+        activeLayerId: newGroupId,
+        selectedLayerIds: [newGroupId],
+      };
+    }),
+  ungroupLayer: (groupId) =>
+    set((s) => {
+      const group = s.layers.find(
+        (l) => l.id === groupId && l.kind === "group"
+      );
+      if (!group) return s;
+      const firstChild = s.layers.find((l) => l.parentId === groupId);
+      const nextLayers = s.layers
+        .filter((l) => l.id !== groupId)
+        .map((l) =>
+          l.parentId === groupId ? { ...l, parentId: group.parentId } : l
+        );
+      if (nextLayers.length === 0) return s;
+      const nextActive = firstChild?.id ?? nextLayers[0].id;
+      return {
+        layers: nextLayers,
+        activeLayerId: nextActive,
+        selectedLayerIds: [nextActive],
+      };
+    }),
   toggleLayerVisible: (id) =>
     set((s) => ({
       layers: s.layers.map((l) =>
@@ -560,6 +692,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         layers: nextLayers,
         activeLayerId: id,
+        selectedLayerIds: [id],
       };
     }),
   addNamedLayer: (name) => {
@@ -580,6 +713,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         layers: [newLayer, ...s.layers],
         activeLayerId: id,
+        selectedLayerIds: [id],
       };
     });
     return id;
@@ -604,6 +738,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         layers: [newGroup, ...s.layers],
         activeLayerId: id,
+        selectedLayerIds: [id],
       };
     }),
   addTilemapLayer: () =>
@@ -625,6 +760,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         layers: [newLayer, ...s.layers],
         activeLayerId: id,
+        selectedLayerIds: [id],
       };
     }),
   deleteActiveLayer: () =>
@@ -643,6 +779,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         layers: nextLayers,
         activeLayerId: fallback.id,
+        selectedLayerIds: [fallback.id],
       };
     }),
   renameLayer: (id, name) =>
@@ -985,6 +1122,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       palette: payload.palette.length > 0 ? payload.palette : DEFAULT_PALETTE,
       layers: payload.layers,
       activeLayerId: payload.layers[0]?.id ?? "",
+      selectedLayerIds: payload.layers[0]?.id ? [payload.layers[0].id] : [],
       frames: payload.frames,
       currentFrame: 0,
       tags: payload.tags,

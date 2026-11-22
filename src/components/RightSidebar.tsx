@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  CornerDownRight,
   Eye,
   EyeOff,
   Folder,
@@ -190,10 +189,14 @@ export function RightSidebar() {
 
   const layers = useEditorStore((s) => s.layers);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
+  const selectedLayerIds = useEditorStore((s) => s.selectedLayerIds);
   const selectLayer = useEditorStore((s) => s.selectLayer);
+  const selectLayerRange = useEditorStore((s) => s.selectLayerRange);
+  const toggleSelectLayer = useEditorStore((s) => s.toggleSelectLayer);
+  const groupSelectedLayers = useEditorStore((s) => s.groupSelectedLayers);
+  const ungroupLayer = useEditorStore((s) => s.ungroupLayer);
   const toggleLayerVisible = useEditorStore((s) => s.toggleLayerVisible);
   const toggleLayerLocked = useEditorStore((s) => s.toggleLayerLocked);
-  const toggleLayerAlphaLock = useEditorStore((s) => s.toggleLayerAlphaLock);
   const setLayerOpacity = useEditorStore((s) => s.setLayerOpacity);
   const setLayerBlendMode = useEditorStore((s) => s.setLayerBlendMode);
   const addLayer = useEditorStore((s) => s.addLayer);
@@ -628,6 +631,7 @@ export function RightSidebar() {
                 return null;
               }
               const active = layer.id === activeLayerId;
+              const isSelected = selectedLayerIds.includes(layer.id);
               const depth = getLayerDepth(layers, layer);
               const isEditing = editingLayerId === layer.id;
               const dropPos =
@@ -642,16 +646,62 @@ export function RightSidebar() {
                 <div
                   key={layer.id}
                   draggable={!isEditing}
-                  className={`layer-row ${active ? "active" : ""} ${isDraggingThis ? "dragging" : ""} ${dropClass}`}
+                  className={`layer-row ${isSelected ? "selected" : ""} ${active ? "active" : ""} ${isDraggingThis ? "dragging" : ""} ${dropClass}`}
                   style={{ paddingLeft: 5 + depth * 14 }}
-                  onClick={() => selectLayer(layer.id)}
+                  onClick={(e) => {
+                    if (e.shiftKey) {
+                      selectLayerRange(layer.id);
+                    } else if (e.ctrlKey || e.metaKey) {
+                      toggleSelectLayer(layer.id);
+                    } else {
+                      selectLayer(layer.id);
+                    }
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    selectLayer(layer.id);
+                    const targetIds = selectedLayerIds.includes(layer.id)
+                      ? selectedLayerIds
+                      : [layer.id];
+                    if (!selectedLayerIds.includes(layer.id)) {
+                      selectLayer(layer.id);
+                    }
+                    const hasNestedTarget = targetIds.some((id) =>
+                      Boolean(layers.find((l) => l.id === id)?.parentId)
+                    );
                     const hasClip = Boolean(pixelEngine.clipboard);
                     openContextMenu(e.clientX, e.clientY, [
                       { kind: "item", label: "New Layer", action: () => addLayer() },
                       { kind: "item", label: "New Group", action: () => addGroupLayer() },
+                      {
+                        kind: "item",
+                        label:
+                          targetIds.length > 1
+                            ? `Group Selected (${targetIds.length})`
+                            : "Group Layer",
+                        action: () => groupSelectedLayers(targetIds),
+                      },
+                      ...(hasNestedTarget
+                        ? [
+                            {
+                              kind: "item" as const,
+                              label: "Remove from Group",
+                              action: () => {
+                                for (const id of targetIds) {
+                                  setLayerParent(id, null);
+                                }
+                              },
+                            },
+                          ]
+                        : []),
+                      ...(layer.kind === "group"
+                        ? [
+                            {
+                              kind: "item" as const,
+                              label: "Ungroup",
+                              action: () => ungroupLayer(layer.id),
+                            },
+                          ]
+                        : []),
                       { kind: "item", label: "New Tilemap Layer", action: () => addTilemapLayer() },
                       { kind: "separator" },
                       { kind: "item", label: "Duplicate Layer", action: () => handleDuplicateLayer() },
@@ -848,44 +898,11 @@ export function RightSidebar() {
                     </span>
                   )}
 
-                  {layer.parentId && (
-                    <button
-                      type="button"
-                      className="icon-action-btn"
-                      style={{ width: 18, height: 18 }}
-                      title="Unnest from Group"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setLayerParent(layer.id, null);
-                      }}
-                    >
-                      <CornerDownRight size={11} />
-                    </button>
-                  )}
-
                   {layer.blendMode !== "Normal" && (
                     <span className="layer-meta-badge">
                       {layer.blendMode.slice(0, 3)}
                     </span>
                   )}
-
-                  <button
-                    type="button"
-                    className={`icon-action-btn ${layer.alphaLock ? "active" : ""}`}
-                    style={{
-                      width: 20,
-                      height: 20,
-                      fontSize: 11,
-                      fontWeight: 700,
-                    }}
-                    title="Alpha Lock"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleLayerAlphaLock(layer.id);
-                    }}
-                  >
-                    α
-                  </button>
 
                   <button
                     type="button"

@@ -683,6 +683,11 @@
   background: var(--bg-elevated);
 }
 
+.layer-row.selected {
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
 .layer-row.active {
   background: var(--accent-soft);
   border-color: var(--accent-border);
