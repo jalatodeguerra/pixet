@@ -51,6 +51,7 @@ export function Timeline() {
   const timelineHeight = useEditorStore((s) => s.timelineHeight);
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const rigMode = useEditorStore((s) => s.rigMode);
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
   const setSelectedBoneId = useEditorStore((s) => s.setSelectedBoneId);
@@ -483,6 +484,7 @@ export function Timeline() {
           </div>
 
           {workspaceMode === "rig" &&
+            rigMode === "animate" &&
             pixelEngine.rig.bones.map((bone, boneIdx) => {
               const [r, g, b] = getBoneInfluenceColor(boneIdx);
               const isBoneSelected = bone.id === selectedBoneId;

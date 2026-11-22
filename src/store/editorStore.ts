@@ -6,7 +6,17 @@ import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
 export type { LayerMapRole };
 
 export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
-export type RigTool = "select" | "addBone" | "ik" | "weightPaint";
+export type RigMode = "setup" | "animate";
+export type RigTool =
+  | "select"
+  | "translate"
+  | "scale"
+  | "addBone"
+  | "chain"
+  | "ik"
+  | "weightPaint"
+  | "meshEdit"
+  | "pin";
 export type DataTool = "hitbox" | "hurtbox" | "collision" | "socket";
 
 export type ToolId =
@@ -145,6 +155,7 @@ interface EditorState {
   contextMenu: ContextMenuState | null;
 
   rigTool: RigTool;
+  rigMode: RigMode;
   selectedBoneId: string | null;
   rigPixelSnap: boolean;
   rigRotSprite: boolean;
@@ -293,6 +304,7 @@ interface EditorState {
   openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
   closeContextMenu: () => void;
   setRigTool: (tool: RigTool) => void;
+  setRigMode: (mode: RigMode) => void;
   setSelectedBoneId: (boneId: string | null) => void;
   toggleRigPixelSnap: () => void;
   toggleRigRotSprite: () => void;
@@ -398,6 +410,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   contextMenu: null,
 
   rigTool: "select",
+  rigMode: "setup",
   selectedBoneId: null,
   rigPixelSnap: true,
   rigRotSprite: true,
@@ -1188,6 +1201,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
   closeContextMenu: () => set({ contextMenu: null }),
   setRigTool: (rigTool) => set({ rigTool }),
+  setRigMode: (rigMode) =>
+    set((s) => ({
+      rigMode,
+      // Bone creation tools only make sense while editing the bind pose.
+      rigTool:
+        rigMode === "animate" &&
+        (s.rigTool === "addBone" || s.rigTool === "chain")
+          ? "select"
+          : s.rigTool,
+    })),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
   toggleRigPixelSnap: () => set((s) => ({ rigPixelSnap: !s.rigPixelSnap })),
   toggleRigRotSprite: () => set((s) => ({ rigRotSprite: !s.rigRotSprite })),
@@ -1237,6 +1260,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       canRedo: false,
       hasSelection: false,
       selectedBoneId: null,
+      rigMode: "setup",
+      rigTool: "select",
     }),
 }));
 

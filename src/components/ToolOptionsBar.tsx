@@ -19,6 +19,7 @@ import {
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
 import { useEditorStore } from "../store/editorStore";
+import { RigToolOptionsBar } from "./rig/RigToolOptionsBar";
 
 export function ToolOptionsBar() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
@@ -63,6 +64,10 @@ export function ToolOptionsBar() {
     activeTool === "lasso" ||
     activeTool === "wand" ||
     activeTool === "move";
+
+  if (workspaceMode === "rig") {
+    return <RigToolOptionsBar />;
+  }
 
   return (
     <div className="tool-options-bar">
@@ -284,8 +289,6 @@ export function ToolOptionsBar() {
       <div className="mode-hint">
         {workspaceMode === "tiles" &&
           "Tiles Mode · Stamp tiles (T) or live-edit instances with Pencil (B)"}
-        {workspaceMode === "rig" &&
-          "Hybrid 2D Pixel Rigging & Bone Dope Sheet (Phase 3)"}
         {workspaceMode === "draw" &&
           "Draw Mode · Scroll to zoom · Space+Drag to pan"}
       </div>

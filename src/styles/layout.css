@@ -1496,8 +1496,8 @@
 }
 
 .rig-bone-shape.selected {
-  fill: rgba(91, 140, 255, 0.36);
-  stroke: #5b8cff;
+  fill: rgba(76, 139, 245, 0.36);
+  stroke: var(--accent);
 }
 
 .rig-bone-joint {
@@ -1508,7 +1508,7 @@
 }
 
 .rig-bone-joint.selected {
-  fill: #5b8cff;
+  fill: var(--accent);
   stroke: #ffffff;
 }
 
@@ -1530,7 +1530,7 @@
 }
 
 .rig-bone-draft {
-  stroke: #5b8cff;
+  stroke: var(--accent);
   stroke-width: 1.8;
   stroke-dasharray: 4 3;
   vector-effect: non-scaling-stroke;
@@ -2366,4 +2366,194 @@
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/* R1: Focused Rig Workspace Layout */
+.sidebar-section-stack {
+  display: contents;
+}
+
+.sidebar-section-stack.is-hidden {
+  display: none;
+}
+
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rig-mode-switcher {
+  flex-shrink: 0;
+}
+
+.rig-mode-switcher .mode-pill {
+  padding: 3px 9px;
+}
+
+.rig-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  background: var(--bg-root);
+  border-left: 2px solid var(--accent);
+}
+
+.rig-mode-badge.animate {
+  border-left-color: var(--warning);
+}
+
+.viewport-stage.rig-mode-setup {
+  border-top: 2px solid var(--accent);
+}
+
+.viewport-stage.rig-mode-animate {
+  border-top: 2px solid var(--warning);
+}
+
+.tool-btn[aria-disabled="true"],
+.mini-btn[aria-disabled="true"],
+.icon-action-btn[aria-disabled="true"] {
+  opacity: 0.45;
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.tool-btn[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.rig-bone-shape.hovered {
+  fill: rgba(76, 139, 245, 0.28);
+  stroke: var(--accent);
+}
+
+.rig-bone-shape.locked {
+  stroke-dasharray: 2 2;
+}
+
+.rig-bone-joint.hovered {
+  fill: #9fc0ff;
+}
+
+.rig-bone-tip.hovered {
+  fill: #9fc0ff;
+}
+
+.rig-gizmo-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.rig-gizmo-handle {
+  stroke: #0f0f17;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.rig-gizmo-translate {
+  fill: var(--accent);
+}
+
+.rig-gizmo-scale {
+  fill: #e4e4ec;
+}
+
+.rig-bone-row.is-hidden {
+  opacity: 0.55;
+}
+
+.rig-stub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-root);
+  padding: 3px;
+}
+
+.rig-stub-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.rig-stub-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.rig-stub-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.rig-stub-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.rig-bound-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rig-bound-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.rig-bound-layer-row:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.rig-bound-layer-row.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.rig-bound-layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rig-bound-layer-bone {
+  max-width: 45%;
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

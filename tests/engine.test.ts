@@ -929,6 +929,24 @@ test("RigState bone influence painting, auto-weighting, overlay & partial layer 
   // Top pixel moved from (8,3) to (10,5) after +90 deg around pivot (8,5)
   assert.deepEqual(engine.sampleCompositedPixel(8, 3), [0, 0, 0, 0]);
   assert.deepEqual(engine.sampleCompositedPixel(10, 5), [255, 0, 0, 255]);
+
+  // Setup-mode preview (mode "rest") ignores pose overrides and keys
+  engine.compositeRigFrame(
+    [
+      {
+        id: "layer-body",
+        kind: "raster",
+        visible: true,
+        opacity: 100,
+        blendMode: "Normal",
+      },
+    ],
+    0,
+    { pixelSnap: true, rotSprite: false, mode: "rest" },
+    true
+  );
+  assert.deepEqual(engine.sampleCompositedPixel(8, 3), [255, 0, 0, 255]);
+  assert.deepEqual(engine.sampleCompositedPixel(10, 5), [0, 0, 0, 0]);
 });
 
 test("cut selection to new layer preserves exact pixel offsets and layer reorder math is exact", () => {

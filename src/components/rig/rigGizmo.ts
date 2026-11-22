@@ -1,0 +1,162 @@
+import type { RigState } from "../../engine/rig/RigEngine";
+import type { RigMode } from "../../store/editorStore";
+
+/** Live dashed bone preview while the Add Bone / Chain tool drags. */
+export interface RigDraftBone {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface RigBoneShape {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  tipX: number;
+  tipY: number;
+  length: number;
+  polygon: string;
+  selected: boolean;
+  hovered: boolean;
+  keyed: boolean;
+  locked: boolean;
+}
+
+export type RigGizmoHitKind = "translate" | "rotate" | "scale" | "body";
+
+export interface RigGizmoHit {
+  boneId: string;
+  kind: RigGizmoHitKind;
+}
+
+/** All gizmo sizes are screen pixels converted to canvas units via zoom. */
+export const GIZMO_RING_RADIUS_PX = 14;
+export const GIZMO_RING_HIT_PX = 5;
+export const GIZMO_HANDLE_SIZE_PX = 8;
+export const GIZMO_HANDLE_HIT_PX = 7;
+export const GIZMO_BODY_HIT_PX = 6;
+
+/**
+ * Builds the drawable bone shapes for the current rig mode. Setup mode shows
+ * the bind skeleton, Animate mode shows the evaluated pose (constraints
+ * included). Hidden bones are never drawn; locked bones are drawn but the hit
+ * tester ignores them.
+ */
+export function buildRigBoneShapes(
+  rig: RigState,
+  frame: number,
+  rigMode: RigMode,
+  selectedBoneId: string | null,
+  hoveredBoneId: string | null
+): RigBoneShape[] {
+  const transforms = rig.computeWorldTransforms(
+    frame,
+    rigMode === "setup" ? "rest" : "pose",
+    true
+  );
+  const shapes: RigBoneShape[] = [];
+  for (const bone of rig.bones) {
+    if (bone.hidden) continue;
+    const t = transforms.get(bone.id);
+    if (!t) continue;
+    const dx = t.tipX - t.x;
+    const dy = t.tipY - t.y;
+    const len = Math.max(0.01, Math.hypot(dx, dy));
+    const nx = -dy / len;
+    const ny = dx / len;
+    const halfBase = Math.min(1.1, Math.max(0.45, len * 0.14));
+    const b1x = t.x + nx * halfBase;
+    const b1y = t.y + ny * halfBase;
+    const b2x = t.x - nx * halfBase;
+    const b2y = t.y - ny * halfBase;
+    shapes.push({
+      id: bone.id,
+      name: bone.name,
+      x: t.x,
+      y: t.y,
+      tipX: t.tipX,
+      tipY: t.tipY,
+      length: t.length,
+      polygon: `${t.x},${t.y} ${b1x},${b1y} ${t.tipX},${t.tipY} ${b2x},${b2y}`,
+      selected: bone.id === selectedBoneId,
+      hovered: bone.id === hoveredBoneId,
+      keyed: rigMode === "animate" && rig.hasKeyframe(bone.id, frame),
+      locked: Boolean(bone.locked),
+    });
+  }
+  return shapes;
+}
+
+function distance(x0: number, y0: number, x1: number, y1: number): number {
+  return Math.hypot(x1 - x0, y1 - y0);
+}
+
+function pointSegmentDistance(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const lengthSq = abx * abx + aby * aby;
+  if (lengthSq < 1e-9) return distance(px, py, ax, ay);
+  const t = Math.max(
+    0,
+    Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lengthSq)
+  );
+  return distance(px, py, ax + abx * t, ay + aby * t);
+}
+
+/**
+ * Picks a bone or, when handles are enabled, one of the selected bone's
+ * gizmo handles (scale tip > translate joint > rotate ring > bone body).
+ * Locked bones are never pickable.
+ */
+export function hitTestRigGizmo(
+  shapes: readonly RigBoneShape[],
+  x: number,
+  y: number,
+  zoom: number,
+  includeHandles: boolean
+): RigGizmoHit | null {
+  const safeZoom = Math.max(1, zoom);
+  const handleRadius = GIZMO_HANDLE_HIT_PX / safeZoom;
+
+  const selected = includeHandles
+    ? shapes.find((shape) => shape.selected && !shape.locked)
+    : undefined;
+  if (selected) {
+    if (distance(x, y, selected.tipX, selected.tipY) <= handleRadius) {
+      return { boneId: selected.id, kind: "scale" };
+    }
+    if (distance(x, y, selected.x, selected.y) <= handleRadius) {
+      return { boneId: selected.id, kind: "translate" };
+    }
+    const ringRadius = GIZMO_RING_RADIUS_PX / safeZoom;
+    const ringBand = GIZMO_RING_HIT_PX / safeZoom;
+    const fromJoint = distance(x, y, selected.x, selected.y);
+    if (Math.abs(fromJoint - ringRadius) <= ringBand) {
+      return { boneId: selected.id, kind: "rotate" };
+    }
+  }
+
+  const bodyRadius = GIZMO_BODY_HIT_PX / safeZoom;
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const shape = shapes[i];
+    if (shape.locked) continue;
+    const nearest = Math.min(
+      pointSegmentDistance(x, y, shape.x, shape.y, shape.tipX, shape.tipY),
+      distance(x, y, shape.x, shape.y),
+      distance(x, y, shape.tipX, shape.tipY)
+    );
+    if (nearest <= bodyRadius) {
+      return { boneId: shape.id, kind: "body" };
+    }
+  }
+  return null;
+}

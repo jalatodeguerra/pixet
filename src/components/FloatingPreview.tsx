@@ -20,6 +20,7 @@ export function FloatingPreview() {
   const setActiveTagId = useEditorStore((s) => s.setActiveTagId);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const rigVersion = useEditorStore((s) => s.rigVersion);
+  const rigMode = useEditorStore((s) => s.rigMode);
   const rigPixelSnap = useEditorStore((s) => s.rigPixelSnap);
   const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
   const light2dEnabled = useEditorStore((s) => s.light2dEnabled);
@@ -67,6 +68,7 @@ export function FloatingPreview() {
         rigOpts: {
           pixelSnap: state.rigPixelSnap,
           rotSprite: state.rigRotSprite,
+          mode: state.rigMode === "setup" ? "rest" : "pose",
         },
         light2d: {
           enabled: state.light2dEnabled,
@@ -106,6 +108,7 @@ export function FloatingPreview() {
     layers,
     workspaceMode,
     rigVersion,
+    rigMode,
     rigPixelSnap,
     rigRotSprite,
     light2dEnabled,

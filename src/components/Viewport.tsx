@@ -24,11 +24,6 @@ import {
 import { WebGL2Renderer } from "../engine/renderer/WebGL2Renderer";
 import { renderBoneInfluenceOverlay } from "../engine/rig/RigEngine";
 import {
-  beginRigGesture,
-  endRigGesture,
-  mutateRig,
-} from "../engine/rig/rigActions";
-import {
   buildIsoGridSvgPath,
   getIsoOrigin,
   plotIsoBox,
@@ -59,6 +54,8 @@ import {
   type ToolId,
   useEditorStore,
 } from "../store/editorStore";
+import { RigOverlay } from "./rig/RigOverlay";
+import { useRigPointer } from "./rig/useRigPointer";
 import { PALETTE_PRESETS } from "../utils/paletteParser";
 import { buildShadingRamp } from "../utils/color";
 
@@ -197,6 +194,7 @@ export function Viewport() {
   const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
   const onionOpacity = useEditorStore((s) => s.onionOpacity);
   const rigTool = useEditorStore((s) => s.rigTool);
+  const rigMode = useEditorStore((s) => s.rigMode);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
   const rigPixelSnap = useEditorStore((s) => s.rigPixelSnap);
   const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
@@ -224,27 +222,6 @@ export function Viewport() {
   const wrapScratchRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<WebGL2Renderer | null>(null);
   const strokeRef = useRef<ActiveStroke | null>(null);
-  const rigDragRef = useRef<{
-    kind: "rotateBone" | "moveBone" | "addBone" | "ik" | "weightPaint";
-    boneId: string;
-    startX: number;
-    startY: number;
-    parentWorldDeg: number;
-    origLocalX: number;
-    origLocalY: number;
-    addTipX: number;
-    addTipY: number;
-    eraseMask?: boolean;
-    lastPx?: number;
-    lastPy?: number;
-    historyStarted?: boolean;
-  } | null>(null);
-  const [rigDraftBone, setRigDraftBone] = useState<{
-    x0: number;
-    y0: number;
-    x1: number;
-    y1: number;
-  } | null>(null);
   const dataDragRef = useRef<{
     kind: "hitbox" | "hurtbox" | "collision";
     startX: number;
@@ -302,6 +279,7 @@ export function Viewport() {
           rigOpts: {
             pixelSnap: state.rigPixelSnap,
             rotSprite: state.rigRotSprite,
+            mode: state.rigMode === "setup" ? "rest" : "pose",
           },
           light2d: {
             enabled: state.light2dEnabled,
@@ -468,6 +446,7 @@ export function Viewport() {
     onionOpacity,
     workspaceMode,
     rigVersion,
+    rigMode,
     rigPixelSnap,
     rigRotSprite,
     rigShowInfluence,
@@ -518,14 +497,6 @@ export function Viewport() {
     return {
       x: Math.floor((e.clientX - rect.left) / zoom),
       y: Math.floor((e.clientY - rect.top) / zoom),
-    };
-  };
-
-  const getSubpixelCoords = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) / zoom,
-      y: (e.clientY - rect.top) / zoom,
     };
   };
 
@@ -617,6 +588,10 @@ export function Viewport() {
     }
     renderOverlayOnly();
   };
+
+  const rigPointer = useRigPointer({
+    onHoverPixels: (px, py) => updateHoverOverlay(px, py),
+  });
 
   const sampleColorAt = (px: number, py: number, isSecondary: boolean) => {
     const state = useEditorStore.getState();
@@ -743,15 +718,6 @@ export function Viewport() {
     panDragRef.current.active = false;
   };
 
-  const ensureRigGesture = (
-    drag: { historyStarted?: boolean },
-    label: string
-  ) => {
-    if (drag.historyStarted) return;
-    beginRigGesture(label);
-    drag.historyStarted = true;
-  };
-
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (spacePressed || e.button === 1) return;
     if (e.button !== 0 && e.button !== 2) return;
@@ -766,50 +732,8 @@ export function Viewport() {
       return;
     }
 
-    if (
-      state.workspaceMode === "rig" &&
-      state.rigTool === "weightPaint" &&
-      (e.button === 0 || e.button === 2)
-    ) {
-      const targetBoneId =
-        state.selectedBoneId ?? pixelEngine.rig.bones[0]?.id ?? null;
-      if (!targetBoneId) {
-        state.setStatusMessage("Add or select a bone before painting weights");
-        return;
-      }
-      if (state.selectedBoneId !== targetBoneId) {
-        state.setSelectedBoneId(targetBoneId);
-      }
-      e.currentTarget.setPointerCapture(e.pointerId);
-      const eraseMask = isSecondary;
-      beginRigGesture("Paint weights");
-      mutateRig("Paint weights", () => {
-        pixelEngine.rig.paintBoneMask(
-          targetBoneId,
-          state.canvasWidth,
-          state.canvasHeight,
-          px,
-          py,
-          state.rigBrushSize / 2,
-          eraseMask,
-          true
-        );
-      });
-      rigDragRef.current = {
-        kind: "weightPaint",
-        boneId: targetBoneId,
-        startX: px,
-        startY: py,
-        parentWorldDeg: 0,
-        origLocalX: 0,
-        origLocalY: 0,
-        addTipX: px,
-        addTipY: py,
-        eraseMask,
-        lastPx: px,
-        lastPy: py,
-        historyStarted: true,
-      };
+    if (state.workspaceMode === "rig") {
+      rigPointer.onPointerDown(e);
       return;
     }
 
@@ -850,137 +774,6 @@ export function Viewport() {
     }
 
     // Standard drawing tools below
-
-    if (state.workspaceMode === "rig" && e.button === 0) {
-      const sub = getSubpixelCoords(e);
-      const hitRadius = Math.max(1.8, 9 / zoom);
-      const transforms = pixelEngine.rig.computeWorldTransforms(
-        state.currentFrame,
-        "pose",
-        true
-      );
-
-      if (state.rigTool === "addBone") {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        rigDragRef.current = {
-          kind: "addBone",
-          boneId: state.selectedBoneId ?? "",
-          startX: sub.x,
-          startY: sub.y,
-          parentWorldDeg: 0,
-          origLocalX: 0,
-          origLocalY: 0,
-          addTipX: sub.x,
-          addTipY: sub.y,
-        };
-        setRigDraftBone({ x0: sub.x, y0: sub.y, x1: sub.x, y1: sub.y });
-        return;
-      }
-
-      if (state.rigTool === "ik") {
-        let ikBoneId: string | null = null;
-        let bestDist = hitRadius * 1.4;
-        for (const bone of pixelEngine.rig.bones) {
-          if (!bone.parentId) continue;
-          const t = transforms.get(bone.id);
-          if (!t) continue;
-          const d = Math.hypot(sub.x - t.tipX, sub.y - t.tipY);
-          if (d <= bestDist) {
-            bestDist = d;
-            ikBoneId = bone.id;
-          }
-        }
-        if (!ikBoneId && state.selectedBoneId) {
-          const sel = pixelEngine.rig.bones.find(
-            (b) => b.id === state.selectedBoneId
-          );
-          if (sel?.parentId) ikBoneId = sel.id;
-        }
-        if (ikBoneId) {
-          e.currentTarget.setPointerCapture(e.pointerId);
-          state.setSelectedBoneId(ikBoneId);
-          beginRigGesture("IK pose");
-          mutateRig("IK pose", () => {
-            pixelEngine.rig.applyTwoBoneIK(
-              ikBoneId,
-              sub.x,
-              sub.y,
-              state.currentFrame
-            );
-          });
-          rigDragRef.current = {
-            kind: "ik",
-            boneId: ikBoneId,
-            startX: sub.x,
-            startY: sub.y,
-            parentWorldDeg: 0,
-            origLocalX: 0,
-            origLocalY: 0,
-            addTipX: sub.x,
-            addTipY: sub.y,
-            historyStarted: true,
-          };
-        }
-        return;
-      }
-
-      // Default Rig Pose/Select tool: check tips first, then origins
-      let hitBoneId: string | null = null;
-      let hitMode: "rotateBone" | "moveBone" = "rotateBone";
-      let bestDist = hitRadius;
-
-      for (const bone of pixelEngine.rig.bones) {
-        const t = transforms.get(bone.id);
-        if (!t) continue;
-        const dTip = Math.hypot(sub.x - t.tipX, sub.y - t.tipY);
-        if (dTip <= bestDist) {
-          bestDist = dTip;
-          hitBoneId = bone.id;
-          hitMode = "rotateBone";
-        }
-      }
-
-      if (!hitBoneId) {
-        for (const bone of pixelEngine.rig.bones) {
-          const t = transforms.get(bone.id);
-          if (!t) continue;
-          const dOrig = Math.hypot(sub.x - t.x, sub.y - t.y);
-          if (dOrig <= hitRadius) {
-            hitBoneId = bone.id;
-            hitMode = bone.parentId ? "rotateBone" : "moveBone";
-            break;
-          }
-        }
-      }
-
-      if (hitBoneId) {
-        const bone = pixelEngine.rig.bones.find((b) => b.id === hitBoneId);
-        if (bone) {
-          const parentWorldDeg = bone.parentId
-            ? (transforms.get(bone.parentId)?.worldRotationDeg ?? 0)
-            : 0;
-          const pose = pixelEngine.rig.getBonePoseAtFrame(
-            bone.id,
-            state.currentFrame,
-            true
-          );
-          state.setSelectedBoneId(bone.id);
-          e.currentTarget.setPointerCapture(e.pointerId);
-          rigDragRef.current = {
-            kind: hitMode,
-            boneId: bone.id,
-            startX: sub.x,
-            startY: sub.y,
-            parentWorldDeg,
-            origLocalX: pose.localX,
-            origLocalY: pose.localY,
-            addTipX: sub.x,
-            addTipY: sub.y,
-          };
-        }
-      }
-      return;
-    }
 
     const tool = state.activeTool;
 
@@ -1430,6 +1223,11 @@ export function Viewport() {
       setCursorPos(null);
     }
 
+    if (state.workspaceMode === "rig") {
+      rigPointer.onPointerMove(e);
+      return;
+    }
+
     const dataDrag = dataDragRef.current;
     if (dataDrag) {
       const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, px));
@@ -1441,85 +1239,6 @@ export function Viewport() {
       const w = Math.abs(clampedX - dataDrag.startX) + 1;
       const h = Math.abs(clampedY - dataDrag.startY) + 1;
       setDataDraftBox({ kind: dataDrag.kind, x: minX, y: minY, w, h });
-      return;
-    }
-
-    const rigDrag = rigDragRef.current;
-    if (rigDrag) {
-      if (rigDrag.kind === "weightPaint") {
-        ensureRigGesture(rigDrag, "Paint weights");
-        const lastX = rigDrag.lastPx ?? px;
-        const lastY = rigDrag.lastPy ?? py;
-        const segment = plotBresenhamLine(lastX, lastY, px, py);
-        mutateRig("Paint weights", () => {
-          for (const pt of segment) {
-            pixelEngine.rig.paintBoneMask(
-              rigDrag.boneId,
-              state.canvasWidth,
-              state.canvasHeight,
-              pt.x,
-              pt.y,
-              state.rigBrushSize / 2,
-              Boolean(rigDrag.eraseMask),
-              true
-            );
-          }
-        });
-        rigDrag.lastPx = px;
-        rigDrag.lastPy = py;
-        return;
-      }
-      const sub = getSubpixelCoords(e);
-      if (rigDrag.kind === "addBone") {
-        rigDrag.addTipX = sub.x;
-        rigDrag.addTipY = sub.y;
-        setRigDraftBone({
-          x0: rigDrag.startX,
-          y0: rigDrag.startY,
-          x1: sub.x,
-          y1: sub.y,
-        });
-      } else if (rigDrag.kind === "ik") {
-        ensureRigGesture(rigDrag, "IK pose");
-        mutateRig("IK pose", () => {
-          pixelEngine.rig.applyTwoBoneIK(
-            rigDrag.boneId,
-            sub.x,
-            sub.y,
-            state.currentFrame
-          );
-        });
-      } else if (rigDrag.kind === "moveBone") {
-        ensureRigGesture(rigDrag, "Move bone");
-        const dx = sub.x - rigDrag.startX;
-        const dy = sub.y - rigDrag.startY;
-        mutateRig("Move bone", () => {
-          pixelEngine.rig.setPoseOverride(
-            rigDrag.boneId,
-            { localX: rigDrag.origLocalX + dx, localY: rigDrag.origLocalY + dy },
-            state.currentFrame
-          );
-        });
-      } else if (rigDrag.kind === "rotateBone") {
-        const transforms = pixelEngine.rig.computeWorldTransforms(
-          state.currentFrame,
-          "pose",
-          true
-        );
-        const t = transforms.get(rigDrag.boneId);
-        if (t) {
-          ensureRigGesture(rigDrag, "Rotate bone");
-          const worldDeg =
-            (Math.atan2(sub.y - t.y, sub.x - t.x) * 180) / Math.PI;
-          mutateRig("Rotate bone", () => {
-            pixelEngine.rig.setPoseOverride(
-              rigDrag.boneId,
-              { rotationDeg: worldDeg - rigDrag.parentWorldDeg },
-              state.currentFrame
-            );
-          });
-        }
-      }
       return;
     }
 
@@ -1843,6 +1562,11 @@ export function Viewport() {
   };
 
   const finishStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (useEditorStore.getState().workspaceMode === "rig") {
+      rigPointer.onPointerUp(e);
+      return;
+    }
+
     const dataDrag = dataDragRef.current;
     if (dataDrag) {
       dataDragRef.current = null;
@@ -1868,58 +1592,6 @@ export function Viewport() {
       st.setStatusMessage(
         `Added ${created.kind} (${created.w}×${created.h} at ${created.x},${created.y})`
       );
-      return;
-    }
-
-    const rigDrag = rigDragRef.current;
-    if (rigDrag) {
-      rigDragRef.current = null;
-      setRigDraftBone(null);
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
-      endRigGesture();
-      if (rigDrag.kind === "addBone") {
-        const dx = rigDrag.addTipX - rigDrag.startX;
-        const dy = rigDrag.addTipY - rigDrag.startY;
-        const len = Math.hypot(dx, dy);
-        if (len >= 1.5) {
-          const st = useEditorStore.getState();
-          const transforms = pixelEngine.rig.computeWorldTransforms(
-            st.currentFrame,
-            "pose",
-            true
-          );
-          const worldDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-          const parent = rigDrag.boneId
-            ? transforms.get(rigDrag.boneId)
-            : undefined;
-          let localX = rigDrag.startX;
-          let localY = rigDrag.startY;
-          let rotationDeg = worldDeg;
-          if (parent) {
-            const pRad = (-parent.worldRotationDeg * Math.PI) / 180;
-            const cos = Math.cos(pRad);
-            const sin = Math.sin(pRad);
-            const ox = rigDrag.startX - parent.x;
-            const oy = rigDrag.startY - parent.y;
-            localX = ox * cos - oy * sin;
-            localY = ox * sin + oy * cos;
-            rotationDeg = worldDeg - parent.worldRotationDeg;
-          }
-          const created = mutateRig("Add bone", () =>
-            pixelEngine.rig.addBone({
-              parentId: parent ? parent.id : null,
-              localX,
-              localY,
-              length: Math.max(2, len),
-              rotationDeg,
-              boundLayerId: null,
-            })
-          );
-          st.setSelectedBoneId(created.id);
-        }
-      }
       return;
     }
 
@@ -2147,6 +1819,7 @@ export function Viewport() {
   };
 
   const handleCanvasPointerLeave = () => {
+    rigPointer.onPointerLeave();
     setCursorPos(null);
     if (!strokeRef.current) {
       const state = useEditorStore.getState();
@@ -2202,7 +1875,9 @@ export function Viewport() {
     : workspaceMode === "rig"
       ? rigTool === "select"
         ? "default"
-        : "crosshair"
+        : rigTool === "translate" || rigTool === "scale"
+          ? "move"
+          : "crosshair"
       : activeTool === "move"
         ? "move"
         : "crosshair";
@@ -2216,42 +1891,6 @@ export function Viewport() {
     const isoTileH = Math.max(4, Math.floor(tileWidth / 2));
     return buildIsoGridSvgPath(canvasWidth, canvasHeight, tileWidth, isoTileH);
   }, [showIsoGrid, canvasWidth, canvasHeight, tileWidth]);
-
-  const rigBonesOverlay = useMemo(() => {
-    void rigVersion;
-    if (workspaceMode !== "rig" || !rigShowBones) return [];
-    const transforms = pixelEngine.rig.computeWorldTransforms(
-      currentFrame,
-      "pose",
-      true
-    );
-    return pixelEngine.rig.bones
-      .map((bone) => {
-        const t = transforms.get(bone.id);
-        if (!t) return null;
-        const dx = t.tipX - t.x;
-        const dy = t.tipY - t.y;
-        const len = Math.max(0.01, Math.hypot(dx, dy));
-        const nx = -dy / len;
-        const ny = dx / len;
-        const halfBase = Math.min(1.1, Math.max(0.45, len * 0.14));
-        const b1x = t.x + nx * halfBase;
-        const b1y = t.y + ny * halfBase;
-        const b2x = t.x - nx * halfBase;
-        const b2y = t.y - ny * halfBase;
-        return {
-          id: bone.id,
-          x: t.x,
-          y: t.y,
-          tipX: t.tipX,
-          tipY: t.tipY,
-          polygon: `${t.x},${t.y} ${b1x},${b1y} ${t.tipX},${t.tipY} ${b2x},${b2y}`,
-          selected: bone.id === selectedBoneId,
-          keyed: pixelEngine.rig.hasKeyframe(bone.id, currentFrame),
-        };
-      })
-      .filter((item): item is NonNullable<typeof item> => item !== null);
-  }, [workspaceMode, rigShowBones, currentFrame, rigVersion, selectedBoneId]);
 
   const gameDataOverlay = useMemo(() => {
     void gameDataVersion;
@@ -2279,7 +1918,7 @@ export function Viewport() {
       </div>
 
       <div
-        className="viewport-stage"
+        className={`viewport-stage ${workspaceMode === "rig" ? `rig-mode-${rigMode}` : ""}`}
         style={{ cursor: spacePressed ? "grab" : undefined }}
         onWheel={handleWheel}
         onContextMenu={handleCanvasContextMenu}
@@ -2382,41 +2021,10 @@ export function Viewport() {
           )}
 
           {workspaceMode === "rig" && rigShowBones && (
-            <svg
-              className="viewport-rig-svg"
-              viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
-              preserveAspectRatio="none"
-            >
-              {rigBonesOverlay.map((b) => (
-                <g key={b.id}>
-                  <polygon
-                    className={`rig-bone-shape ${b.selected ? "selected" : ""}`}
-                    points={b.polygon}
-                  />
-                  <circle
-                    className={`rig-bone-joint ${b.selected ? "selected" : ""} ${b.keyed ? "keyed" : ""}`}
-                    cx={b.x}
-                    cy={b.y}
-                    r={0.85}
-                  />
-                  <circle
-                    className={`rig-bone-tip ${b.selected ? "selected" : ""}`}
-                    cx={b.tipX}
-                    cy={b.tipY}
-                    r={0.7}
-                  />
-                </g>
-              ))}
-              {rigDraftBone && (
-                <line
-                  className="rig-bone-draft"
-                  x1={rigDraftBone.x0}
-                  y1={rigDraftBone.y0}
-                  x2={rigDraftBone.x1}
-                  y2={rigDraftBone.y1}
-                />
-              )}
-            </svg>
+            <RigOverlay
+              draftBone={rigPointer.draftBone}
+              hoveredBoneId={rigPointer.hoveredBoneId}
+            />
           )}
 
           {(workspaceMode === "data" || showGameDataOverlay) &&

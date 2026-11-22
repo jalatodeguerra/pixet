@@ -743,11 +743,10 @@ export class PixelEngine {
     }
 
     const restMap = this.rig.computeWorldTransforms(frameIndex, "rest", false);
-    const poseMap = this.rig.computeWorldTransforms(
-      frameIndex,
-      "pose",
-      useOverrides
-    );
+    const poseMap =
+      opts.mode === "rest"
+        ? restMap
+        : this.rig.computeWorldTransforms(frameIndex, "pose", useOverrides);
     const layerToBoneId = new Map<string, string>();
     for (const bone of this.rig.bones) {
       if (bone.boundLayerId) {

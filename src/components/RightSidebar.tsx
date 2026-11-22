@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { ColorPicker } from "./ColorPicker";
 import { GameDataPanel } from "./GameDataPanel";
-import { RigPanel } from "./RigPanel";
+import { RigSidebar } from "./rig/RigSidebar";
 import { TilesetPanel } from "./TilesetPanel";
 import { PixelBuffer } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
@@ -285,13 +285,13 @@ export function RightSidebar() {
       aria-label="Inspector Sidebar"
     >
       {/* Tileset Inspector in Tiles Mode */}
-      {workspaceMode === "tiles" && <TilesetPanel />}
+      <div
+        className={`sidebar-section-stack ${workspaceMode === "rig" ? "is-hidden" : ""}`}
+      >
+        {workspaceMode === "tiles" && <TilesetPanel />}
 
-      {/* 2D Rig Inspector in Rig Mode */}
-      {workspaceMode === "rig" && <RigPanel />}
-
-      {/* Game Data Inspector in Data Mode */}
-      {workspaceMode === "data" && <GameDataPanel />}
+        {/* Game Data Inspector in Data Mode */}
+        {workspaceMode === "data" && <GameDataPanel />}
 
       {/* Color & Palette */}
       <section className="panel-section">
@@ -965,6 +965,10 @@ export function RightSidebar() {
           </div>
         </div>}
       </section>
+      </div>
+
+      {/* Focused Rig Inspector in Rig Mode */}
+      {workspaceMode === "rig" && <RigSidebar />}
     </aside>
   );
 }

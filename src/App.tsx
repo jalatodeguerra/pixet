@@ -36,6 +36,11 @@ import {
   pickImageFileForImport,
 } from "./engine/io/imageImport";
 import { ToolId, useEditorStore } from "./store/editorStore";
+import {
+  RIG_TOOL_BY_ID,
+  RIG_TOOL_SHORTCUTS,
+  rigToolDisabledReason,
+} from "./components/rig/rigTools";
 
 const TOOL_SHORTCUTS: Record<string, ToolId> = {
   b: "pencil",
@@ -270,6 +275,23 @@ export function App() {
 
       if (e.key === "-") {
         state.setZoom(state.zoom - 1);
+        return;
+      }
+
+      // Rig workspace shortcuts replace the drawing tool shortcuts entirely.
+      if (state.workspaceMode === "rig") {
+        const rigTool = RIG_TOOL_SHORTCUTS[key];
+        if (rigTool) {
+          const def = RIG_TOOL_BY_ID.get(rigTool);
+          const reason = def ? rigToolDisabledReason(def, state.rigMode) : null;
+          if (def && reason) {
+            state.setStatusMessage(`${def.label}: ${reason}`);
+            return;
+          }
+          state.setRigTool(rigTool);
+          return;
+        }
+        // Never fall through to drawing tool shortcuts in the rig workspace.
         return;
       }
 

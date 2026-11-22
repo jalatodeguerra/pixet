@@ -165,6 +165,11 @@ export const MAX_BONE_INFLUENCES = 4;
 export interface RigRenderOptions {
   pixelSnap: boolean;
   rotSprite: boolean;
+  /**
+   * Which evaluation to render. "rest" shows the bind pose (Rig Setup mode),
+   * leaving the pose/keyframe channels out of the viewport preview.
+   */
+  mode?: "rest" | "pose";
 }
 
 export interface BoneMask {

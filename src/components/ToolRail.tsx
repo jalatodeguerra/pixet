@@ -16,6 +16,12 @@ import {
   Wand2,
 } from "lucide-react";
 import { ToolId, useEditorStore } from "../store/editorStore";
+import {
+  RIG_TOOL_BY_ID,
+  RIG_TOOL_GROUPS,
+  rigToolDisabledReason,
+  rigToolTitle,
+} from "./rig/rigTools";
 
 interface ToolDef {
   id: ToolId;
@@ -82,6 +88,60 @@ const TOOL_GROUPS: ToolGroupDef[] = [
 ];
 
 export function ToolRail() {
+  const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  if (workspaceMode === "rig") {
+    return <RigToolRail />;
+  }
+  return <DrawingToolRail />;
+}
+
+function RigToolRail() {
+  const rigTool = useEditorStore((s) => s.rigTool);
+  const setRigTool = useEditorStore((s) => s.setRigTool);
+  const rigMode = useEditorStore((s) => s.rigMode);
+  const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
+
+  return (
+    <aside className="tool-rail" aria-label="Rig Tools">
+      {RIG_TOOL_GROUPS.map((group, groupIdx) => (
+        <div key={`rig-group-${groupIdx}`} style={{ display: "contents" }}>
+          {group.ids.map((toolId) => {
+            const def = RIG_TOOL_BY_ID.get(toolId);
+            if (!def) return null;
+            const Icon = def.icon;
+            const reason = rigToolDisabledReason(def, rigMode);
+            const disabled = reason !== null;
+            const active = rigTool === toolId;
+            const title = rigToolTitle(def, rigMode);
+            return (
+              <button
+                key={toolId}
+                type="button"
+                className={`tool-btn ${active ? "active" : ""}`}
+                title={title}
+                aria-label={title}
+                aria-pressed={active}
+                aria-disabled={disabled || undefined}
+                onClick={() => {
+                  if (reason) {
+                    setStatusMessage(`${def.label}: ${reason}`);
+                    return;
+                  }
+                  setRigTool(toolId);
+                }}
+              >
+                <Icon size={16} />
+              </button>
+            );
+          })}
+          {group.dividerAfter && <div className="tool-rail-sep" />}
+        </div>
+      ))}
+    </aside>
+  );
+}
+
+function DrawingToolRail() {
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
 

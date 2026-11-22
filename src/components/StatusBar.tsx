@@ -1,3 +1,4 @@
+import { pixelEngine } from "../engine/document/PixelEngine";
 import { useEditorStore } from "../store/editorStore";
 
 export function StatusBar() {
@@ -11,9 +12,53 @@ export function StatusBar() {
   const layers = useEditorStore((s) => s.layers);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const statusMessage = useEditorStore((s) => s.statusMessage);
+  const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const rigMode = useEditorStore((s) => s.rigMode);
+  const rigVersion = useEditorStore((s) => s.rigVersion);
+  const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
 
   const activeFrame = frames[currentFrame] ?? frames[0];
   const activeLayer = layers.find((l) => l.id === activeLayerId);
+
+  // Rig status: bound to rigVersion so every mutateRig() refresh is reflected.
+  void rigVersion;
+  const rigBone =
+    workspaceMode === "rig" && selectedBoneId
+      ? (pixelEngine.rig.bones.find((b) => b.id === selectedBoneId) ?? null)
+      : null;
+  let rigAngle = 0;
+  let rigWorldX = 0;
+  let rigWorldY = 0;
+  if (rigBone) {
+    if (rigMode === "setup") {
+      rigAngle = rigBone.rotationDeg;
+      const rest = pixelEngine.rig.computeWorldTransforms(
+        currentFrame,
+        "rest",
+        false
+      );
+      const world = rest.get(rigBone.id);
+      rigWorldX = world?.x ?? 0;
+      rigWorldY = world?.y ?? 0;
+    } else {
+      rigAngle = pixelEngine.rig.getBonePoseAtFrame(
+        rigBone.id,
+        currentFrame,
+        true
+      ).rotationDeg;
+      const posed = pixelEngine.rig.computeWorldTransforms(
+        currentFrame,
+        "pose",
+        true
+      );
+      const world = posed.get(rigBone.id);
+      rigWorldX = world?.x ?? 0;
+      rigWorldY = world?.y ?? 0;
+    }
+  }
+  const activeConstraintCount = pixelEngine.rig.constraints.filter(
+    (constraint) => constraint.enabled !== false && constraint.mix > 0
+  ).length;
 
   return (
     <footer className="statusbar">
@@ -34,12 +79,27 @@ export function StatusBar() {
           Frame {currentFrame + 1}/{frames.length}
           {activeFrame ? ` (${activeFrame.durationMs}ms)` : ""}
         </span>
-        {activeLayer && (
+        {workspaceMode === "rig" && rigBone ? (
+          <>
+            <div className="status-sep" />
+            <span>Bone: {rigBone.name}</span>
+            <div className="status-sep" />
+            <span className="mono-value">Angle: {Math.round(rigAngle)}°</span>
+            <div className="status-sep" />
+            <span className="mono-value">
+              Pos: {Math.round(rigWorldX)}, {Math.round(rigWorldY)}
+            </span>
+            <div className="status-sep" />
+            <span className="mono-value">
+              Constraints: {activeConstraintCount}
+            </span>
+          </>
+        ) : activeLayer ? (
           <>
             <div className="status-sep" />
             <span>Layer: {activeLayer.name}</span>
           </>
-        )}
+        ) : null}
       </div>
 
       <div className="statusbar-group">

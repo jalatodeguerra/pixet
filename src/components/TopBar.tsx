@@ -31,7 +31,7 @@ import {
 } from "../engine/io/projectBridge";
 import { pickImageFileForImport } from "../engine/io/imageImport";
 import { syncRigHistoryFlags } from "../engine/rig/rigActions";
-import { useEditorStore, WorkspaceMode } from "../store/editorStore";
+import { useEditorStore, WorkspaceMode, RigMode } from "../store/editorStore";
 
 type MenuKey = "File" | "Edit" | "View" | "Sprite";
 
@@ -48,9 +48,24 @@ const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; badge?: st
   { id: "data", label: "Data", icon: Crosshair, badge: "P4" },
 ];
 
+const RIG_MODES: { id: RigMode; label: string; hint: string }[] = [
+  {
+    id: "setup",
+    label: "Setup",
+    hint: "Setup · edit bind pose, skeleton and weights",
+  },
+  {
+    id: "animate",
+    label: "Animate",
+    hint: "Animate · pose overrides and keyframes",
+  },
+];
+
 export function TopBar() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const setWorkspaceMode = useEditorStore((s) => s.setWorkspaceMode);
+  const rigMode = useEditorStore((s) => s.rigMode);
+  const setRigMode = useEditorStore((s) => s.setRigMode);
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
   const togglePanelsCollapsed = useEditorStore((s) => s.togglePanelsCollapsed);
   const toggleShowGrid = useEditorStore((s) => s.toggleShowGrid);
@@ -183,28 +198,55 @@ export function TopBar() {
         </nav>
       </div>
 
-      <div className="mode-switcher" role="tablist" aria-label="Workspace Mode">
-        {MODES.map((m) => {
-          const Icon = m.icon;
-          const active = workspaceMode === m.id;
-          return (
-            <button
-              key={m.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              className={`mode-pill ${active ? "active" : ""}`}
-              onClick={() => {
-                setWorkspaceMode(m.id);
-                syncRigHistoryFlags();
-              }}
-            >
-              <Icon size={13} />
-              <span>{m.label}</span>
-              {m.badge && <span className="mode-badge">{m.badge}</span>}
-            </button>
-          );
-        })}
+      <div className="topbar-center">
+        <div className="mode-switcher" role="tablist" aria-label="Workspace Mode">
+          {MODES.map((m) => {
+            const Icon = m.icon;
+            const active = workspaceMode === m.id;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`mode-pill ${active ? "active" : ""}`}
+                onClick={() => {
+                  setWorkspaceMode(m.id);
+                  syncRigHistoryFlags();
+                }}
+              >
+                <Icon size={13} />
+                <span>{m.label}</span>
+                {m.badge && <span className="mode-badge">{m.badge}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {workspaceMode === "rig" && (
+          <div
+            className="mode-switcher rig-mode-switcher"
+            role="tablist"
+            aria-label="Rig Mode"
+          >
+            {RIG_MODES.map((m) => {
+              const active = rigMode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  title={m.hint}
+                  className={`mode-pill ${active ? "active" : ""}`}
+                  onClick={() => setRigMode(m.id)}
+                >
+                  <span>{m.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="topbar-right">
