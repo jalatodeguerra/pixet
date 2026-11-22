@@ -126,6 +126,40 @@ fn export_spritesheet(
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportFileDto {
+    pub name: String,
+    pub text: Option<String>,
+    pub base64: Option<String>,
+}
+
+#[tauri::command]
+fn write_text_and_pngs(out_dir: String, files: Vec<ExportFileDto>) -> Result<usize, String> {
+    let dir = std::path::Path::new(&out_dir);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut written = 0usize;
+    for file in files {
+        if file.name.is_empty()
+            || file.name.contains("..")
+            || file.name.contains('/')
+            || file.name.contains('\\')
+        {
+            return Err(format!("Invalid export filename: {}", file.name));
+        }
+        let target = dir.join(&file.name);
+        if let Some(text) = file.text {
+            std::fs::write(&target, text.as_bytes()).map_err(|e| e.to_string())?;
+            written += 1;
+        } else if let Some(b64) = file.base64 {
+            let bytes = BASE64.decode(b64).map_err(|e| e.to_string())?;
+            std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -135,7 +169,8 @@ pub fn run() {
             save_project,
             open_project,
             import_aseprite,
-            export_spritesheet
+            export_spritesheet,
+            write_text_and_pngs
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

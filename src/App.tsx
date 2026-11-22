@@ -3,6 +3,7 @@ import { Upload } from "lucide-react";
 import { CanvasSizeModal } from "./components/CanvasSizeModal";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportModal } from "./components/ExportModal";
+import { RigExportModal } from "./components/rig/RigExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { NewSpriteModal } from "./components/NewSpriteModal";
 import { RightSidebar } from "./components/RightSidebar";
@@ -576,6 +577,7 @@ export function App() {
 
       <StatusBar />
       <ExportModal />
+      <RigExportModal />
       <Rotate3DModal />
       <ImportImageModal />
       <NewSpriteModal />

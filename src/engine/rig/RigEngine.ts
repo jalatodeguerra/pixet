@@ -2428,10 +2428,13 @@ export class RigState {
   serializeRuntimeJson(canvasW: number, canvasH: number): string {
     return JSON.stringify(
       {
-        schema: "pixet-rig-v1",
+        schema: "pixet-rig-v2",
         canvas: { width: canvasW, height: canvasH },
         bones: this.bones,
+        constraints: this.constraints,
+        slots: this.slots,
         clips: this.clips,
+        poses: this.poses,
       },
       null,
       2

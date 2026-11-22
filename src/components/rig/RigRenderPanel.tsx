@@ -35,6 +35,7 @@ export function RigRenderPanel() {
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const documentName = useEditorStore((s) => s.documentName);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
+  const setRigExportModalOpen = useEditorStore((s) => s.setRigExportModalOpen);
 
   const handleBakeToFrames = () => {
     if (pixelEngine.rig.bones.length === 0) {
@@ -193,6 +194,15 @@ export function RigRenderPanel() {
         >
           <Download size={11} />
           <span>Rig JSON</span>
+        </button>
+        <button
+          type="button"
+          className="mini-btn"
+          title="Export Rig (Spine, Godot, v2 JSON, Multi-Clip Bake)"
+          onClick={() => setRigExportModalOpen(true)}
+        >
+          <Download size={11} />
+          <span>Export Rig…</span>
         </button>
       </div>
 

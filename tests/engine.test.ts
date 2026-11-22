@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { bakeRigClips } from "../src/engine/rig/export/bake.ts";
+import { exportRigToGodot } from "../src/engine/rig/export/godot.ts";
+import { exportRigToSpine } from "../src/engine/rig/export/spine.ts";
 import {
   applyPose,
   capturePose,
@@ -860,7 +863,7 @@ test("warpLayerByBone deforms pixel cel with RotSprite & serializes rig JSON", (
   assert.ok(countOpaquePixels(warped) > 0);
 
   const json = JSON.parse(rig.serializeRuntimeJson(16, 16));
-  assert.equal(json.schema, "pixet-rig-v1");
+  assert.equal(json.schema, "pixet-rig-v2");
   assert.equal(json.bones.length, 1);
   assert.equal(json.bones[0].name, "Limb");
 });
@@ -2713,4 +2716,90 @@ test("R5 attachment step interpolation, slot draw order, and snapshot round-trip
   rig2.fromSnapshot(snap);
   assert.equal(rig2.slots.length, 2);
   assert.equal(rig2.resolveSlotAttachment(rig2.slots[1], 2, false)?.name, "fist");
+});
+
+test("R7 Spine, Godot, runtime v2 JSON, and multi-clip bake", () => {
+  const engine = new PixelEngine(32, 32);
+  const layer = {
+    id: "layer-body",
+    kind: "raster" as const,
+    visible: true,
+    opacity: 100,
+    blendMode: "Normal" as const,
+    parentId: null,
+  };
+  engine.getOrCreateCel(layer.id, 0).setPixel(16, 16, 255, 0, 0, 255);
+
+  const rig = engine.rig;
+  const root = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 16,
+    localY: 20,
+    length: 10,
+    rotationDeg: -90,
+    boundLayerId: layer.id,
+  });
+  const child = rig.addBone({
+    name: "Arm",
+    parentId: root.id,
+    localX: 10,
+    localY: -4,
+    length: 8,
+    rotationDeg: 30,
+  });
+
+  rig.setPoseOverride(root.id, { rotationDeg: -80 }, 0);
+  rig.setKeyframe(root.id, 0, "linear");
+  rig.setPoseOverride(root.id, { rotationDeg: -60 }, 2);
+  rig.setKeyframe(root.id, 2, "step");
+  rig.updateClip("clip-idle", { frameCount: 3 });
+
+  const runClip = rig.addClip("run", 2, true);
+  rig.setPoseOverride(child.id, { rotationDeg: 45 }, 0);
+  rig.setKeyframe(child.id, 0, "linear");
+  rig.clearPoseOverrides();
+
+  // Runtime JSON v2
+  const v2 = JSON.parse(rig.serializeRuntimeJson(32, 32));
+  assert.equal(v2.schema, "pixet-rig-v2");
+  assert.ok(Array.isArray(v2.constraints));
+  assert.ok(Array.isArray(v2.slots));
+
+  // Spine Y-up conversion & animations
+  const spine = exportRigToSpine(rig, 32, 32, 12);
+  const spineDoc = JSON.parse(spine.json);
+  assert.equal(spineDoc.bones[0].name, "Root");
+  assert.equal(spineDoc.bones[0].x, 16);
+  assert.equal(spineDoc.bones[0].y, 12); // 32 - 20
+  assert.equal(spineDoc.bones[0].rotation, 90); // -(-90)
+  assert.equal(spineDoc.bones[1].parent, "Root");
+  assert.equal(spineDoc.bones[1].y, 4); // -(-4)
+  assert.equal(spineDoc.bones[1].rotation, -30);
+  assert.ok(spineDoc.animations.idle.bones.Root.rotate.length >= 2);
+  assert.ok(spine.atlas.includes("filter: Nearest,Nearest"));
+
+  // Godot .tscn scene & tracks
+  const godot = exportRigToGodot(rig, "Hero", 32, 32, 12);
+  assert.ok(godot.tscn.includes('[node name="Skeleton2D" type="Skeleton2D" parent="."]'));
+  assert.ok(godot.tscn.includes('[node name="Root" type="Bone2D" parent="Skeleton2D"]'));
+  assert.ok(godot.tscn.includes('[node name="Arm" type="Bone2D" parent="Skeleton2D/Root"]'));
+  assert.ok(godot.tscn.includes('[node name="AnimationPlayer" type="AnimationPlayer" parent="."]'));
+  assert.ok(godot.tscn.includes('NodePath("Skeleton2D/Root:rotation")'));
+
+  // Multi-clip bake
+  const baked = bakeRigClips(
+    engine,
+    [layer],
+    ["clip-idle", runClip.id],
+    { pixelSnap: true, rotSprite: false }
+  );
+  assert.equal(baked.frames.length, 5); // 3 + 2
+  assert.equal(baked.tags.length, 2);
+  assert.equal(baked.tags[0].name, "idle");
+  assert.equal(baked.tags[0].fromFrame, 0);
+  assert.equal(baked.tags[0].toFrame, 2);
+  assert.equal(baked.tags[1].name, "run");
+  assert.equal(baked.tags[1].fromFrame, 3);
+  assert.equal(baked.tags[1].toFrame, 4);
 });

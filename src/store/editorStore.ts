@@ -163,6 +163,9 @@ interface EditorState {
     r1: number;
     kind: "select" | "pick";
   } | null;
+  activeTerrainSetId: string | null;
+  activeTerrainId: string | null;
+  terrainEditMode: boolean;
   zoom: number;
   cursorPos: CursorPoint | null;
   canUndo: boolean;
@@ -181,6 +184,7 @@ interface EditorState {
   canvasHeight: number;
   colorMode: "RGBA" | "Indexed";
   exportModalOpen: boolean;
+  rigExportModalOpen: boolean;
   rotate3dModalOpen: boolean;
   newSpriteModalOpen: boolean;
   canvasSizeModalOpen: boolean;
@@ -291,6 +295,10 @@ interface EditorState {
       kind: "select" | "pick";
     } | null
   ) => void;
+  setActiveTerrainSetId: (id: string | null) => void;
+  setActiveTerrainId: (id: string | null) => void;
+  toggleTerrainEditMode: () => void;
+  setTerrainEditMode: (v: boolean) => void;
   toggleAutoTile: () => void;
   setAutoTileEnabled: (enabled: boolean) => void;
   setAutoTileMode: (mode: AutoTileMode) => void;
@@ -371,6 +379,7 @@ interface EditorState {
   setCurrentFilePath: (path: string | null) => void;
   setDocumentName: (name: string) => void;
   setExportModalOpen: (open: boolean) => void;
+  setRigExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
   setNewSpriteModalOpen: (open: boolean) => void;
   setCanvasSizeModalOpen: (open: boolean) => void;
@@ -488,6 +497,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   tileClipboard: null,
   tilePreviewChanges: [],
   tileMarqueeRect: null,
+  activeTerrainSetId: null,
+  activeTerrainId: null,
+  terrainEditMode: false,
   zoom: 12,
   cursorPos: null,
   canUndo: false,
@@ -506,6 +518,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   canvasHeight: 32,
   colorMode: "RGBA",
   exportModalOpen: false,
+  rigExportModalOpen: false,
   rotate3dModalOpen: false,
   newSpriteModalOpen: false,
   canvasSizeModalOpen: false,
@@ -658,6 +671,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setTileClipboard: (tileClipboard) => set({ tileClipboard }),
   setTilePreviewChanges: (tilePreviewChanges) => set({ tilePreviewChanges }),
   setTileMarqueeRect: (tileMarqueeRect) => set({ tileMarqueeRect }),
+  setActiveTerrainSetId: (activeTerrainSetId) => set({ activeTerrainSetId }),
+  setActiveTerrainId: (activeTerrainId) => set({ activeTerrainId }),
+  toggleTerrainEditMode: () =>
+    set((s) => ({ terrainEditMode: !s.terrainEditMode })),
+  setTerrainEditMode: (terrainEditMode) => set({ terrainEditMode }),
   toggleAutoTile: () => set((s) => ({ autoTileEnabled: !s.autoTileEnabled })),
   setAutoTileEnabled: (autoTileEnabled) => set({ autoTileEnabled }),
   setAutoTileMode: (autoTileMode) => set({ autoTileMode }),
@@ -1328,6 +1346,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setCurrentFilePath: (currentFilePath) => set({ currentFilePath }),
   setDocumentName: (documentName) => set({ documentName }),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
+  setRigExportModalOpen: (rigExportModalOpen) => set({ rigExportModalOpen }),
   setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
   setNewSpriteModalOpen: (newSpriteModalOpen) => set({ newSpriteModalOpen }),
   setCanvasSizeModalOpen: (canvasSizeModalOpen) => set({ canvasSizeModalOpen }),
