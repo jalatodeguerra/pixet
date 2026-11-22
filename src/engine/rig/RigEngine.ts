@@ -1,4 +1,13 @@
 import { PixelBuffer, type RGBA } from "../document/PixelBuffer.ts";
+import type { PixelCleanupOptions } from "./pixelCleanup.ts";
+import type { RigMesh, RigMeshKeyframe } from "./mesh.ts";
+import {
+  autoAssignWeights,
+  normalizeInfluences,
+  paintWeightBrush,
+  type WeightBrushMode,
+  type WeightFalloff,
+} from "./skinning.ts";
 
 export type EasingMode =
   | "linear"
@@ -84,6 +93,8 @@ export interface RigClip {
   frameCount: number;
   tracks: Record<string, BoneKeyframe[]>;
   constraintTracks?: Record<string, ConstraintTargetKeyframe[]>;
+  /** R6 per-mesh FFD vertex offset tracks, keyed by mesh id. */
+  meshTracks?: Record<string, RigMeshKeyframe[]>;
   loop?: boolean;
 }
 
@@ -165,6 +176,8 @@ export const MAX_BONE_INFLUENCES = 4;
 export interface RigRenderOptions {
   pixelSnap: boolean;
   rotSprite: boolean;
+  /** R6 post-deformation pixel cleanup (optional). */
+  cleanup?: PixelCleanupOptions;
 }
 
 export interface BoneMask {
@@ -203,6 +216,8 @@ export interface RigSnapshot {
   poses: RigPose[];
   weights: RigWeightSnapshot | null;
   masks: RigMaskSnapshot[];
+  /** R6 grid/FFD meshes (optional in older v2 files). */
+  meshes: RigMesh[];
 }
 
 export interface RigEvaluateOptions {
@@ -689,11 +704,21 @@ export class RigState {
   constraints: RigConstraint[] = [];
   slots: RigSlot[] = [];
   poses: RigPose[] = [];
+  /** R6 grid/FFD meshes bound to layers. */
+  meshes: RigMesh[] = [];
   private nextBoneNum = 1;
+  private nextMeshNum = 1;
   private revision = 0;
   private springCache = new Map<string, number[]>();
   private cachedWeights: BoneWeights | null = null;
   private cachedWeightsRevision = -1;
+  /** Authoritative R6 soft weight map (null = derive hard weights from masks). */
+  private skinWeights: BoneWeights | null = null;
+
+  /** Monotonic revision used by render caches; bumped by every mutation. */
+  get revisionId(): number {
+    return this.revision;
+  }
 
   reset(): void {
     this.bones = [];
@@ -706,10 +731,13 @@ export class RigState {
     this.constraints = [];
     this.slots = [];
     this.poses = [];
+    this.meshes = [];
     this.nextBoneNum = 1;
+    this.nextMeshNum = 1;
     this.springCache.clear();
     this.cachedWeights = null;
     this.cachedWeightsRevision = -1;
+    this.skinWeights = null;
     this.revision++;
   }
 
@@ -805,6 +833,9 @@ export class RigState {
     for (const clip of this.clips) {
       delete clip.tracks[id];
     }
+    if (this.skinWeights && removeBoneFromWeights(this.skinWeights, id)) {
+      this.rebuildMasksFromWeights();
+    }
     this.invalidateEvaluation();
   }
 
@@ -813,6 +844,7 @@ export class RigState {
   }
 
   hasAnyBoneMask(): boolean {
+    if (this.skinWeights && this.skinWeights.entries.size > 0) return true;
     for (const mask of this.boneMasks.values()) {
       for (let i = 0; i < mask.data.length; i++) {
         if (mask.data[i] > 0) return true;
@@ -823,19 +855,143 @@ export class RigState {
 
   clearBoneMask(boneId: string): void {
     this.boneMasks.delete(boneId);
+    this.clearBoneWeights(boneId);
     this.invalidateEvaluation();
   }
 
   /**
-   * Sparse skin weights derived from the current hard masks (R0).
-   * Returns null when the rig has no painted weights.
+   * Sparse skin weights: the stored R6 soft map when present, otherwise hard
+   * weights derived from the legacy bone masks.
    */
   getBoneWeights(): BoneWeights | null {
+    if (this.skinWeights) return this.skinWeights;
     if (this.cachedWeightsRevision !== this.revision) {
       this.cachedWeights = masksToBoneWeights(this.boneMasks);
       this.cachedWeightsRevision = this.revision;
     }
     return this.cachedWeights;
+  }
+
+  /** Replaces the soft weight map (null falls back to mask-derived weights). */
+  setBoneWeights(weights: BoneWeights | null): void {
+    this.skinWeights = weights;
+    this.cachedWeights = weights;
+    this.cachedWeightsRevision = this.revision;
+    this.rebuildMasksFromWeights();
+    this.invalidateEvaluation();
+  }
+
+  /** Removes the selected bone from the soft weight map (keeps others). */
+  clearBoneWeights(boneId: string): void {
+    if (!this.skinWeights) return;
+    if (removeBoneFromWeights(this.skinWeights, boneId)) {
+      this.rebuildMasksFromWeights();
+      this.invalidateEvaluation();
+    }
+  }
+
+  private rebuildMasksFromWeights(): void {
+    this.boneMasks.clear();
+    const weights = this.skinWeights;
+    if (!weights) return;
+    const pixelCount = weights.width * weights.height;
+    for (const [index, influences] of weights.entries) {
+      if (index < 0 || index >= pixelCount) continue;
+      let bestBoneId: string | null = null;
+      let bestWeight = 0;
+      for (const influence of influences) {
+        if (influence.w > bestWeight) {
+          bestWeight = influence.w;
+          bestBoneId = influence.boneId;
+        }
+      }
+      if (!bestBoneId || bestWeight < 0.5) continue;
+      let mask = this.boneMasks.get(bestBoneId);
+      if (!mask || mask.width !== weights.width || mask.height !== weights.height) {
+        mask = {
+          width: weights.width,
+          height: weights.height,
+          data: new Uint8Array(pixelCount),
+        };
+        this.boneMasks.set(bestBoneId, mask);
+      }
+      mask.data[index] = 1;
+    }
+  }
+
+  /**
+   * Paints one smooth-weight brush dab (strength/mode/falloff) for `boneId`.
+   * Every touched pixel keeps its influences normalized and capped at 4.
+   */
+  paintBoneWeights(
+    boneId: string,
+    width: number,
+    height: number,
+    cx: number,
+    cy: number,
+    radius: number,
+    options: {
+      strength: number;
+      mode: WeightBrushMode;
+      falloff: WeightFalloff;
+    }
+  ): void {
+    if (!this.bones.some((b) => b.id === boneId)) return;
+    let weights = this.skinWeights;
+    if (!weights || weights.width !== width || weights.height !== height) {
+      const derived = masksToBoneWeights(this.boneMasks);
+      weights =
+        derived && derived.width === width && derived.height === height
+          ? derived
+          : { width, height, entries: new Map() };
+      this.skinWeights = weights;
+      this.cachedWeights = weights;
+    }
+    paintWeightBrush(weights, boneId, {
+      cx,
+      cy,
+      radius,
+      strength: options.strength,
+      mode: options.mode,
+      falloff: options.falloff,
+    });
+    this.rebuildMasksFromWeights();
+    this.invalidateEvaluation();
+  }
+
+  /**
+   * Smooth auto weights: distance-to-bone-segment falloff, top-4 influences
+   * per opaque pixel, normalized to 1.
+   */
+  autoAssignBoneWeights(src: PixelBuffer, frame = 0): void {
+    this.boneMasks.clear();
+    this.skinWeights = null;
+    if (this.bones.length === 0) {
+      this.invalidateEvaluation();
+      return;
+    }
+
+    const transforms = this.computeWorldTransforms(frame, "rest", false);
+    const autoBones = this.bones
+      .map((bone) => ({ bone, transform: transforms.get(bone.id) }))
+      .filter(
+        (item): item is { bone: Bone; transform: BoneWorldTransform } =>
+          item.transform !== undefined
+      )
+      .map(({ bone, transform }) => ({
+        id: bone.id,
+        x: transform.x,
+        y: transform.y,
+        tipX: transform.tipX,
+        tipY: transform.tipY,
+      }));
+
+    const weights = autoAssignWeights(src, autoBones);
+    this.skinWeights = weights;
+    this.cachedWeights = weights;
+    this.cachedWeightsRevision = this.revision;
+    this.rebuildMasksFromWeights();
+    this.invalidateEvaluation();
   }
 
   private ensureBoneMask(boneId: string, width: number, height: number): BoneMask {
@@ -890,13 +1046,35 @@ export class RigState {
             }
           }
         }
+
+        // Keep the R6 soft weight map in sync when it exists (legacy brush).
+        const weights = this.skinWeights;
+        if (weights && weights.width === width && weights.height === height) {
+          const current = weights.entries.get(idx) ?? [];
+          let next: BoneWeightInfluence[];
+          if (erase) {
+            next = normalizeInfluences(
+              current.filter((influence) => influence.boneId !== boneId)
+            );
+          } else if (exclusive) {
+            next = [{ boneId, w: 1 }];
+          } else {
+            next = normalizeInfluences([...current, { boneId, w: 1 }]);
+          }
+          if (next.length === 0) weights.entries.delete(idx);
+          else weights.entries.set(idx, next);
+        }
       }
     }
+    if (this.skinWeights) this.rebuildMasksFromWeights();
     this.invalidateEvaluation();
   }
 
   autoAssignBoneMasks(src: PixelBuffer, frame = 0): void {
     this.boneMasks.clear();
+    // Legacy hard-mask assignment replaces the R6 soft weight map.
+    this.skinWeights = null;
+    this.cachedWeights = null;
     if (this.bones.length === 0) {
       this.invalidateEvaluation();
       return;
@@ -939,6 +1117,97 @@ export class RigState {
         masks[bestIdx].data[y * w + x] = 1;
       }
     }
+    this.invalidateEvaluation();
+  }
+
+  getMeshForLayer(layerId: string): RigMesh | null {
+    return this.meshes.find((mesh) => mesh.layerId === layerId) ?? null;
+  }
+
+  addMesh(mesh: RigMesh): RigMesh {
+    let id = mesh.id || `mesh-${this.nextMeshNum++}`;
+    while (this.meshes.some((existing) => existing.id === id)) {
+      id = `mesh-${this.nextMeshNum++}`;
+    }
+    const clone = cloneMesh(mesh);
+    clone.id = id;
+    this.meshes.push(clone);
+    this.invalidateEvaluation();
+    return clone;
+  }
+
+  updateMesh(id: string, patch: Partial<Omit<RigMesh, "id">>): void {
+    const mesh = this.meshes.find((item) => item.id === id);
+    if (!mesh) return;
+    if (patch.name !== undefined) mesh.name = patch.name;
+    if (patch.layerId !== undefined) mesh.layerId = patch.layerId;
+    if (patch.cellSize !== undefined) mesh.cellSize = patch.cellSize;
+    if (patch.boundsX !== undefined) mesh.boundsX = patch.boundsX;
+    if (patch.boundsY !== undefined) mesh.boundsY = patch.boundsY;
+    if (patch.boundsWidth !== undefined) mesh.boundsWidth = patch.boundsWidth;
+    if (patch.boundsHeight !== undefined) mesh.boundsHeight = patch.boundsHeight;
+    if (patch.vertices !== undefined) {
+      mesh.vertices = patch.vertices.map((vertex) => ({ ...vertex }));
+    }
+    if (patch.triangles !== undefined) mesh.triangles = [...patch.triangles];
+    this.invalidateEvaluation();
+  }
+
+  removeMesh(id: string): void {
+    this.meshes = this.meshes.filter((mesh) => mesh.id !== id);
+    for (const clip of this.clips) {
+      if (clip.meshTracks) delete clip.meshTracks[id];
+    }
+    this.invalidateEvaluation();
+  }
+
+  setMeshVertexOffset(
+    meshId: string,
+    vertexIndex: number,
+    offsetX: number,
+    offsetY: number
+  ): void {
+    const mesh = this.meshes.find((item) => item.id === meshId);
+    const vertex = mesh?.vertices[vertexIndex];
+    if (!vertex) return;
+    vertex.offsetX = offsetX;
+    vertex.offsetY = offsetY;
+    this.invalidateEvaluation();
+  }
+
+  /** Keys the current absolute FFD vertex offsets of a mesh on the active clip. */
+  setMeshKeyframe(
+    meshId: string,
+    frame: number,
+    offsets: ReadonlyArray<readonly [number, number]>,
+    easing: EasingMode = "linear"
+  ): void {
+    const mesh = this.meshes.find((item) => item.id === meshId);
+    if (!mesh) return;
+    const clip = this.getActiveClip();
+    if (!clip.meshTracks) clip.meshTracks = {};
+    const track = clip.meshTracks[meshId] ?? [];
+    const key: RigMeshKeyframe = {
+      frame: Math.round(frame),
+      offsets: mesh.vertices.map((_, index): [number, number] => {
+        const value = offsets[index];
+        return value ? [value[0], value[1]] : [0, 0];
+      }),
+      easing,
+    };
+    const next = track.filter((item) => item.frame !== key.frame);
+    next.push(key);
+    next.sort((a, b) => a.frame - b.frame);
+    clip.meshTracks[meshId] = next;
+    if (frame + 1 > clip.frameCount) clip.frameCount = frame + 1;
+    this.invalidateEvaluation();
+  }
+
+  clearMeshKeyframe(meshId: string, frame: number): void {
+    const clip = this.getActiveClip();
+    const track = clip.meshTracks?.[meshId];
+    if (!track) return;
+    clip.meshTracks![meshId] = track.filter((item) => item.frame !== frame);
     this.invalidateEvaluation();
   }
 
@@ -1714,6 +1983,17 @@ export class RigState {
             ])
           );
         }
+        if (c.meshTracks) {
+          clip.meshTracks = Object.fromEntries(
+            Object.entries(c.meshTracks).map(([k, arr]) => [
+              k,
+              arr.map((kf) => ({
+                ...kf,
+                offsets: kf.offsets.map((value) => [value[0], value[1]] as [number, number]),
+              })),
+            ])
+          );
+        }
         if (c.loop !== undefined) clip.loop = c.loop;
         return clip;
       }),
@@ -1739,6 +2019,7 @@ export class RigState {
       })),
       weights: weights ? serializeBoneWeights(weights) : null,
       masks,
+      meshes: this.meshes.map(cloneMesh),
     };
   }
 
@@ -1781,6 +2062,24 @@ export class RigState {
           );
         }
         if (typeof c.loop === "boolean") clip.loop = c.loop;
+        if (c.meshTracks && typeof c.meshTracks === "object") {
+          const meshTracks: Record<string, RigMeshKeyframe[]> = {};
+          for (const [meshId, arr] of Object.entries(c.meshTracks)) {
+            if (!Array.isArray(arr)) continue;
+            meshTracks[meshId] = arr
+              .filter((kf) => isRecord(kf) && typeof kf.frame === "number")
+              .map((kf) => ({
+                frame: kf.frame,
+                offsets: Array.isArray(kf.offsets)
+                  ? kf.offsets
+                      .filter((value) => Array.isArray(value) && value.length >= 2)
+                      .map((value) => [value[0], value[1]] as [number, number])
+                  : [],
+                easing: kf.easing,
+              }));
+          }
+          clip.meshTracks = meshTracks;
+        }
         return clip;
       });
     }
@@ -1833,6 +2132,24 @@ export class RigState {
         }));
     }
 
+    if (Array.isArray(raw.meshes)) {
+      this.meshes = (raw.meshes as RigMesh[])
+        .filter(
+          (mesh) =>
+            isRecord(mesh) &&
+            typeof mesh.id === "string" &&
+            Array.isArray(mesh.vertices) &&
+            Array.isArray(mesh.triangles)
+        )
+        .map(cloneMesh);
+      for (const mesh of this.meshes) {
+        const match = /(\d+)$/.exec(mesh.id);
+        if (match) {
+          this.nextMeshNum = Math.max(this.nextMeshNum, Number(match[1]) + 1);
+        }
+      }
+    }
+
     if (Array.isArray(raw.masks)) {
       for (const m of raw.masks) {
         if (
@@ -1863,35 +2180,42 @@ export class RigState {
 
     const weights = parseBoneWeights(raw.weights);
     if (weights) {
+      this.skinWeights = weights;
       this.cachedWeights = weights;
       this.cachedWeightsRevision = this.revision;
       if (this.boneMasks.size === 0) {
-        this.boneMasks = masksFromBoneWeights(weights);
+        this.rebuildMasksFromWeights();
       }
     }
   }
 }
 
-function masksFromBoneWeights(weights: BoneWeights): Map<string, BoneMask> {
-  const masks = new Map<string, BoneMask>();
-  const pixelCount = weights.width * weights.height;
+function removeBoneFromWeights(weights: BoneWeights, boneId: string): boolean {
+  let changed = false;
   for (const [index, influences] of weights.entries) {
-    if (index < 0 || index >= pixelCount) continue;
-    for (const influence of influences) {
-      if (influence.w < 0.5) continue;
-      let mask = masks.get(influence.boneId);
-      if (!mask) {
-        mask = {
-          width: weights.width,
-          height: weights.height,
-          data: new Uint8Array(pixelCount),
-        };
-        masks.set(influence.boneId, mask);
-      }
-      mask.data[index] = 1;
-    }
+    if (!influences.some((influence) => influence.boneId === boneId)) continue;
+    changed = true;
+    const normalized = normalizeInfluences(
+      influences.filter((influence) => influence.boneId !== boneId)
+    );
+    if (normalized.length === 0) weights.entries.delete(index);
+    else weights.entries.set(index, normalized);
   }
-  return masks;
+  return changed;
+}
+
+function cloneMesh(mesh: RigMesh): RigMesh {
+  const clone: RigMesh = {
+    ...mesh,
+    vertices: mesh.vertices.map((vertex) => ({
+      ...vertex,
+      weights: vertex.weights
+        ? vertex.weights.map((influence) => ({ ...influence }))
+        : undefined,
+    })),
+    triangles: [...mesh.triangles],
+  };
+  return clone;
 }
 
 function cloneConstraint(constraint: RigConstraint): RigConstraint {
@@ -1925,13 +2249,21 @@ function constraintReferencesBone(
 }
 
 /**
- * Draws per-bone color-coded influence masks onto `overlay` for live visual preview.
+ * Draws per-bone color-coded influence masks onto `overlay` for live visual
+ * preview. Pass `mode: "heatmap"` to show the selected bone's weight as an
+ * alpha heatmap instead (R6 default in the UI).
  */
 export function renderBoneInfluenceOverlay(
   rig: RigState,
   overlay: PixelBuffer,
-  selectedBoneId: string | null
+  selectedBoneId: string | null,
+  opts: { mode?: "boneColors" | "heatmap" } = {}
 ): void {
+  if (opts.mode === "heatmap") {
+    renderBoneWeightHeatmap(rig, overlay, selectedBoneId);
+    return;
+  }
+
   const w = overlay.width;
   const h = overlay.height;
   const out = overlay.data;
@@ -1954,5 +2286,39 @@ export function renderBoneInfluenceOverlay(
     }
   }
 
+  overlay.markAllDirty();
+}
+
+/**
+ * R6 --- selected-bone weight heatmap: one flat accent color whose alpha is
+ * proportional to that bone's weight (0..1) at each pixel.
+ */
+export function renderBoneWeightHeatmap(
+  rig: RigState,
+  overlay: PixelBuffer,
+  boneId: string | null
+): void {
+  if (!boneId) return;
+  const weights = rig.getBoneWeights();
+  if (!weights) return;
+  if (weights.width !== overlay.width || weights.height !== overlay.height) return;
+
+  const out = overlay.data;
+  const color = getBoneInfluenceColor(0);
+  for (const [index, influences] of weights.entries) {
+    let weight = 0;
+    for (const influence of influences) {
+      if (influence.boneId === boneId) {
+        weight = influence.w;
+        break;
+      }
+    }
+    if (weight <= 0.01) continue;
+    const pIdx = index * 4;
+    out[pIdx] = color[0];
+    out[pIdx + 1] = color[1];
+    out[pIdx + 2] = color[2];
+    out[pIdx + 3] = Math.round(Math.max(0, Math.min(1, weight)) * 220);
+  }
   overlay.markAllDirty();
 }

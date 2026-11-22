@@ -2,11 +2,13 @@ import { create } from "zustand";
 import type { PendingImageImport } from "../engine/io/imageImport";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
+import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
 
 export type { LayerMapRole };
 
 export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
 export type RigTool = "select" | "addBone" | "ik" | "weightPaint";
+export type RigWeightOverlayMode = "heatmap" | "boneColors";
 export type DataTool = "hitbox" | "hurtbox" | "collision" | "socket";
 
 export type ToolId =
@@ -152,6 +154,19 @@ interface EditorState {
   rigShowInfluence: boolean;
   rigBrushSize: number;
   rigVersion: number;
+  /** R6 weight brush strength (0..1). */
+  rigWeightStrength: number;
+  /** R6 weight brush mode. */
+  rigWeightMode: WeightBrushMode;
+  /** R6 weight brush falloff. */
+  rigWeightFalloff: WeightFalloff;
+  /** R6 influence overlay: selected-bone heatmap or per-bone colors. */
+  rigWeightOverlay: RigWeightOverlayMode;
+  /** R6 post-deformation pixel cleanup toggles. */
+  rigCleanupOrphans: boolean;
+  rigCleanupHoles: boolean;
+  rigCleanupPaletteLock: boolean;
+  rigCleanupOutline: boolean;
 
   dataTool: DataTool;
   showGameDataOverlay: boolean;
@@ -300,6 +315,14 @@ interface EditorState {
   toggleRigShowInfluence: () => void;
   setRigBrushSize: (size: number) => void;
   bumpRigVersion: () => void;
+  setRigWeightStrength: (strength: number) => void;
+  setRigWeightMode: (mode: WeightBrushMode) => void;
+  setRigWeightFalloff: (falloff: WeightFalloff) => void;
+  setRigWeightOverlay: (mode: RigWeightOverlayMode) => void;
+  toggleRigCleanupOrphans: () => void;
+  toggleRigCleanupHoles: () => void;
+  toggleRigCleanupPaletteLock: () => void;
+  toggleRigCleanupOutline: () => void;
   setDataTool: (tool: DataTool) => void;
   toggleShowGameDataOverlay: () => void;
   bumpGameDataVersion: () => void;
@@ -405,6 +428,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigShowInfluence: true,
   rigBrushSize: 3,
   rigVersion: 0,
+  rigWeightStrength: 0.5,
+  rigWeightMode: "add",
+  rigWeightFalloff: "linear",
+  rigWeightOverlay: "heatmap",
+  rigCleanupOrphans: false,
+  rigCleanupHoles: false,
+  rigCleanupPaletteLock: false,
+  rigCleanupOutline: false,
 
   dataTool: "hitbox",
   showGameDataOverlay: true,
@@ -1197,6 +1228,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRigBrushSize: (size) =>
     set({ rigBrushSize: Math.max(1, Math.min(12, Math.round(size))) }),
   bumpRigVersion: () => set((s) => ({ rigVersion: s.rigVersion + 1 })),
+  setRigWeightStrength: (strength) =>
+    set({ rigWeightStrength: Math.max(0, Math.min(1, strength)) }),
+  setRigWeightMode: (rigWeightMode) => set({ rigWeightMode }),
+  setRigWeightFalloff: (rigWeightFalloff) => set({ rigWeightFalloff }),
+  setRigWeightOverlay: (rigWeightOverlay) => set({ rigWeightOverlay }),
+  toggleRigCleanupOrphans: () =>
+    set((s) => ({ rigCleanupOrphans: !s.rigCleanupOrphans })),
+  toggleRigCleanupHoles: () =>
+    set((s) => ({ rigCleanupHoles: !s.rigCleanupHoles })),
+  toggleRigCleanupPaletteLock: () =>
+    set((s) => ({ rigCleanupPaletteLock: !s.rigCleanupPaletteLock })),
+  toggleRigCleanupOutline: () =>
+    set((s) => ({ rigCleanupOutline: !s.rigCleanupOutline })),
   setDataTool: (dataTool) => set({ dataTool }),
   toggleShowGameDataOverlay: () =>
     set((s) => ({ showGameDataOverlay: !s.showGameDataOverlay })),

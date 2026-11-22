@@ -58,6 +58,26 @@ export function RigPanel() {
   const toggleRigShowInfluence = useEditorStore((s) => s.toggleRigShowInfluence);
   const rigBrushSize = useEditorStore((s) => s.rigBrushSize);
   const setRigBrushSize = useEditorStore((s) => s.setRigBrushSize);
+  const rigWeightStrength = useEditorStore((s) => s.rigWeightStrength);
+  const setRigWeightStrength = useEditorStore((s) => s.setRigWeightStrength);
+  const rigWeightMode = useEditorStore((s) => s.rigWeightMode);
+  const setRigWeightMode = useEditorStore((s) => s.setRigWeightMode);
+  const rigWeightFalloff = useEditorStore((s) => s.rigWeightFalloff);
+  const setRigWeightFalloff = useEditorStore((s) => s.setRigWeightFalloff);
+  const rigWeightOverlay = useEditorStore((s) => s.rigWeightOverlay);
+  const setRigWeightOverlay = useEditorStore((s) => s.setRigWeightOverlay);
+  const rigCleanupOrphans = useEditorStore((s) => s.rigCleanupOrphans);
+  const rigCleanupHoles = useEditorStore((s) => s.rigCleanupHoles);
+  const rigCleanupPaletteLock = useEditorStore((s) => s.rigCleanupPaletteLock);
+  const rigCleanupOutline = useEditorStore((s) => s.rigCleanupOutline);
+  const toggleRigCleanupOrphans = useEditorStore((s) => s.toggleRigCleanupOrphans);
+  const toggleRigCleanupHoles = useEditorStore((s) => s.toggleRigCleanupHoles);
+  const toggleRigCleanupPaletteLock = useEditorStore(
+    (s) => s.toggleRigCleanupPaletteLock
+  );
+  const toggleRigCleanupOutline = useEditorStore(
+    (s) => s.toggleRigCleanupOutline
+  );
   const rigVersion = useEditorStore((s) => s.rigVersion);
 
   const layers = useEditorStore((s) => s.layers);
@@ -166,11 +186,21 @@ export function RigPanel() {
     const snapshotLayers = state.layers.slice();
 
     const bakedBuffers: Uint8ClampedArray[] = [];
+    const cleanup = {
+      removeOrphans: state.rigCleanupOrphans,
+      fillHoles: state.rigCleanupHoles,
+      paletteLock: state.rigCleanupPaletteLock,
+      preserveOutline: state.rigCleanupOutline,
+    };
     for (let f = 0; f < bakeCount; f++) {
       const composited = pixelEngine.compositeRigFrame(
         snapshotLayers,
         f,
-        { pixelSnap: state.rigPixelSnap, rotSprite: state.rigRotSprite },
+        {
+          pixelSnap: state.rigPixelSnap,
+          rotSprite: state.rigRotSprite,
+          cleanup,
+        },
         false
       );
       bakedBuffers.push(new Uint8ClampedArray(composited));
@@ -227,9 +257,9 @@ export function RigPanel() {
     mutateRig("Auto-weight", () => {
       const composited = pixelEngine.compositeFrame(layers, currentFrame);
       const buf = new PixelBuffer(canvasWidth, canvasHeight, composited);
-      pixelEngine.rig.autoAssignBoneMasks(buf, currentFrame);
+      pixelEngine.rig.autoAssignBoneWeights(buf, currentFrame);
     });
-    setStatusMessage("Auto-weighted pixels to nearest bones");
+    setStatusMessage("Auto-weighted pixels with smooth bone falloff");
   };
 
   const handleClearMask = () => {
@@ -323,6 +353,48 @@ export function RigPanel() {
           </label>
         </div>
 
+        {/* R6 Pixel Cleanup — carried into src/components/rig/RigRenderPanel.tsx by R1. */}
+        <div
+          className="rig-option-row"
+          style={{ flexWrap: "wrap", justifyContent: "flex-start", gap: 6 }}
+        >
+          <span style={{ width: "100%", fontSize: 10, color: "var(--text-muted)" }}>
+            Pixel Cleanup (post-deform)
+          </span>
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupOrphans}
+              onChange={toggleRigCleanupOrphans}
+            />
+            <span>Orphans</span>
+          </label>
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupHoles}
+              onChange={toggleRigCleanupHoles}
+            />
+            <span>Fill Holes</span>
+          </label>
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupPaletteLock}
+              onChange={toggleRigCleanupPaletteLock}
+            />
+            <span>Palette Lock</span>
+          </label>
+          <label className="modal-checkbox" style={{ fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={rigCleanupOutline}
+              onChange={toggleRigCleanupOutline}
+            />
+            <span>Outline</span>
+          </label>
+        </div>
+
         {bones.length > 0 && (
           <div className="rig-influence-box">
             <div className="rig-option-row">
@@ -356,6 +428,7 @@ export function RigPanel() {
               </div>
             </div>
 
+            {/* R6 smooth weight brush — carried into src/components/rig/WeightsPanel.tsx by R1. */}
             {rigTool === "weightPaint" && (
               <>
                 <label className="rig-slider-row">
@@ -369,11 +442,92 @@ export function RigPanel() {
                   />
                   <span className="mono-value">{rigBrushSize}px</span>
                 </label>
+                <label className="rig-slider-row">
+                  <span>Strength</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={rigWeightStrength}
+                    onChange={(e) =>
+                      setRigWeightStrength(Number(e.target.value))
+                    }
+                  />
+                  <span className="mono-value">
+                    {Math.round(rigWeightStrength * 100)}%
+                  </span>
+                </label>
+                <div className="rig-option-row">
+                  <span>Mode</span>
+                  <div style={{ display: "flex", gap: 3 }}>
+                    {(
+                      [
+                        ["add", "Add"],
+                        ["subtract", "Sub"],
+                        ["smooth", "Smooth"],
+                        ["replace", "Replace"],
+                      ] as const
+                    ).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`mini-btn ${rigWeightMode === mode ? "active" : ""}`}
+                        onClick={() => setRigWeightMode(mode)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="rig-option-row">
+                  <span>Falloff</span>
+                  <div style={{ display: "flex", gap: 3 }}>
+                    {(
+                      [
+                        ["hard", "Hard"],
+                        ["linear", "Linear"],
+                      ] as const
+                    ).map(([falloff, label]) => (
+                      <button
+                        key={falloff}
+                        type="button"
+                        className={`mini-btn ${rigWeightFalloff === falloff ? "active" : ""}`}
+                        onClick={() => setRigWeightFalloff(falloff)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <span className="rotate3d-hint">
                   Left-drag paint · Right-drag erase weight
                 </span>
               </>
             )}
+
+            {/* R6 overlay view switch (heatmap is the default). */}
+            <div className="rig-option-row">
+              <span>Overlay</span>
+              <div style={{ display: "flex", gap: 3 }}>
+                {(
+                  [
+                    ["heatmap", "Heatmap"],
+                    ["boneColors", "Colors"],
+                  ] as const
+                ).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`mini-btn ${rigWeightOverlay === mode ? "active" : ""}`}
+                    onClick={() => setRigWeightOverlay(mode)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
           </div>
         )}
 

@@ -40,6 +40,12 @@ export class PixelBuffer {
   readonly height: number;
   readonly data: Uint8ClampedArray;
   dirtyRect: DirtyRect | null = null;
+  private contentRevision = 0;
+
+  /** Monotonic content revision, used by render caches (R6). */
+  get revision(): number {
+    return this.contentRevision;
+  }
 
   constructor(width: number, height: number, data?: Uint8ClampedArray) {
     this.width = width;
@@ -126,6 +132,7 @@ export class PixelBuffer {
 
   markDirty(x: number, y: number): void {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return;
+    this.contentRevision++;
     if (!this.dirtyRect) {
       this.dirtyRect = { x, y, w: 1, h: 1 };
       return;
@@ -143,6 +150,7 @@ export class PixelBuffer {
   }
 
   markAllDirty(): void {
+    this.contentRevision++;
     this.dirtyRect = { x: 0, y: 0, w: this.width, h: this.height };
   }
 
