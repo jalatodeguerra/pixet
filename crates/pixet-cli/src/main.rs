@@ -63,13 +63,24 @@ enum CliPackMode {
     Tight,
 }
 
+fn load_input_project(file: &PathBuf) -> Result<pixet_core::ProjectData, String> {
+    let ext = file
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let res = match ext.as_deref() {
+        Some("ase" | "aseprite") => pixet_core::load_aseprite(file),
+        _ => pixet_core::load_pixet(file),
+    };
+    res.map_err(|e| format!("Failed to load `{}`: {e}", file.display()))
+}
+
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Info { file } => {
-            let project = pixet_core::load_pixet(&file)
-                .map_err(|e| format!("Failed to load `{}`: {e}", file.display()))?;
+            let project = load_input_project(&file)?;
             let doc = &project.document;
             println!("Project:      {}", doc.name);
             println!("Schema:       v{}", doc.schema_version);
@@ -106,8 +117,7 @@ fn run() -> Result<(), String> {
             padding,
             name,
         } => {
-            let project = pixet_core::load_pixet(&file)
-                .map_err(|e| format!("Failed to load `{}`: {e}", file.display()))?;
+            let project = load_input_project(&file)?;
 
             let sheet_name = name.unwrap_or_else(|| {
                 file.file_stem()

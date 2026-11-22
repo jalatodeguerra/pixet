@@ -96,6 +96,12 @@ fn open_project(path: String) -> Result<ProjectTransfer, String> {
 }
 
 #[tauri::command]
+fn import_aseprite(path: String) -> Result<ProjectTransfer, String> {
+    let project = pixet_core::load_aseprite(path).map_err(|e| e.to_string())?;
+    Ok(project_to_transfer(project))
+}
+
+#[tauri::command]
 fn export_spritesheet(
     out_dir: String,
     payload: ProjectTransfer,
@@ -128,6 +134,7 @@ pub fn run() {
             get_app_info,
             save_project,
             open_project,
+            import_aseprite,
             export_spritesheet
         ])
         .run(tauri::generate_context!())

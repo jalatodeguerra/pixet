@@ -1160,6 +1160,7 @@ mod tests {
                 parent_id: None,
                 cels: Vec::new(),
                 tilemaps,
+                map_role: None,
             },
         );
         project.cels.clear();

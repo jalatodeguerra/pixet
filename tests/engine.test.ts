@@ -63,6 +63,11 @@ import {
   sliceSpritesheet,
 } from "../src/engine/io/imageImport.ts";
 import { GameDataState } from "../src/engine/gamedev/GameDataEngine.ts";
+import {
+  apply2DLighting,
+  applyPaletteSwapLut,
+  generateAutoNormalMap,
+} from "../src/engine/gamedev/shaderPreview.ts";
 
 test("plotBresenhamLine produces connected endpoints", () => {
   const pts = plotBresenhamLine(0, 0, 4, 2);
@@ -1093,4 +1098,67 @@ test("RigState.toSnapshot and fromSnapshot round-trip bones, keyframes, and bone
     rotationDeg: 45,
   });
   assert.equal(extra.id, "bone-3");
+});
+
+test("shaderPreview: generateAutoNormalMap, apply2DLighting, and applyPaletteSwapLut", () => {
+  const albedo = new PixelBuffer(8, 8);
+  for (let y = 2; y <= 5; y++) {
+    for (let x = 2; x <= 5; x++) {
+      albedo.setPixel(x, y, 180, 180, 180, 255);
+    }
+  }
+
+  // 1. Auto normal map produces valid tangent normals on opaque pixels
+  const normals = generateAutoNormalMap(albedo, 2.0);
+  const centerN = normals.getPixel(3, 3);
+  assert.equal(centerN[3], 255);
+  assert.ok(centerN[2] > 200); // Flat interior faces +Z
+  assert.equal(normals.getPixel(0, 0)[3], 0); // Transparent outside stays transparent
+  // Top rim (x=3, y=2) faces upward (+Y in OpenGL normal space -> G > 128)
+  assert.ok(normals.getPixel(3, 2)[1] > 140);
+
+  // 2. 2D lighting with top light illuminates top rim brighter than bottom rim, and adds emission
+  const emission = new PixelBuffer(8, 8);
+  emission.setPixel(4, 4, 255, 60, 0, 255);
+
+  const lit = apply2DLighting(
+    albedo.data,
+    normals.data,
+    emission.data,
+    8,
+    8,
+    {
+      enabled: true,
+      lightX: 0.5,
+      lightY: 0.05,
+      lightZ: 0.25,
+      lightColor: "#ffffff",
+      intensity: 1.8,
+      ambient: 0.15,
+      emissionStrength: 1.0,
+    }
+  );
+  const topR = lit[(2 * 8 + 3) * 4];
+  const botR = lit[(5 * 8 + 3) * 4];
+  assert.ok(topR > botR);
+  // Emissive pixel at (4,4) gets bright red emission boost
+  const emIdx = (4 * 8 + 4) * 4;
+  assert.equal(lit[emIdx], 255);
+
+  // 3. Palette-Swap LUT remaps source palette colors to target palette preserving alpha
+  const swBuf = new Uint8ClampedArray([
+    10, 20, 30, 255,
+    40, 50, 60, 128,
+    0, 0, 0, 0,
+  ]);
+  const swapped = applyPaletteSwapLut(
+    swBuf,
+    ["#0a141e", "#28323c"],
+    ["#ff0000", "#00ff00"]
+  );
+  assert.deepEqual(Array.from(swapped), [
+    255, 0, 0, 255,
+    0, 255, 0, 128,
+    0, 0, 0, 0,
+  ]);
 });

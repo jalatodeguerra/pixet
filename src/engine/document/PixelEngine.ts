@@ -20,6 +20,12 @@ import {
   warpLayerByBone,
 } from "../rig/RigEngine.ts";
 import { GameDataState } from "../gamedev/GameDataEngine.ts";
+import {
+  type LayerMapRole,
+  type Light2DOptions,
+  apply2DLighting,
+  applyPaletteSwapLut,
+} from "../gamedev/shaderPreview.ts";
 import type {
   FloatingSelection,
   SelectionMask,
@@ -32,6 +38,7 @@ export interface LayerCompositingInfo {
   opacity: number; // 0..100
   blendMode: BlendModeName;
   parentId?: string | null;
+  mapRole?: LayerMapRole;
 }
 
 function resolveLayerEffective(
@@ -893,6 +900,90 @@ export class PixelEngine {
       );
     }
 
+    return this.compositeBuffer;
+  }
+
+  compositeFrameWithShaderPreview(
+    layers: readonly LayerCompositingInfo[],
+    frameIndex: number,
+    opts: {
+      rigOpts?: RigRenderOptions;
+      useRig?: boolean;
+      light2d?: Light2DOptions;
+      paletteLut?: {
+        enabled: boolean;
+        sourcePalette: readonly string[];
+        targetPalette: readonly string[];
+      };
+    }
+  ): Uint8ClampedArray {
+    const useRig = Boolean(opts.useRig && this.rig.bones.length > 0);
+    const rigOpts: RigRenderOptions = opts.rigOpts ?? {
+      pixelSnap: true,
+      rotSprite: true,
+    };
+
+    const renderList = (subset: readonly LayerCompositingInfo[]): Uint8ClampedArray =>
+      useRig
+        ? this.compositeRigFrame(subset, frameIndex, rigOpts)
+        : this.compositeFrame(subset, frameIndex);
+
+    let result: Uint8ClampedArray;
+
+    if (opts.light2d?.enabled) {
+      const albedoLayers = layers.filter(
+        (l) => l.kind === "group" || !l.mapRole || l.mapRole === "albedo"
+      );
+      const hasNormal = layers.some(
+        (l) => l.kind !== "group" && l.mapRole === "normal" && l.visible
+      );
+      const hasEmission = layers.some(
+        (l) => l.kind !== "group" && l.mapRole === "emission" && l.visible
+      );
+
+      const albedo = new Uint8ClampedArray(renderList(albedoLayers));
+      let normal: Uint8ClampedArray | null = null;
+      let emission: Uint8ClampedArray | null = null;
+
+      if (hasNormal) {
+        const normalLayers = layers.filter(
+          (l) => l.kind === "group" || l.mapRole === "normal"
+        );
+        normal = new Uint8ClampedArray(this.compositeFrame(normalLayers, frameIndex));
+      }
+      if (hasEmission) {
+        const emissionLayers = layers.filter(
+          (l) => l.kind === "group" || l.mapRole === "emission"
+        );
+        emission = new Uint8ClampedArray(
+          this.compositeFrame(emissionLayers, frameIndex)
+        );
+      }
+
+      result = apply2DLighting(
+        albedo,
+        normal,
+        emission,
+        this.width,
+        this.height,
+        opts.light2d
+      );
+    } else {
+      result = new Uint8ClampedArray(renderList(layers));
+    }
+
+    if (
+      opts.paletteLut?.enabled &&
+      opts.paletteLut.targetPalette.length > 0
+    ) {
+      result = applyPaletteSwapLut(
+        result,
+        opts.paletteLut.sourcePalette,
+        opts.paletteLut.targetPalette
+      );
+    }
+
+    this.compositeBuffer.set(result);
     return this.compositeBuffer;
   }
 

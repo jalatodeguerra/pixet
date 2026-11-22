@@ -25,6 +25,7 @@ import {
   duplicateCurrentFrameAction,
 } from "../engine/document/timelineActions";
 import {
+  importAsepriteAction,
   openProjectAction,
   saveProjectAction,
 } from "../engine/io/projectBridge";
@@ -93,6 +94,13 @@ export function TopBar() {
             .catch((err) => {
               setStatusMessage(`Import failed: ${String(err)}`);
             });
+        },
+      },
+      {
+        label: "Import .ase / .aseprite...",
+        action: () => {
+          setOpenMenu(null);
+          void importAsepriteAction();
         },
       },
       { label: "Save", shortcut: "Ctrl+S", action: () => { setOpenMenu(null); void saveProjectAction(false); } },

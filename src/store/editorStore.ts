@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type { PendingImageImport } from "../engine/io/imageImport";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
+import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
+
+export type { LayerMapRole };
 
 export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
 export type RigTool = "select" | "addBone" | "ik" | "weightPaint";
@@ -35,6 +38,7 @@ export interface LayerItem {
   alphaLock: boolean;
   blendMode: BlendMode;
   parentId: string | null;
+  mapRole?: LayerMapRole;
   expanded?: boolean;
   cels: Record<number, boolean>;
   linkedCels?: Record<number, boolean>;
@@ -153,6 +157,17 @@ interface EditorState {
   showGameDataOverlay: boolean;
   gameDataVersion: number;
 
+  light2dEnabled: boolean;
+  light2dX: number;
+  light2dY: number;
+  light2dZ: number;
+  light2dColor: string;
+  light2dIntensity: number;
+  light2dAmbient: number;
+  light2dEmission: number;
+  paletteLutEnabled: boolean;
+  paletteLutPresetName: string;
+
   layers: LayerItem[];
   activeLayerId: string;
   selectedLayerIds: string[];
@@ -222,6 +237,8 @@ interface EditorState {
   setLayerBlendMode: (id: string, blendMode: BlendMode) => void;
   addLayer: () => void;
   addNamedLayer: (name: string) => string;
+  addMapLayer: (role: "normal" | "emission", name?: string) => string;
+  setLayerMapRole: (id: string, role: LayerMapRole) => void;
   addGroupLayer: () => void;
   addTilemapLayer: () => void;
   deleteActiveLayer: () => void;
@@ -286,6 +303,20 @@ interface EditorState {
   setDataTool: (tool: DataTool) => void;
   toggleShowGameDataOverlay: () => void;
   bumpGameDataVersion: () => void;
+  setLight2d: (
+    patch: Partial<{
+      enabled: boolean;
+      x: number;
+      y: number;
+      z: number;
+      color: string;
+      intensity: number;
+      ambient: number;
+      emission: number;
+    }>
+  ) => void;
+  setPaletteLutEnabled: (v: boolean) => void;
+  setPaletteLutPresetName: (name: string) => void;
   loadProjectState: (payload: {
     documentName: string;
     filePath: string | null;
@@ -378,6 +409,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   dataTool: "hitbox",
   showGameDataOverlay: true,
   gameDataVersion: 0,
+
+  light2dEnabled: false,
+  light2dX: 0.35,
+  light2dY: 0.25,
+  light2dZ: 0.35,
+  light2dColor: "#fff4d6",
+  light2dIntensity: 1.4,
+  light2dAmbient: 0.28,
+  light2dEmission: 1.2,
+  paletteLutEnabled: false,
+  paletteLutPresetName: "PICO-8",
 
   layers: [
     {
@@ -731,6 +773,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
     return id;
   },
+  addMapLayer: (role, name) => {
+    const id = `layer-${layerCounter++}`;
+    const defaultName = role === "normal" ? "Normal Map" : "Emission Map";
+    set((s) => {
+      const newLayer: LayerItem = {
+        id,
+        name: name?.trim() || defaultName,
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        mapRole: role,
+        cels: { [s.currentFrame]: false },
+      };
+      return {
+        layers: [newLayer, ...s.layers],
+        activeLayerId: id,
+        selectedLayerIds: [id],
+      };
+    });
+    return id;
+  },
+  setLayerMapRole: (id, role) =>
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, mapRole: role } : l
+      ),
+    })),
   addGroupLayer: () =>
     set((s) => {
       const id = `group-${layerCounter++}`;
@@ -1129,6 +1202,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((s) => ({ showGameDataOverlay: !s.showGameDataOverlay })),
   bumpGameDataVersion: () =>
     set((s) => ({ gameDataVersion: s.gameDataVersion + 1 })),
+  setLight2d: (patch) =>
+    set((s) => ({
+      light2dEnabled: patch.enabled ?? s.light2dEnabled,
+      light2dX: patch.x ?? s.light2dX,
+      light2dY: patch.y ?? s.light2dY,
+      light2dZ: patch.z ?? s.light2dZ,
+      light2dColor: patch.color ?? s.light2dColor,
+      light2dIntensity: patch.intensity ?? s.light2dIntensity,
+      light2dAmbient: patch.ambient ?? s.light2dAmbient,
+      light2dEmission: patch.emission ?? s.light2dEmission,
+    })),
+  setPaletteLutEnabled: (paletteLutEnabled) => set({ paletteLutEnabled }),
+  setPaletteLutPresetName: (paletteLutPresetName) =>
+    set({ paletteLutPresetName }),
   loadProjectState: (payload) =>
     set({
       documentName: payload.documentName,

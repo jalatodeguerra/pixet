@@ -54,6 +54,7 @@ import {
   type ToolId,
   useEditorStore,
 } from "../store/editorStore";
+import { PALETTE_PRESETS } from "../utils/paletteParser";
 import { buildShadingRamp } from "../utils/color";
 
 interface ActiveStroke {
@@ -201,6 +202,17 @@ export function Viewport() {
   const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
   const showGameDataOverlay = useEditorStore((s) => s.showGameDataOverlay);
   const gameDataVersion = useEditorStore((s) => s.gameDataVersion);
+  const light2dEnabled = useEditorStore((s) => s.light2dEnabled);
+  const light2dX = useEditorStore((s) => s.light2dX);
+  const light2dY = useEditorStore((s) => s.light2dY);
+  const light2dZ = useEditorStore((s) => s.light2dZ);
+  const light2dColor = useEditorStore((s) => s.light2dColor);
+  const light2dIntensity = useEditorStore((s) => s.light2dIntensity);
+  const light2dAmbient = useEditorStore((s) => s.light2dAmbient);
+  const light2dEmission = useEditorStore((s) => s.light2dEmission);
+  const paletteLutEnabled = useEditorStore((s) => s.paletteLutEnabled);
+  const paletteLutPresetName = useEditorStore((s) => s.paletteLutPresetName);
+  const palette = useEditorStore((s) => s.palette);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapGhostRef = useRef<HTMLCanvasElement>(null);
@@ -273,13 +285,35 @@ export function Viewport() {
       } else {
         renderer.setShowOnion(false);
       }
-      const composite =
-        state.workspaceMode === "rig" && pixelEngine.rig.bones.length > 0
-          ? pixelEngine.compositeRigFrame(state.layers, state.currentFrame, {
-              pixelSnap: state.rigPixelSnap,
-              rotSprite: state.rigRotSprite,
-            })
-          : pixelEngine.compositeFrame(state.layers, state.currentFrame);
+      const targetPalette =
+        PALETTE_PRESETS.find((p) => p.name === state.paletteLutPresetName)
+          ?.colors ?? [];
+      const composite = pixelEngine.compositeFrameWithShaderPreview(
+        state.layers,
+        state.currentFrame,
+        {
+          useRig: state.workspaceMode === "rig",
+          rigOpts: {
+            pixelSnap: state.rigPixelSnap,
+            rotSprite: state.rigRotSprite,
+          },
+          light2d: {
+            enabled: state.light2dEnabled,
+            lightX: state.light2dX,
+            lightY: state.light2dY,
+            lightZ: state.light2dZ,
+            lightColor: state.light2dColor,
+            intensity: state.light2dIntensity,
+            ambient: state.light2dAmbient,
+            emissionStrength: state.light2dEmission,
+          },
+          paletteLut: {
+            enabled: state.paletteLutEnabled,
+            sourcePalette: state.palette,
+            targetPalette,
+          },
+        }
+      );
       renderer.uploadFrame(pixelEngine.width, pixelEngine.height, composite);
       if (
         state.workspaceMode === "rig" &&
@@ -433,6 +467,17 @@ export function Viewport() {
     rigShowInfluence,
     selectedBoneId,
     rigTool,
+    light2dEnabled,
+    light2dX,
+    light2dY,
+    light2dZ,
+    light2dColor,
+    light2dIntensity,
+    light2dAmbient,
+    light2dEmission,
+    paletteLutEnabled,
+    paletteLutPresetName,
+    palette,
     renderCanvas,
   ]);
 

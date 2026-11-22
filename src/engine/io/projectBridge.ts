@@ -4,6 +4,7 @@ import {
   type BlendMode,
   type LayerItem,
   type LayerKind,
+  type LayerMapRole,
   useEditorStore,
 } from "../../store/editorStore.ts";
 import { PixelBuffer } from "../document/PixelBuffer.ts";
@@ -65,6 +66,7 @@ interface RustLayer {
   parent_id: string | null;
   cels: RustCel[];
   tilemaps?: Record<string, RustTilemapGrid>;
+  map_role?: string | null;
 }
 
 interface RustDocument {
@@ -218,6 +220,10 @@ export function serializeProjectTransfer(): ProjectTransfer {
       parent_id: layer.parentId,
       cels: rustCels,
       tilemaps,
+      map_role:
+        layer.mapRole && layer.mapRole !== "albedo"
+          ? layer.mapRole
+          : undefined,
     };
   });
 
@@ -346,6 +352,7 @@ export function hydrateProjectTransfer(
     alphaLock: l.alpha_lock,
     blendMode: fromRustBlend(l.blend_mode),
     parentId: l.parent_id,
+    mapRole: (l.map_role as LayerMapRole | undefined) ?? undefined,
     expanded: true,
     cels: {},
   }));
@@ -467,6 +474,36 @@ export async function openProjectAction(): Promise<void> {
       .setStatusMessage(`Opened ${extractBasename(selected)}`);
   } catch (err) {
     state.setStatusMessage(`Open failed: ${String(err)}`);
+  }
+}
+
+export async function importAsepriteAction(): Promise<void> {
+  const state = useEditorStore.getState();
+
+  if (!isTauriRuntime()) {
+    state.setStatusMessage(
+      "Aseprite binary import requires the desktop Tauri runtime"
+    );
+    return;
+  }
+
+  const selected = await open({
+    title: "Import Aseprite Sprite (.ase / .aseprite)",
+    multiple: false,
+    filters: [{ name: "Aseprite", extensions: ["ase", "aseprite"] }],
+  });
+  if (!selected || typeof selected !== "string") return;
+
+  try {
+    const transfer = await invoke<ProjectTransfer>("import_aseprite", {
+      path: selected,
+    });
+    hydrateProjectTransfer(transfer, null);
+    useEditorStore
+      .getState()
+      .setStatusMessage(`Imported ${extractBasename(selected)}`);
+  } catch (err) {
+    state.setStatusMessage(`Aseprite import failed: ${String(err)}`);
   }
 }
 

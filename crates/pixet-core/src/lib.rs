@@ -1,7 +1,10 @@
+pub mod aseprite;
 pub mod composite;
 pub mod document;
 pub mod export;
 pub mod io;
+
+pub use aseprite::{load_aseprite, read_aseprite_bytes};
 
 pub use composite::{composite_frame, resolve_cel_frame};
 pub use document::{

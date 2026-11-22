@@ -210,6 +210,7 @@ export function RightSidebar() {
   const moveLayer = useEditorStore((s) => s.moveLayer);
   const toggleGroupExpanded = useEditorStore((s) => s.toggleGroupExpanded);
   const setLayerParent = useEditorStore((s) => s.setLayerParent);
+  const setLayerMapRole = useEditorStore((s) => s.setLayerMapRole);
   const openContextMenu = useEditorStore((s) => s.openContextMenu);
 
   const [colorOpen, setColorOpen] = useState(true);
@@ -710,6 +711,27 @@ export function RightSidebar() {
                           ]
                         : []),
                       { kind: "item", label: "New Tilemap Layer", action: () => addTilemapLayer() },
+                      ...(layer.kind === "raster"
+                        ? [
+                            { kind: "separator" as const },
+                            {
+                              kind: "item" as const,
+                              label: "Role: Albedo",
+                              action: () => setLayerMapRole(layer.id, "albedo"),
+                            },
+                            {
+                              kind: "item" as const,
+                              label: "Role: Normal Map",
+                              action: () => setLayerMapRole(layer.id, "normal"),
+                            },
+                            {
+                              kind: "item" as const,
+                              label: "Role: Emission Map",
+                              action: () =>
+                                setLayerMapRole(layer.id, "emission"),
+                            },
+                          ]
+                        : []),
                       { kind: "separator" },
                       { kind: "item", label: "Duplicate Layer", action: () => handleDuplicateLayer() },
                       {
@@ -902,6 +924,20 @@ export function RightSidebar() {
                       }}
                     >
                       {layer.name}
+                    </span>
+                  )}
+
+                  {layer.mapRole === "normal" && (
+                    <span className="layer-role-badge normal" title="Normal Map">
+                      N
+                    </span>
+                  )}
+                  {layer.mapRole === "emission" && (
+                    <span
+                      className="layer-role-badge emission"
+                      title="Emission Map"
+                    >
+                      E
                     </span>
                   )}
 

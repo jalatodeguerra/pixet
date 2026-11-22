@@ -85,6 +85,8 @@ pub struct Layer {
     pub cels: Vec<Cel>,
     #[serde(default)]
     pub tilemaps: BTreeMap<u32, TilemapGrid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +159,7 @@ impl Document {
                 linked_frame: None,
             }],
             tilemaps: BTreeMap::new(),
+            map_role: None,
         };
 
         Self {
