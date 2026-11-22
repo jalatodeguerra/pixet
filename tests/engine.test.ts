@@ -49,6 +49,7 @@ import {
 } from "../src/engine/tools/rotate3d.ts";
 import {
   lerpAngleDeg,
+  renderBoneInfluenceOverlay,
   RigState,
   solveTwoBoneIK,
   warpLayerByBone,
@@ -845,4 +846,75 @@ test("imageImport resizes nearest-neighbor, centers, slices spritesheets, and ex
   // extractPaletteFromBuffer orders by descending frequency
   const pal = extractPaletteFromBuffer(sheet, 8);
   assert.deepEqual(pal, ["#0a141e", "#c86432"]);
+});
+
+test("RigState bone influence painting, auto-weighting, overlay & partial layer warp", () => {
+  const engine = new PixelEngine(16, 16);
+  const cel = engine.getOrCreateCel("layer-body", 0);
+  // Paint top block around (8, 3) and bottom block around (8, 12)
+  cel.setPixel(8, 3, 255, 0, 0, 255);
+  cel.setPixel(8, 12, 0, 255, 0, 255);
+
+  const topBone = engine.rig.addBone({
+    name: "Top",
+    parentId: null,
+    localX: 8,
+    localY: 5,
+    length: 4,
+    rotationDeg: -90,
+  });
+  const botBone = engine.rig.addBone({
+    name: "Bottom",
+    parentId: null,
+    localX: 8,
+    localY: 14,
+    length: 4,
+    rotationDeg: -90,
+  });
+
+  // Exclusive painting overrides other bones
+  engine.rig.paintBoneMask(botBone.id, 16, 16, 8, 3, 1, false, true);
+  assert.equal(engine.rig.getBoneMask(botBone.id)!.data[3 * 16 + 8], 1);
+  engine.rig.paintBoneMask(topBone.id, 16, 16, 8, 3, 1, false, true);
+  assert.equal(engine.rig.getBoneMask(topBone.id)!.data[3 * 16 + 8], 1);
+  assert.equal(engine.rig.getBoneMask(botBone.id)!.data[3 * 16 + 8], 0);
+
+  // Erasing clears pixel
+  engine.rig.paintBoneMask(topBone.id, 16, 16, 8, 3, 1, true, true);
+  assert.equal(engine.rig.getBoneMask(topBone.id)!.data[3 * 16 + 8], 0);
+
+  // Auto-weight assigns each opaque pixel to closest bone
+  engine.rig.autoAssignBoneMasks(cel, 0);
+  assert.equal(engine.rig.getBoneMask(topBone.id)!.data[3 * 16 + 8], 1);
+  assert.equal(engine.rig.getBoneMask(botBone.id)!.data[12 * 16 + 8], 1);
+
+  // Overlay renders higher alpha for selected bone than unselected
+  const overlay = new PixelBuffer(16, 16);
+  renderBoneInfluenceOverlay(engine.rig, overlay, topBone.id);
+  assert.equal(overlay.getPixel(8, 3)[3], 145);
+  assert.equal(overlay.getPixel(8, 12)[3], 65);
+
+  // Rotating only topBone moves (8,3) while bottom unmasked/other pixel (8,12) stays at (8,12)
+  engine.rig.clearBoneMask(botBone.id);
+  engine.rig.setPoseOverride(topBone.id, { rotationDeg: 0 }, 0);
+  engine.compositeRigFrame(
+    [
+      {
+        id: "layer-body",
+        kind: "raster",
+        visible: true,
+        opacity: 100,
+        blendMode: "Normal",
+      },
+    ],
+    0,
+    { pixelSnap: true, rotSprite: false },
+    true
+  );
+
+  // Bottom pixel stays stationary at (8,12)
+  assert.deepEqual(engine.sampleCompositedPixel(8, 12), [0, 255, 0, 255]);
+  // Top pixel moved from (8,3) to (10,5) after +90 deg around pivot (8,5)
+  assert.deepEqual(engine.sampleCompositedPixel(8, 3), [0, 0, 0, 0]);
+  assert.deepEqual(engine.sampleCompositedPixel(10, 5), [255, 0, 0, 255]);
 });

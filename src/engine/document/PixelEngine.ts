@@ -731,6 +731,84 @@ export class PixelEngine {
       if (!cel) continue;
 
       const boneId = layerToBoneId.get(layer.id);
+      const matchingMaskedBones = this.rig.hasAnyBoneMask()
+        ? this.rig.bones.filter((b) => {
+            if (b.boundLayerId && b.boundLayerId !== layer.id) return false;
+            const m = this.rig.getBoneMask(b.id);
+            return Boolean(m && m.width === cel.width && m.height === cel.height);
+          })
+        : [];
+
+      if (matchingMaskedBones.length > 0) {
+        const pxCount = cel.width * cel.height;
+        const anyMasked = new Uint8Array(pxCount);
+        for (const b of matchingMaskedBones) {
+          const m = this.rig.getBoneMask(b.id)!;
+          for (let i = 0; i < pxCount; i++) {
+            if (m.data[i] > 0) anyMasked[i] = 1;
+          }
+        }
+
+        // Composite unmasked pixels stationary first
+        const unmasked = new PixelBuffer(cel.width, cel.height);
+        for (let i = 0; i < pxCount; i++) {
+          if (anyMasked[i] > 0) continue;
+          const pIdx = i * 4;
+          if (cel.data[pIdx + 3] === 0) continue;
+          unmasked.data[pIdx] = cel.data[pIdx];
+          unmasked.data[pIdx + 1] = cel.data[pIdx + 1];
+          unmasked.data[pIdx + 2] = cel.data[pIdx + 2];
+          unmasked.data[pIdx + 3] = cel.data[pIdx + 3];
+        }
+        if (!unmasked.isEmpty()) {
+          compositeSourceOnto(
+            dst,
+            this.width,
+            this.height,
+            unmasked,
+            0,
+            0,
+            effective.opacity,
+            layer.blendMode
+          );
+        }
+
+        // Composite each bone's masked pixels warped by that bone
+        for (const b of matchingMaskedBones) {
+          const m = this.rig.getBoneMask(b.id)!;
+          const slice = new PixelBuffer(cel.width, cel.height);
+          let hasOpaque = false;
+          for (let i = 0; i < pxCount; i++) {
+            if (m.data[i] === 0) continue;
+            const pIdx = i * 4;
+            const a = cel.data[pIdx + 3];
+            if (a === 0) continue;
+            hasOpaque = true;
+            slice.data[pIdx] = cel.data[pIdx];
+            slice.data[pIdx + 1] = cel.data[pIdx + 1];
+            slice.data[pIdx + 2] = cel.data[pIdx + 2];
+            slice.data[pIdx + 3] = a;
+          }
+          if (!hasOpaque) continue;
+
+          const rest = restMap.get(b.id);
+          const posed = poseMap.get(b.id);
+          const warped =
+            rest && posed ? warpLayerByBone(slice, rest, posed, opts) : slice;
+          compositeSourceOnto(
+            dst,
+            this.width,
+            this.height,
+            warped,
+            0,
+            0,
+            effective.opacity,
+            layer.blendMode
+          );
+        }
+        continue;
+      }
+
       let sourceBuf = cel;
       if (boneId) {
         const rest = restMap.get(boneId);

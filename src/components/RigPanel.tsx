@@ -8,14 +8,16 @@ import {
   Film,
   KeyRound,
   MousePointer,
+  Paintbrush,
   Plus,
   Sparkles,
   Trash2,
 } from "lucide-react";
+import { PixelBuffer, rgbaToHex } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { commitFloatingSelection } from "../engine/document/selectionActions";
 import { syncTimelineCels } from "../engine/document/timelineActions";
-import type { Bone } from "../engine/rig/RigEngine";
+import { type Bone, getBoneInfluenceColor } from "../engine/rig/RigEngine";
 import { type RigTool, useEditorStore } from "../store/editorStore";
 
 function getBoneDepth(bones: readonly Bone[], bone: Bone): number {
@@ -44,6 +46,10 @@ export function RigPanel() {
   const toggleRigRotSprite = useEditorStore((s) => s.toggleRigRotSprite);
   const rigShowBones = useEditorStore((s) => s.rigShowBones);
   const toggleRigShowBones = useEditorStore((s) => s.toggleRigShowBones);
+  const rigShowInfluence = useEditorStore((s) => s.rigShowInfluence);
+  const toggleRigShowInfluence = useEditorStore((s) => s.toggleRigShowInfluence);
+  const rigBrushSize = useEditorStore((s) => s.rigBrushSize);
+  const setRigBrushSize = useEditorStore((s) => s.setRigBrushSize);
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const bumpRigVersion = useEditorStore((s) => s.bumpRigVersion);
 
@@ -205,10 +211,32 @@ export function RigPanel() {
     setStatusMessage(`Exported ${base}.rig.json`);
   };
 
+  const handleAutoWeight = () => {
+    if (pixelEngine.rig.bones.length === 0) {
+      setStatusMessage("Add bones before auto-weighting");
+      return;
+    }
+    const composited = pixelEngine.compositeFrame(layers, currentFrame);
+    const buf = new PixelBuffer(canvasWidth, canvasHeight, composited);
+    pixelEngine.rig.autoAssignBoneMasks(buf, currentFrame);
+    bumpRigVersion();
+    pixelEngine.emitChange();
+    setStatusMessage("Auto-weighted pixels to nearest bones");
+  };
+
+  const handleClearMask = () => {
+    if (!selectedBone) return;
+    pixelEngine.rig.clearBoneMask(selectedBone.id);
+    bumpRigVersion();
+    pixelEngine.emitChange();
+    setStatusMessage(`Cleared influence mask for "${selectedBone.name}"`);
+  };
+
   const toolButtons: { id: RigTool; label: string; icon: typeof MousePointer }[] = [
     { id: "select", label: "Pose", icon: MousePointer },
     { id: "addBone", label: "Add Bone", icon: Plus },
     { id: "ik", label: "2-Bone IK", icon: Crosshair },
+    { id: "weightPaint", label: "Paint", icon: Paintbrush },
   ];
 
   const isKeyed = selectedBone
@@ -280,6 +308,60 @@ export function RigPanel() {
           </label>
         </div>
 
+        {bones.length > 0 && (
+          <div className="rig-influence-box">
+            <div className="rig-option-row">
+              <label className="modal-checkbox" style={{ fontSize: 11 }}>
+                <input
+                  type="checkbox"
+                  checked={rigShowInfluence}
+                  onChange={toggleRigShowInfluence}
+                />
+                <span>Show Influence</span>
+              </label>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  title="Auto-assign opaque pixels to nearest bone"
+                  onClick={handleAutoWeight}
+                >
+                  Auto-Weight
+                </button>
+                {selectedBone && pixelEngine.rig.getBoneMask(selectedBone.id) && (
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    title="Clear selected bone influence mask"
+                    onClick={handleClearMask}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {rigTool === "weightPaint" && (
+              <>
+                <label className="rig-slider-row">
+                  <span>Brush</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={12}
+                    value={rigBrushSize}
+                    onChange={(e) => setRigBrushSize(Number(e.target.value))}
+                  />
+                  <span className="mono-value">{rigBrushSize}px</span>
+                </label>
+                <span className="rotate3d-hint">
+                  Left-drag paint · Right-drag erase weight
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="rig-hierarchy-head">
           <span>Bones ({bones.length})</span>
           <button
@@ -300,10 +382,12 @@ export function RigPanel() {
           </div>
         ) : (
           <div className="rig-bone-list">
-            {bones.map((bone) => {
+            {bones.map((bone, boneIndex) => {
               const depth = getBoneDepth(bones, bone);
               const active = selectedBone?.id === bone.id;
               const keyed = pixelEngine.rig.hasKeyframe(bone.id, currentFrame);
+              const infColor = getBoneInfluenceColor(boneIndex);
+              const infHex = rgbaToHex(infColor[0], infColor[1], infColor[2]);
               return (
                 <div
                   key={bone.id}
@@ -311,6 +395,11 @@ export function RigPanel() {
                   style={{ paddingLeft: 8 + depth * 12 }}
                   onClick={() => setSelectedBoneId(bone.id)}
                 >
+                  <span
+                    className="rig-influence-swatch"
+                    style={{ backgroundColor: infHex }}
+                    title="Bone influence color"
+                  />
                   <BoneIcon size={11} />
                   <span className="rig-bone-name">{bone.name}</span>
                   {keyed && (

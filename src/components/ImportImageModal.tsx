@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Image as ImageIcon, Layers, LayoutGrid, X } from "lucide-react";
+import { Image as ImageIcon, Layers, LayoutGrid, Plus, Trash2, X } from "lucide-react";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { commitFloatingSelection } from "../engine/document/selectionActions";
 import { syncTimelineCels } from "../engine/document/timelineActions";
@@ -9,9 +9,44 @@ import {
   resizePixelBufferNearest,
   sliceSpritesheet,
 } from "../engine/io/imageImport";
-import { type FrameItem, useEditorStore } from "../store/editorStore";
+import {
+  type FrameItem,
+  type LayerItem,
+  useEditorStore,
+} from "../store/editorStore";
 
 type ImportMode = "sprite" | "layer" | "spritesheet";
+
+interface SheetLayerDef {
+  id: string;
+  name: string;
+  cellIndices: number[];
+  color: string;
+}
+
+const SHEET_LAYER_COLORS = [
+  "#5b8cff",
+  "#ef6461",
+  "#4ecd82",
+  "#fbc531",
+  "#bd6bed",
+  "#45d6e0",
+];
+
+function summarizeCells(indices: readonly number[]): string {
+  if (indices.length === 0) return "0f";
+  if (indices.length === 1) return `#${indices[0] + 1}`;
+  const isContiguous = indices.every(
+    (v, i) => i === 0 || v === indices[i - 1] + 1
+  );
+  if (isContiguous) {
+    return `${indices.length}f: #${indices[0] + 1}–${indices[indices.length - 1] + 1}`;
+  }
+  return `${indices.length}f: #${indices
+    .slice(0, 3)
+    .map((v) => v + 1)
+    .join(",")}${indices.length > 3 ? "…" : ""}`;
+}
 
 export function ImportImageModal() {
   const pending = useEditorStore((s) => s.pendingImportImage);
@@ -28,6 +63,11 @@ export function ImportImageModal() {
   const [frameH, setFrameH] = useState(32);
   const [skipEmpty, setSkipEmpty] = useState(true);
   const [extractPal, setExtractPal] = useState(true);
+
+  const [selectedCells, setSelectedCells] = useState<Set<number>>(new Set());
+  const [lastClickedCell, setLastClickedCell] = useState<number | null>(null);
+  const [sheetLayers, setSheetLayers] = useState<SheetLayerDef[]>([]);
+  const layerSeqRef = useRef(1);
 
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -48,7 +88,18 @@ export function ImportImageModal() {
       setFrameH(Math.min(32, h));
     }
     setMode("sprite");
+    setSelectedCells(new Set());
+    setLastClickedCell(null);
+    setSheetLayers([]);
+    layerSeqRef.current = 1;
   }, [pending, canvasWidth, canvasHeight]);
+
+  // Reset cell selection & sheet layers when slice frame dimensions change
+  useEffect(() => {
+    setSelectedCells(new Set());
+    setLastClickedCell(null);
+    setSheetLayers([]);
+  }, [frameW, frameH]);
 
   // Escape key closes modal
   useEffect(() => {
@@ -77,17 +128,58 @@ export function ImportImageModal() {
     ctx.putImageData(img, 0, 0);
   }, [pending]);
 
+  const safeFrameW = pending
+    ? Math.max(1, Math.min(pending.buffer.width, Math.round(frameW) || 1))
+    : 1;
+  const safeFrameH = pending
+    ? Math.max(1, Math.min(pending.buffer.height, Math.round(frameH) || 1))
+    : 1;
   const sheetCols = pending
-    ? Math.max(1, Math.floor(pending.buffer.width / Math.max(1, frameW)))
+    ? Math.max(1, Math.floor(pending.buffer.width / safeFrameW))
     : 1;
   const sheetRows = pending
-    ? Math.max(1, Math.floor(pending.buffer.height / Math.max(1, frameH)))
+    ? Math.max(1, Math.floor(pending.buffer.height / safeFrameH))
     : 1;
+
+  const allGridCells = useMemo(() => {
+    if (!pending || mode !== "spritesheet") return [];
+    return sliceSpritesheet(pending.buffer, safeFrameW, safeFrameH, false);
+  }, [pending, mode, safeFrameW, safeFrameH]);
+
+  const cellEmptyFlags = useMemo(
+    () => allGridCells.map((c) => c.isEmpty()),
+    [allGridCells]
+  );
+
+  const cellAssignedColor = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const sl of sheetLayers) {
+      for (const idx of sl.cellIndices) {
+        map.set(idx, sl.color);
+      }
+    }
+    return map;
+  }, [sheetLayers]);
 
   const detectedFrameCount = useMemo(() => {
     if (!pending || mode !== "spritesheet") return 0;
-    return sliceSpritesheet(pending.buffer, frameW, frameH, skipEmpty).length;
-  }, [pending, mode, frameW, frameH, skipEmpty]);
+    if (sheetLayers.length > 0) {
+      return Math.max(1, ...sheetLayers.map((l) => l.cellIndices.length));
+    }
+    if (selectedCells.size > 0) {
+      return selectedCells.size;
+    }
+    return sliceSpritesheet(pending.buffer, safeFrameW, safeFrameH, skipEmpty)
+      .length;
+  }, [
+    pending,
+    mode,
+    safeFrameW,
+    safeFrameH,
+    skipEmpty,
+    sheetLayers,
+    selectedCells,
+  ]);
 
   if (!pending) return null;
 
@@ -95,7 +187,7 @@ export function ImportImageModal() {
   const srcH = pending.buffer.height;
   const baseName = pending.name.replace(/\.[^.]+$/, "") || "imported";
 
-  const previewScale = Math.min(220 / srcW, 220 / srcH);
+  const previewScale = Math.min(240 / srcW, 240 / srcH);
   const displayW = Math.max(24, Math.round(srcW * previewScale));
   const displayH = Math.max(24, Math.round(srcH * previewScale));
 
@@ -112,6 +204,71 @@ export function ImportImageModal() {
       setTargetW(Math.max(1, Math.round(srcW * scale)));
       setTargetH(Math.max(1, Math.round(srcH * scale)));
     }
+  };
+
+  const handleCellClick = (idx: number, shiftKey: boolean) => {
+    setSelectedCells((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastClickedCell !== null) {
+        const lo = Math.min(lastClickedCell, idx);
+        const hi = Math.max(lastClickedCell, idx);
+        for (let i = lo; i <= hi; i++) {
+          next.add(i);
+        }
+      } else if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+    setLastClickedCell(idx);
+  };
+
+  const selectAllCells = () => {
+    const next = new Set<number>();
+    for (let i = 0; i < allGridCells.length; i++) next.add(i);
+    setSelectedCells(next);
+  };
+
+  const selectNonEmptyCells = () => {
+    const next = new Set<number>();
+    for (let i = 0; i < cellEmptyFlags.length; i++) {
+      if (!cellEmptyFlags[i]) next.add(i);
+    }
+    setSelectedCells(next);
+  };
+
+  const createLayerFromSelection = () => {
+    if (selectedCells.size === 0) return;
+    const sorted = Array.from(selectedCells).sort((a, b) => a - b);
+    const seq = layerSeqRef.current++;
+    setSheetLayers((prev) => [
+      ...prev,
+      {
+        id: `sl-${seq}`,
+        name: `Layer ${seq}`,
+        cellIndices: sorted,
+        color: SHEET_LAYER_COLORS[(seq - 1) % SHEET_LAYER_COLORS.length],
+      },
+    ]);
+    setSelectedCells(new Set());
+  };
+
+  const splitSelectionToLayers = () => {
+    if (selectedCells.size === 0) return;
+    const sorted = Array.from(selectedCells).sort((a, b) => a - b);
+    const additions: SheetLayerDef[] = sorted.map((cellIdx) => {
+      const seq = layerSeqRef.current++;
+      return {
+        id: `sl-${seq}`,
+        name: `Part ${seq} (#${cellIdx + 1})`,
+        cellIndices: [cellIdx],
+        color: SHEET_LAYER_COLORS[(seq - 1) % SHEET_LAYER_COLORS.length],
+      };
+    });
+    setSheetLayers((prev) => [...prev, ...additions]);
+    setSelectedCells(new Set());
   };
 
   const handleImport = () => {
@@ -150,14 +307,93 @@ export function ImportImageModal() {
     }
 
     if (mode === "spritesheet") {
-      const fw = Math.max(1, Math.min(srcW, Math.round(frameW)));
-      const fh = Math.max(1, Math.min(srcH, Math.round(frameH)));
-      const sliced = sliceSpritesheet(pending.buffer, fw, fh, skipEmpty);
+      const fw = safeFrameW;
+      const fh = safeFrameH;
+      const extracted = extractPal
+        ? extractPaletteFromBuffer(pending.buffer, 32)
+        : [];
+      const dur = Math.round(1000 / state.fps);
+
+      if (sheetLayers.length > 0) {
+        const maxFrames = Math.max(
+          1,
+          ...sheetLayers.map((l) => l.cellIndices.length)
+        );
+        pixelEngine.resetForDocument(fw, fh);
+
+        const nextLayers: LayerItem[] = sheetLayers.map((sl, li) => {
+          const layerId = `layer-sheet-${li + 1}`;
+          const celsMap: Record<number, boolean> = {};
+          for (let fi = 0; fi < sl.cellIndices.length; fi++) {
+            const cellBuf = allGridCells[sl.cellIndices[fi]];
+            if (!cellBuf) continue;
+            const cel = pixelEngine.getOrCreateCel(layerId, fi);
+            cel.data.set(cellBuf.data);
+            cel.markAllDirty();
+            celsMap[fi] = !cel.isEmpty();
+          }
+          return {
+            id: layerId,
+            name: sl.name.trim() || `Layer ${li + 1}`,
+            kind: "raster",
+            visible: true,
+            locked: false,
+            opacity: 100,
+            alphaLock: false,
+            blendMode: "Normal",
+            parentId: null,
+            cels: celsMap,
+          };
+        });
+
+        const nextFrames: FrameItem[] = Array.from(
+          { length: maxFrames },
+          (_, i) => ({
+            id: `frame-imp-${i + 1}`,
+            index: i,
+            durationMs: dur,
+          })
+        );
+
+        state.loadProjectState({
+          documentName: `${baseName}.pixet`,
+          filePath: null,
+          canvasWidth: fw,
+          canvasHeight: fh,
+          colorMode: "RGBA",
+          paletteName:
+            extracted.length > 0
+              ? `${baseName} (${extracted.length})`
+              : state.paletteName,
+          palette: extracted.length > 0 ? extracted : state.palette,
+          layers: nextLayers,
+          frames: nextFrames,
+          tags: [],
+        });
+        state.setZoom(
+          Math.max(1, Math.min(16, Math.floor(384 / Math.max(fw, fh))))
+        );
+        syncTimelineCels();
+        pixelEngine.emitChange();
+        state.setStatusMessage(
+          `Imported ${nextLayers.length} layers (${maxFrames} frames, ${fw}×${fh})`
+        );
+        setPending(null);
+        return;
+      }
+
+      // Single-layer import: either selected cells or full auto-slice
+      const sliced =
+        selectedCells.size > 0
+          ? Array.from(selectedCells)
+              .sort((a, b) => a - b)
+              .map((idx) => allGridCells[idx])
+              .filter(Boolean)
+          : sliceSpritesheet(pending.buffer, fw, fh, skipEmpty);
 
       pixelEngine.resetForDocument(fw, fh);
       const celsMap: Record<number, boolean> = {};
       const nextFrames: FrameItem[] = [];
-      const dur = Math.round(1000 / state.fps);
 
       for (let i = 0; i < sliced.length; i++) {
         const cel = pixelEngine.getOrCreateCel("layer-sheet", i);
@@ -171,9 +407,6 @@ export function ImportImageModal() {
         });
       }
 
-      const extracted = extractPal
-        ? extractPaletteFromBuffer(pending.buffer, 32)
-        : [];
       state.loadProjectState({
         documentName: `${baseName}.pixet`,
         filePath: null,
@@ -336,41 +569,52 @@ export function ImportImageModal() {
                 />
                 {mode === "spritesheet" && (
                   <svg
-                    className="import-slice-svg"
+                    className="import-slice-svg interactive"
                     viewBox={`0 0 ${srcW} ${srcH}`}
                     preserveAspectRatio="none"
                   >
-                    {Array.from({ length: sheetCols + 1 }, (_, c) => {
-                      const x = c * Math.max(1, frameW);
-                      if (x > srcW) return null;
-                      return (
-                        <line
-                          key={`vc-${c}`}
-                          x1={x}
-                          y1={0}
-                          x2={x}
-                          y2={sheetRows * Math.max(1, frameH)}
-                        />
-                      );
-                    })}
-                    {Array.from({ length: sheetRows + 1 }, (_, r) => {
-                      const y = r * Math.max(1, frameH);
-                      if (y > srcH) return null;
-                      return (
-                        <line
-                          key={`hr-${r}`}
-                          x1={0}
-                          y1={y}
-                          x2={sheetCols * Math.max(1, frameW)}
-                          y2={y}
-                        />
-                      );
-                    })}
+                    {Array.from({ length: sheetRows }, (_, row) =>
+                      Array.from({ length: sheetCols }, (_, col) => {
+                        const idx = row * sheetCols + col;
+                        const isSelected = selectedCells.has(idx);
+                        const isEmpty = cellEmptyFlags[idx] ?? false;
+                        const assignedColor = cellAssignedColor.get(idx);
+                        return (
+                          <rect
+                            key={`cell-${idx}`}
+                            x={col * safeFrameW}
+                            y={row * safeFrameH}
+                            width={safeFrameW}
+                            height={safeFrameH}
+                            className={`import-slice-cell ${isSelected ? "selected" : ""} ${isEmpty ? "empty" : ""}`}
+                            style={
+                              isSelected
+                                ? undefined
+                                : assignedColor
+                                  ? {
+                                      fill: assignedColor,
+                                      fillOpacity: 0.24,
+                                      stroke: assignedColor,
+                                    }
+                                  : undefined
+                            }
+                            onClick={(e) => handleCellClick(idx, e.shiftKey)}
+                          >
+                            <title>
+                              Frame #{idx + 1} ({col + 1}, {row + 1})
+                              {isEmpty ? " [empty]" : ""} — Click or Shift+Click
+                            </title>
+                          </rect>
+                        );
+                      })
+                    )}
                   </svg>
                 )}
               </div>
               <span className="rotate3d-hint">
-                Source: {srcW}×{srcH} px
+                {mode === "spritesheet"
+                  ? "Click / Shift+Click frames to group into layers"
+                  : `Source: ${srcW}×${srcH} px`}
               </span>
             </div>
 
@@ -501,20 +745,112 @@ export function ImportImageModal() {
                     </label>
                   </div>
 
-                  <div className="rotate3d-stack-note">
-                    Grid: {sheetCols}×{sheetRows} →{" "}
-                    <strong>{detectedFrameCount}</strong> frame
-                    {detectedFrameCount === 1 ? "" : "s"}
+                  <div className="import-select-bar">
+                    <span className="rotate3d-hint">
+                      {sheetCols}×{sheetRows} ({selectedCells.size} sel)
+                    </span>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={selectAllCells}
+                      >
+                        All
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={selectNonEmptyCells}
+                      >
+                        Non-Empty
+                      </button>
+                      {selectedCells.size > 0 && (
+                        <button
+                          type="button"
+                          className="mini-btn"
+                          onClick={() => setSelectedCells(new Set())}
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  <label className="modal-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={skipEmpty}
-                      onChange={(e) => setSkipEmpty(e.target.checked)}
-                    />
-                    <span>Skip Empty Frames</span>
-                  </label>
+                  {selectedCells.size > 0 && (
+                    <div className="import-layer-creators">
+                      <button
+                        type="button"
+                        className="mini-btn active"
+                        onClick={createLayerFromSelection}
+                      >
+                        <Plus size={11} />
+                        <span>Layer ({selectedCells.size}f)</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        title="Create one separate layer per selected cell"
+                        onClick={splitSelectionToLayers}
+                      >
+                        <Layers size={11} />
+                        <span>Split to {selectedCells.size} Layers</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {sheetLayers.length > 0 && (
+                    <div className="import-sheet-layers">
+                      {sheetLayers.map((sl) => (
+                        <div key={sl.id} className="import-sheet-layer-row">
+                          <span
+                            className="rig-influence-swatch"
+                            style={{ backgroundColor: sl.color }}
+                          />
+                          <input
+                            className="rig-text-input"
+                            style={{ minWidth: 0 }}
+                            value={sl.name}
+                            onChange={(e) =>
+                              setSheetLayers((prev) =>
+                                prev.map((item) =>
+                                  item.id === sl.id
+                                    ? { ...item, name: e.target.value }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                          <span className="import-sheet-summary">
+                            {summarizeCells(sl.cellIndices)}
+                          </span>
+                          <button
+                            type="button"
+                            className="icon-action-btn"
+                            style={{ width: 18, height: 18 }}
+                            title="Remove layer group"
+                            onClick={() =>
+                              setSheetLayers((prev) =>
+                                prev.filter((item) => item.id !== sl.id)
+                              )
+                            }
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {sheetLayers.length === 0 && (
+                    <label className="modal-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={skipEmpty}
+                        onChange={(e) => setSkipEmpty(e.target.checked)}
+                      />
+                      <span>Skip Empty Frames</span>
+                    </label>
+                  )}
 
                   <label className="modal-checkbox">
                     <input
@@ -546,7 +882,9 @@ export function ImportImageModal() {
                 {mode === "layer"
                   ? "Add Layer"
                   : mode === "spritesheet"
-                    ? `Import ${detectedFrameCount} Frames`
+                    ? sheetLayers.length > 0
+                      ? `Import ${sheetLayers.length} Layers (${detectedFrameCount}f)`
+                      : `Import ${detectedFrameCount} Frames`
                     : "Open Sprite"}
               </span>
             </button>

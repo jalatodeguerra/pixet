@@ -49,6 +49,53 @@ export interface RigRenderOptions {
   rotSprite: boolean;
 }
 
+export interface BoneMask {
+  width: number;
+  height: number;
+  data: Uint8Array;
+}
+
+export const BONE_INFLUENCE_COLORS: readonly RGBA[] = [
+  [91, 140, 255, 255],
+  [239, 100, 97, 255],
+  [78, 205, 130, 255],
+  [251, 197, 49, 255],
+  [189, 107, 237, 255],
+  [69, 214, 224, 255],
+];
+
+export function getBoneInfluenceColor(boneIndex: number): RGBA {
+  return BONE_INFLUENCE_COLORS[
+    ((boneIndex % BONE_INFLUENCE_COLORS.length) +
+      BONE_INFLUENCE_COLORS.length) %
+      BONE_INFLUENCE_COLORS.length
+  ];
+}
+
+function pointToSegmentDistSq(
+  px: number,
+  py: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number
+): number {
+  const vx = x1 - x0;
+  const vy = y1 - y0;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq < 1e-6) {
+    const dx = px - x0;
+    const dy = py - y0;
+    return dx * dx + dy * dy;
+  }
+  const t = Math.max(0, Math.min(1, ((px - x0) * vx + (py - y0) * vy) / lenSq));
+  const projX = x0 + t * vx;
+  const projY = y0 + t * vy;
+  const dx = px - projX;
+  const dy = py - projY;
+  return dx * dx + dy * dy;
+}
+
 export function normalizeAngleDeg(deg: number): number {
   let a = ((deg % 360) + 360) % 360;
   if (a > 180) a -= 360;
@@ -252,6 +299,7 @@ export class RigState {
   ];
   activeClipId = "clip-idle";
   currentPoseOverrides = new Map<string, BonePose>();
+  boneMasks = new Map<string, BoneMask>();
   private nextBoneNum = 1;
 
   reset(): void {
@@ -261,6 +309,7 @@ export class RigState {
     ];
     this.activeClipId = "clip-idle";
     this.currentPoseOverrides.clear();
+    this.boneMasks.clear();
     this.nextBoneNum = 1;
   }
 
@@ -320,8 +369,122 @@ export class RigState {
     }
     this.bones = this.bones.filter((b) => b.id !== id);
     this.currentPoseOverrides.delete(id);
+    this.boneMasks.delete(id);
     for (const clip of this.clips) {
       delete clip.tracks[id];
+    }
+  }
+
+  getBoneMask(boneId: string): BoneMask | undefined {
+    return this.boneMasks.get(boneId);
+  }
+
+  hasAnyBoneMask(): boolean {
+    for (const mask of this.boneMasks.values()) {
+      for (let i = 0; i < mask.data.length; i++) {
+        if (mask.data[i] > 0) return true;
+      }
+    }
+    return false;
+  }
+
+  clearBoneMask(boneId: string): void {
+    this.boneMasks.delete(boneId);
+  }
+
+  private ensureBoneMask(boneId: string, width: number, height: number): BoneMask {
+    const existing = this.boneMasks.get(boneId);
+    if (existing && existing.width === width && existing.height === height) {
+      return existing;
+    }
+    const created: BoneMask = {
+      width,
+      height,
+      data: new Uint8Array(width * height),
+    };
+    this.boneMasks.set(boneId, created);
+    return created;
+  }
+
+  paintBoneMask(
+    boneId: string,
+    width: number,
+    height: number,
+    cx: number,
+    cy: number,
+    radius: number,
+    erase: boolean,
+    exclusive = true
+  ): void {
+    if (!this.bones.some((b) => b.id === boneId)) return;
+    const mask = this.ensureBoneMask(boneId, width, height);
+    const r = Math.max(0.5, radius);
+    const rInt = Math.floor(r);
+    const rSq = r * r;
+
+    for (let y = cy - rInt; y <= cy + rInt; y++) {
+      if (y < 0 || y >= height) continue;
+      for (let x = cx - rInt; x <= cx + rInt; x++) {
+        if (x < 0 || x >= width) continue;
+        if (r > 1) {
+          const dx = x - cx;
+          const dy = y - cy;
+          if (dx * dx + dy * dy > rSq) continue;
+        }
+        const idx = y * width + x;
+        mask.data[idx] = erase ? 0 : 1;
+        if (!erase && exclusive) {
+          for (const [otherId, otherMask] of this.boneMasks.entries()) {
+            if (
+              otherId !== boneId &&
+              otherMask.width === width &&
+              otherMask.height === height
+            ) {
+              otherMask.data[idx] = 0;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  autoAssignBoneMasks(src: PixelBuffer, frame = 0): void {
+    this.boneMasks.clear();
+    if (this.bones.length === 0) return;
+
+    const transforms = this.computeWorldTransforms(frame, "rest", false);
+    const activeBones = this.bones
+      .map((b) => ({ bone: b, t: transforms.get(b.id) }))
+      .filter(
+        (item): item is { bone: Bone; t: BoneWorldTransform } =>
+          item.t !== undefined
+      );
+    if (activeBones.length === 0) return;
+
+    const w = src.width;
+    const h = src.height;
+    const masks = activeBones.map(({ bone }) =>
+      this.ensureBoneMask(bone.id, w, h)
+    );
+
+    const srcData = src.data;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const a = srcData[(y * w + x) * 4 + 3];
+        if (a === 0) continue;
+
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        for (let bi = 0; bi < activeBones.length; bi++) {
+          const { t } = activeBones[bi];
+          const dSq = pointToSegmentDistSq(x, y, t.x, t.y, t.tipX, t.tipY);
+          if (dSq < bestDist) {
+            bestDist = dSq;
+            bestIdx = bi;
+          }
+        }
+        masks[bestIdx].data[y * w + x] = 1;
+      }
     }
   }
 
@@ -629,4 +792,37 @@ export class RigState {
       2
     );
   }
+}
+
+/**
+ * Draws per-bone color-coded influence masks onto `overlay` for live visual preview.
+ */
+export function renderBoneInfluenceOverlay(
+  rig: RigState,
+  overlay: PixelBuffer,
+  selectedBoneId: string | null
+): void {
+  const w = overlay.width;
+  const h = overlay.height;
+  const out = overlay.data;
+
+  for (let bi = 0; bi < rig.bones.length; bi++) {
+    const bone = rig.bones[bi];
+    const mask = rig.getBoneMask(bone.id);
+    if (!mask || mask.width !== w || mask.height !== h) continue;
+
+    const color = getBoneInfluenceColor(bi);
+    const alpha = bone.id === selectedBoneId ? 145 : 65;
+    const len = w * h;
+    for (let i = 0; i < len; i++) {
+      if (mask.data[i] === 0) continue;
+      const pIdx = i * 4;
+      out[pIdx] = color[0];
+      out[pIdx + 1] = color[1];
+      out[pIdx + 2] = color[2];
+      out[pIdx + 3] = alpha;
+    }
+  }
+
+  overlay.markAllDirty();
 }

@@ -13,6 +13,7 @@ import {
   liftSelectionForMove,
 } from "../engine/document/selectionActions";
 import { WebGL2Renderer } from "../engine/renderer/WebGL2Renderer";
+import { renderBoneInfluenceOverlay } from "../engine/rig/RigEngine";
 import {
   buildIsoGridSvgPath,
   getIsoOrigin,
@@ -160,6 +161,7 @@ export function Viewport() {
   const rigPixelSnap = useEditorStore((s) => s.rigPixelSnap);
   const rigRotSprite = useEditorStore((s) => s.rigRotSprite);
   const rigShowBones = useEditorStore((s) => s.rigShowBones);
+  const rigShowInfluence = useEditorStore((s) => s.rigShowInfluence);
   const rigVersion = useEditorStore((s) => s.rigVersion);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -168,7 +170,7 @@ export function Viewport() {
   const rendererRef = useRef<WebGL2Renderer | null>(null);
   const strokeRef = useRef<ActiveStroke | null>(null);
   const rigDragRef = useRef<{
-    kind: "rotateBone" | "moveBone" | "addBone" | "ik";
+    kind: "rotateBone" | "moveBone" | "addBone" | "ik" | "weightPaint";
     boneId: string;
     startX: number;
     startY: number;
@@ -177,6 +179,9 @@ export function Viewport() {
     origLocalY: number;
     addTipX: number;
     addTipY: number;
+    eraseMask?: boolean;
+    lastPx?: number;
+    lastPy?: number;
   } | null>(null);
   const [rigDraftBone, setRigDraftBone] = useState<{
     x0: number;
@@ -224,6 +229,20 @@ export function Viewport() {
             })
           : pixelEngine.compositeFrame(state.layers, state.currentFrame);
       renderer.uploadFrame(pixelEngine.width, pixelEngine.height, composite);
+      if (
+        state.workspaceMode === "rig" &&
+        (state.rigShowInfluence || state.rigTool === "weightPaint") &&
+        pixelEngine.rig.hasAnyBoneMask()
+      ) {
+        pixelEngine.clearOverlay();
+        renderBoneInfluenceOverlay(
+          pixelEngine.rig,
+          pixelEngine.overlayBuffer,
+          state.selectedBoneId
+        );
+      } else if (state.workspaceMode !== "rig" && !strokeRef.current) {
+        pixelEngine.clearOverlay();
+      }
       renderer.uploadOverlay(
         pixelEngine.width,
         pixelEngine.height,
@@ -359,6 +378,9 @@ export function Viewport() {
     rigVersion,
     rigPixelSnap,
     rigRotSprite,
+    rigShowInfluence,
+    selectedBoneId,
+    rigTool,
     renderCanvas,
   ]);
 
@@ -407,8 +429,33 @@ export function Viewport() {
   const updateHoverOverlay = (px: number, py: number) => {
     const state = useEditorStore.getState();
     pixelEngine.clearOverlay();
+    if (state.workspaceMode === "rig") {
+      if (
+        (state.rigShowInfluence || state.rigTool === "weightPaint") &&
+        pixelEngine.rig.hasAnyBoneMask()
+      ) {
+        renderBoneInfluenceOverlay(
+          pixelEngine.rig,
+          pixelEngine.overlayBuffer,
+          state.selectedBoneId
+        );
+      }
+      if (
+        state.rigTool === "weightPaint" &&
+        px >= 0 &&
+        py >= 0 &&
+        px < state.canvasWidth &&
+        py < state.canvasHeight
+      ) {
+        for (const fp of expandBrushFootprint(px, py, state.rigBrushSize)) {
+          pixelEngine.overlayBuffer.setPixel(fp.x, fp.y, 255, 255, 255, 165);
+        }
+      }
+      renderOverlayOnly();
+      return;
+    }
+
     if (
-      state.workspaceMode === "rig" ||
       px < 0 ||
       py < 0 ||
       px >= state.canvasWidth ||
@@ -603,6 +650,51 @@ export function Viewport() {
 
     if (e.altKey || state.activeTool === "eyedropper") {
       sampleColorAt(px, py, isSecondary);
+      return;
+    }
+
+    if (
+      state.workspaceMode === "rig" &&
+      state.rigTool === "weightPaint" &&
+      (e.button === 0 || e.button === 2)
+    ) {
+      const targetBoneId =
+        state.selectedBoneId ?? pixelEngine.rig.bones[0]?.id ?? null;
+      if (!targetBoneId) {
+        state.setStatusMessage("Add or select a bone before painting weights");
+        return;
+      }
+      if (state.selectedBoneId !== targetBoneId) {
+        state.setSelectedBoneId(targetBoneId);
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const eraseMask = isSecondary;
+      pixelEngine.rig.paintBoneMask(
+        targetBoneId,
+        state.canvasWidth,
+        state.canvasHeight,
+        px,
+        py,
+        state.rigBrushSize / 2,
+        eraseMask,
+        true
+      );
+      rigDragRef.current = {
+        kind: "weightPaint",
+        boneId: targetBoneId,
+        startX: px,
+        startY: py,
+        parentWorldDeg: 0,
+        origLocalX: 0,
+        origLocalY: 0,
+        addTipX: px,
+        addTipY: py,
+        eraseMask,
+        lastPx: px,
+        lastPy: py,
+      };
+      state.bumpRigVersion();
+      pixelEngine.emitChange();
       return;
     }
 
@@ -1159,6 +1251,28 @@ export function Viewport() {
 
     const rigDrag = rigDragRef.current;
     if (rigDrag) {
+      if (rigDrag.kind === "weightPaint") {
+        const lastX = rigDrag.lastPx ?? px;
+        const lastY = rigDrag.lastPy ?? py;
+        const segment = plotBresenhamLine(lastX, lastY, px, py);
+        for (const pt of segment) {
+          pixelEngine.rig.paintBoneMask(
+            rigDrag.boneId,
+            state.canvasWidth,
+            state.canvasHeight,
+            pt.x,
+            pt.y,
+            state.rigBrushSize / 2,
+            Boolean(rigDrag.eraseMask),
+            true
+          );
+        }
+        rigDrag.lastPx = px;
+        rigDrag.lastPy = py;
+        state.bumpRigVersion();
+        pixelEngine.emitChange();
+        return;
+      }
       const sub = getSubpixelCoords(e);
       if (rigDrag.kind === "addBone") {
         rigDrag.addTipX = sub.x;
@@ -1716,7 +1830,19 @@ export function Viewport() {
   const handleCanvasPointerLeave = () => {
     setCursorPos(null);
     if (!strokeRef.current) {
+      const state = useEditorStore.getState();
       pixelEngine.clearOverlay();
+      if (
+        state.workspaceMode === "rig" &&
+        (state.rigShowInfluence || state.rigTool === "weightPaint") &&
+        pixelEngine.rig.hasAnyBoneMask()
+      ) {
+        renderBoneInfluenceOverlay(
+          pixelEngine.rig,
+          pixelEngine.overlayBuffer,
+          state.selectedBoneId
+        );
+      }
       renderOverlayOnly();
     }
   };

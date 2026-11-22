@@ -3,7 +3,7 @@ import type { PendingImageImport } from "../engine/io/imageImport";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 
 export type WorkspaceMode = "draw" | "tiles" | "rig";
-export type RigTool = "select" | "addBone" | "ik";
+export type RigTool = "select" | "addBone" | "ik" | "weightPaint";
 
 export type ToolId =
   | "pencil"
@@ -123,6 +123,8 @@ interface EditorState {
   rigPixelSnap: boolean;
   rigRotSprite: boolean;
   rigShowBones: boolean;
+  rigShowInfluence: boolean;
+  rigBrushSize: number;
   rigVersion: number;
 
   layers: LayerItem[];
@@ -239,6 +241,8 @@ interface EditorState {
   toggleRigPixelSnap: () => void;
   toggleRigRotSprite: () => void;
   toggleRigShowBones: () => void;
+  toggleRigShowInfluence: () => void;
+  setRigBrushSize: (size: number) => void;
   bumpRigVersion: () => void;
   loadProjectState: (payload: {
     documentName: string;
@@ -322,6 +326,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigPixelSnap: true,
   rigRotSprite: true,
   rigShowBones: true,
+  rigShowInfluence: true,
+  rigBrushSize: 3,
   rigVersion: 0,
 
   layers: [
@@ -923,6 +929,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleRigPixelSnap: () => set((s) => ({ rigPixelSnap: !s.rigPixelSnap })),
   toggleRigRotSprite: () => set((s) => ({ rigRotSprite: !s.rigRotSprite })),
   toggleRigShowBones: () => set((s) => ({ rigShowBones: !s.rigShowBones })),
+  toggleRigShowInfluence: () =>
+    set((s) => ({ rigShowInfluence: !s.rigShowInfluence })),
+  setRigBrushSize: (size) =>
+    set({ rigBrushSize: Math.max(1, Math.min(12, Math.round(size))) }),
   bumpRigVersion: () => set((s) => ({ rigVersion: s.rigVersion + 1 })),
   loadProjectState: (payload) =>
     set({
