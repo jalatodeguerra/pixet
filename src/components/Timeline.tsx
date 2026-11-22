@@ -637,14 +637,18 @@ export function Timeline() {
                     </button>
 
                     {frames.map((frame) => {
-                      const hasKey = pixelEngine.rig.hasKeyframe(
-                        bone.id,
-                        frame.index
+                      const kf = track.find((k) => k.frame === frame.index);
+                      const hasKey = Boolean(kf);
+                      const hasAttachmentKey = Boolean(
+                        kf && kf.attachment !== undefined
                       );
                       const isKeySelected = selectedKeys.some(
                         (k) => k.boneId === bone.id && k.frame === frame.index
                       );
                       const activeCol = frame.index === currentFrame;
+                      const attTip = hasAttachmentKey
+                        ? ` · Attachment: ${kf?.attachment ?? "None"}`
+                        : "";
                       return (
                         <button
                           key={`rig-${bone.id}-${frame.id}`}
@@ -655,7 +659,7 @@ export function Timeline() {
                               ? { outline: "1px solid var(--accent)" }
                               : undefined
                           }
-                          title={`${bone.name} · Frame ${frame.index + 1}${hasKey ? " (Keyframed · Drag to retime)" : " (Double-click to set keyframe)"}`}
+                          title={`${bone.name} · Frame ${frame.index + 1}${hasKey ? " (Keyframed · Drag to retime)" : " (Double-click to set keyframe)"}${attTip}`}
                           onPointerDown={(e) => {
                             if (e.button !== 0 || !hasKey) return;
                             if (isKeySelected) {
@@ -838,6 +842,12 @@ export function Timeline() {
                           <span
                             className={`rig-dope-diamond ${hasKey ? "keyed" : ""}`}
                           />
+                          {hasAttachmentKey && (
+                            <span
+                              className="rig-attach-square"
+                              style={{ marginLeft: 2 }}
+                            />
+                          )}
                         </button>
                       );
                     })}
@@ -885,13 +895,21 @@ export function Timeline() {
                             <div
                               key={`rig-${bone.id}-${ch.key}-${frame.id}`}
                               className={`rig-dope-cell ${frame.index === currentFrame ? "active-col" : ""}`}
+                              title={
+                                ch.key === "attach" && hasChannel
+                                  ? `Attachment: ${kf?.attachment ?? "None"}`
+                                  : undefined
+                              }
                             >
-                              {hasChannel && (
-                                <span
-                                  className="rig-dope-diamond keyed"
-                                  style={{ width: 5, height: 5 }}
-                                />
-                              )}
+                              {hasChannel &&
+                                (ch.key === "attach" ? (
+                                  <span className="rig-attach-square" />
+                                ) : (
+                                  <span
+                                    className="rig-dope-diamond keyed"
+                                    style={{ width: 5, height: 5 }}
+                                  />
+                                ))}
                             </div>
                           );
                         })}

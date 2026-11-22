@@ -2630,3 +2630,87 @@ test("R4 capturePose, applyPose blend, retimeKeyframes, copy/paste and clip CRUD
   assert.equal(rig.removeClip(c3.id), true);
   assert.equal(rig.clips.length, 2);
 });
+
+test("R5 attachment step interpolation, slot draw order, and snapshot round-trip", () => {
+  const engine = new PixelEngine(16, 16);
+  const layerA = { id: "layer-a", kind: "raster" as const, visible: true, opacity: 100, blendMode: "Normal" as const, parentId: null };
+  const layerB = { id: "layer-b", kind: "raster" as const, visible: true, opacity: 100, blendMode: "Normal" as const, parentId: null };
+  const celA0 = engine.getOrCreateCel(layerA.id, 0);
+  celA0.setPixel(8, 8, 255, 0, 0, 255);
+  const celA1 = engine.getOrCreateCel(layerA.id, 1);
+  celA1.setPixel(8, 8, 0, 255, 0, 255);
+  const celB0 = engine.getOrCreateCel(layerB.id, 0);
+  celB0.setPixel(8, 8, 0, 0, 255, 255);
+
+  const rig = engine.rig;
+  const bone = rig.addBone({
+    name: "Hand",
+    parentId: null,
+    localX: 8,
+    localY: 8,
+    length: 4,
+    rotationDeg: 0,
+  });
+  const boneB = rig.addBone({
+    name: "Badge",
+    parentId: null,
+    localX: 8,
+    localY: 8,
+    length: 4,
+    rotationDeg: 0,
+  });
+
+  const slotA = rig.addSlot({
+    name: "HandSlot",
+    boneId: bone.id,
+    layerId: layerA.id,
+    attachments: {
+      open: { layerId: layerA.id, frame: 0 },
+      fist: { layerId: layerA.id, frame: 1 },
+    },
+    defaultAttachment: "open",
+  });
+  const slotB = rig.addSlot({
+    name: "OverlaySlot",
+    boneId: boneB.id,
+    layerId: layerB.id,
+    attachments: {
+      badge: { layerId: layerB.id, frame: 0 },
+    },
+    defaultAttachment: "badge",
+  });
+
+  // Key attachment swap on frame 2 -> fist, frame 4 -> null (hidden)
+  rig.setSlotAttachmentAtFrame(slotA.id, "fist", 2, true);
+  rig.setSlotAttachmentAtFrame(slotA.id, null, 4, true);
+  rig.clearPoseOverrides();
+
+  assert.equal(rig.resolveSlotAttachment(slotA, 0, false)?.name, "open");
+  assert.equal(rig.resolveSlotAttachment(slotA, 1, false)?.name, "open");
+  assert.equal(rig.resolveSlotAttachment(slotA, 2, false)?.name, "fist");
+  assert.equal(rig.resolveSlotAttachment(slotA, 3, false)?.name, "fist");
+  assert.equal(rig.resolveSlotAttachment(slotA, 4, false), null);
+
+  // Draw order: slotB is after slotA, so blue overwrites green on frame 2;
+  // moving slotB earlier makes green overwrite blue.
+  const pxIndex = (8 * 16 + 8) * 4;
+  const comp1 = engine.compositeRigFrame([layerB, layerA], 2, {
+    pixelSnap: true,
+    rotSprite: false,
+  }, false);
+  assert.equal(comp1[pxIndex + 2], 255); // blue from slotB
+
+  rig.moveSlot(slotB.id, -1);
+  const comp2 = engine.compositeRigFrame([layerB, layerA], 2, {
+    pixelSnap: true,
+    rotSprite: false,
+  }, false);
+  assert.equal(comp2[pxIndex + 1], 255); // green from slotA
+
+  // Snapshot round-trip preserves slots & attachments
+  const snap = rig.toSnapshot();
+  const rig2 = new RigState();
+  rig2.fromSnapshot(snap);
+  assert.equal(rig2.slots.length, 2);
+  assert.equal(rig2.resolveSlotAttachment(rig2.slots[1], 2, false)?.name, "fist");
+});

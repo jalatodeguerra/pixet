@@ -2564,6 +2564,13 @@
   color: var(--text-primary);
 }
 
+.rig-attach-square {
+  width: 6px;
+  height: 6px;
+  background: #2dd4bf;
+  flex-shrink: 0;
+}
+
 .rig-bone-joint.hovered {
   fill: #9fc0ff;
 }

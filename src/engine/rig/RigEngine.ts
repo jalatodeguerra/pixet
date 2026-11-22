@@ -717,6 +717,7 @@ export class RigState {
   private nextConstraintNum = 1;
   private nextClipNum = 1;
   private nextPoseNum = 1;
+  private nextSlotNum = 1;
   private revision = 0;
   private springCache = new Map<string, number[]>();
   private cachedWeights: BoneWeights | null = null;
@@ -746,6 +747,7 @@ export class RigState {
     this.nextConstraintNum = 1;
     this.nextClipNum = 1;
     this.nextPoseNum = 1;
+    this.nextSlotNum = 1;
     this.springCache.clear();
     this.cachedWeights = null;
     this.cachedWeightsRevision = -1;
@@ -889,6 +891,158 @@ export class RigState {
     this.poses = this.poses.filter((p) => p.id !== poseId);
   }
 
+  private resolveBoneAttachmentAtFrame(
+    boneId: string,
+    frame: number,
+    useOverrides = true
+  ): string | null | undefined {
+    if (useOverrides) {
+      const ov = this.currentPoseOverrides.get(boneId);
+      if (ov && ov.attachment !== undefined) {
+        return ov.attachment;
+      }
+    }
+    const track = this.getActiveClip().tracks[boneId];
+    if (!track || track.length === 0) return undefined;
+    let found: string | null | undefined = undefined;
+    for (const key of track) {
+      if (key.frame > frame) break;
+      if (key.attachment !== undefined) {
+        found = key.attachment;
+      }
+    }
+    return found;
+  }
+
+  addSlot(input: {
+    name?: string;
+    boneId: string;
+    layerId: string | null;
+    attachments?: Record<string, { layerId: string; frame: number }>;
+    defaultAttachment?: string | null;
+  }): RigSlot {
+    const num = this.nextSlotNum++;
+    const slot: RigSlot = {
+      id: `slot-${num}`,
+      name: input.name?.trim() || `Slot ${num}`,
+      boneId: input.boneId,
+      layerId: input.layerId,
+      attachments: Object.fromEntries(
+        Object.entries(input.attachments ?? {}).map(([k, v]) => [k, { ...v }])
+      ),
+      defaultAttachment: input.defaultAttachment ?? null,
+    };
+    this.slots.push(slot);
+    this.invalidateEvaluation();
+    return slot;
+  }
+
+  updateSlot(slotId: string, patch: Partial<Omit<RigSlot, "id">>): void {
+    const slot = this.slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    if (patch.name !== undefined) slot.name = patch.name;
+    if (patch.boneId !== undefined) slot.boneId = patch.boneId;
+    if (patch.layerId !== undefined) slot.layerId = patch.layerId;
+    if (patch.attachments !== undefined) {
+      slot.attachments = Object.fromEntries(
+        Object.entries(patch.attachments).map(([k, v]) => [k, { ...v }])
+      );
+    }
+    if ("defaultAttachment" in patch) {
+      slot.defaultAttachment = patch.defaultAttachment ?? null;
+    }
+    this.invalidateEvaluation();
+  }
+
+  removeSlot(slotId: string): void {
+    this.slots = this.slots.filter((s) => s.id !== slotId);
+    this.invalidateEvaluation();
+  }
+
+  moveSlot(slotId: string, delta: -1 | 1): void {
+    const idx = this.slots.findIndex((s) => s.id === slotId);
+    if (idx === -1) return;
+    const target = idx + delta;
+    if (target < 0 || target >= this.slots.length) return;
+    const [item] = this.slots.splice(idx, 1);
+    this.slots.splice(target, 0, item);
+    this.invalidateEvaluation();
+  }
+
+  addSlotAttachment(
+    slotId: string,
+    name: string,
+    layerId: string,
+    frame: number
+  ): void {
+    const slot = this.slots.find((s) => s.id === slotId);
+    const key = name.trim();
+    if (!slot || !key) return;
+    slot.attachments[key] = { layerId, frame };
+    if (slot.defaultAttachment === null) {
+      slot.defaultAttachment = key;
+    }
+    this.invalidateEvaluation();
+  }
+
+  removeSlotAttachment(slotId: string, name: string): void {
+    const slot = this.slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    delete slot.attachments[name];
+    if (slot.defaultAttachment === name) {
+      slot.defaultAttachment = Object.keys(slot.attachments)[0] ?? null;
+    }
+    this.invalidateEvaluation();
+  }
+
+  getSlotLayerIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const slot of this.slots) {
+      if (slot.layerId) ids.add(slot.layerId);
+      for (const att of Object.values(slot.attachments)) {
+        if (att.layerId) ids.add(att.layerId);
+      }
+    }
+    return ids;
+  }
+
+  resolveSlotAttachment(
+    slot: RigSlot,
+    frame: number,
+    useOverrides = true,
+    mode: "rest" | "pose" = "pose"
+  ): { name: string; layerId: string; frame: number } | null {
+    const keyedOrOverride =
+      mode === "rest"
+        ? undefined
+        : this.resolveBoneAttachmentAtFrame(slot.boneId, frame, useOverrides);
+    const resolvedName =
+      keyedOrOverride !== undefined ? keyedOrOverride : slot.defaultAttachment;
+    if (!resolvedName) return null;
+    const att = slot.attachments[resolvedName];
+    if (!att) return null;
+    return { name: resolvedName, layerId: att.layerId, frame: att.frame };
+  }
+
+  setSlotAttachmentAtFrame(
+    slotId: string,
+    attachmentName: string | null,
+    frame: number,
+    writeKey: boolean
+  ): void {
+    const slot = this.slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    this.setPoseOverride(slot.boneId, { attachment: attachmentName }, frame);
+    if (writeKey) {
+      this.autoKeyBone(
+        slot.boneId,
+        frame,
+        { attachment: attachmentName },
+        "step"
+      );
+    }
+  }
+
   addBone(partial: {
     name?: string;
     parentId: string | null;
@@ -975,6 +1129,7 @@ export class RigState {
     this.constraints = this.constraints.filter(
       (constraint) => !constraintReferencesBone(constraint, id)
     );
+    this.slots = this.slots.filter((slot) => slot.boneId !== id);
     for (const clip of this.clips) {
       delete clip.tracks[id];
     }
@@ -2467,6 +2622,12 @@ export class RigState {
             ])
           ),
         }));
+      for (const slot of this.slots) {
+        const match = /(\d+)$/.exec(slot.id);
+        if (match) {
+          this.nextSlotNum = Math.max(this.nextSlotNum, Number(match[1]) + 1);
+        }
+      }
     }
 
     if (Array.isArray(raw.poses)) {

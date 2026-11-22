@@ -828,10 +828,11 @@ export class PixelEngine {
     const boneTransforms = buildBoneTransformMap(restMap, poseMap);
     const activeClip = this.rig.getActiveClip();
     const rigRevision = this.rig.revisionId;
+    const slotLayerIds = this.rig.getSlotLayerIds();
 
     for (let li = layers.length - 1; li >= 0; li--) {
       const layer = layers[li];
-      if (layer.kind === "group") continue;
+      if (layer.kind === "group" || slotLayerIds.has(layer.id)) continue;
 
       const effective = resolveLayerEffective(layer, byId);
       if (!effective.visible || effective.opacity <= 0) continue;
@@ -1030,6 +1031,45 @@ export class PixelEngine {
         0,
         effective.opacity,
         layer.blendMode
+      );
+    }
+
+    // R5 Sprite swapping: composite slots in draw order.
+    for (const slot of this.rig.slots) {
+      const att = this.rig.resolveSlotAttachment(
+        slot,
+        frameIndex,
+        useOverrides,
+        opts.mode ?? "pose"
+      );
+      if (!att) continue;
+      const sourceCel = this.getCel(att.layerId, att.frame);
+      if (!sourceCel || sourceCel.isEmpty()) continue;
+
+      const attLayer = byId.get(att.layerId);
+      const attEff = attLayer
+        ? resolveLayerEffective(attLayer, byId)
+        : { visible: true, opacity: 1 };
+      if (!attEff.visible || attEff.opacity <= 0) continue;
+
+      const rest = restMap.get(slot.boneId);
+      const posed = poseMap.get(slot.boneId);
+      const warped =
+        rest && posed
+          ? this.getRigDeformedBuffer(
+              `slot:${slot.id}|${att.name}|${frameIndex}|${rigRevision}|${sourceCel.revision}|${opts.mode ?? "pose"}|${useOverrides ? 1 : 0}|${opts.pixelSnap ? 1 : 0}|${opts.rotSprite ? 1 : 0}`,
+              () => warpLayerByBone(sourceCel, rest, posed, opts)
+            )
+          : sourceCel;
+      compositeSourceOnto(
+        dst,
+        this.width,
+        this.height,
+        warped,
+        0,
+        0,
+        attEff.opacity,
+        attLayer?.blendMode ?? "Normal"
       );
     }
 
