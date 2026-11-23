@@ -313,6 +313,10 @@ export function Viewport() {
             rigMode: state.rigMode,
             frame: state.currentFrame,
             pixelSnap: state.rigPixelSnap,
+            sourceAlpha:
+              state.rigWeightOverlay === "unweighted"
+                ? pixelEngine.compositeBuffer
+                : null,
           }
         );
       } else if (!hasActiveDrawStrokeRef.current()) {
@@ -541,6 +545,10 @@ export function Viewport() {
             rigMode: state.rigMode,
             frame: state.currentFrame,
             pixelSnap: state.rigPixelSnap,
+            sourceAlpha:
+              state.rigWeightOverlay === "unweighted"
+                ? pixelEngine.compositeBuffer
+                : null,
           }
         );
       }
@@ -779,6 +787,10 @@ export function Viewport() {
             rigMode: state.rigMode,
             frame: state.currentFrame,
             pixelSnap: state.rigPixelSnap,
+            sourceAlpha:
+              state.rigWeightOverlay === "unweighted"
+                ? pixelEngine.compositeBuffer
+                : null,
           }
         );
       }
@@ -1056,12 +1068,14 @@ export function Viewport() {
             </svg>
           )}
 
-          {workspaceMode === "rig" && rigShowBones && (
-            <RigOverlay
-              draftBone={rigPointer.draftBone}
-              hoveredBoneId={rigPointer.hoveredBoneId}
-            />
-          )}
+          {workspaceMode === "rig" &&
+            (rigShowBones || rigTool === "weightPaint") && (
+              <RigOverlay
+                draftBone={rigPointer.draftBone}
+                draftGradient={rigPointer.draftGradient}
+                hoveredBoneId={rigPointer.hoveredBoneId}
+              />
+            )}
 
           {(workspaceMode === "data" || showGameDataOverlay) &&
             (gameDataOverlay.boxes.length > 0 ||

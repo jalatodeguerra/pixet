@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
 import { Lock, Paintbrush, Unlock } from "lucide-react";
-import { PixelBuffer } from "../../engine/document/PixelBuffer";
+import { PixelBuffer, rgbaToHex } from "../../engine/document/PixelBuffer";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import {
   type AutoWeightMethod,
   defaultEnvelopeRadius,
 } from "../../engine/rig/autoWeights";
+import {
+  getBoneInfluenceColor,
+  heatmapRampColor,
+} from "../../engine/rig/RigEngine";
 import { mutateRig } from "../../engine/rig/rigActions";
 import { falloffAt } from "../../engine/rig/skinning";
 import { useEditorStore } from "../../store/editorStore";
@@ -41,7 +45,34 @@ export function WeightsPanel() {
   const toggleRigWeightAirbrush = useEditorStore(
     (s) => s.toggleRigWeightAirbrush
   );
+  const rigWeightSubTool = useEditorStore((s) => s.rigWeightSubTool);
+  const setRigWeightSubTool = useEditorStore((s) => s.setRigWeightSubTool);
+  const rigWeightFloodTolerance = useEditorStore(
+    (s) => s.rigWeightFloodTolerance
+  );
+  const setRigWeightFloodTolerance = useEditorStore(
+    (s) => s.setRigWeightFloodTolerance
+  );
+  const rigWeightFloodContiguous = useEditorStore(
+    (s) => s.rigWeightFloodContiguous
+  );
+  const toggleRigWeightFloodContiguous = useEditorStore(
+    (s) => s.toggleRigWeightFloodContiguous
+  );
+  const rigWeightMirrorX = useEditorStore((s) => s.rigWeightMirrorX);
+  const toggleRigWeightMirrorX = useEditorStore(
+    (s) => s.toggleRigWeightMirrorX
+  );
+  const rigWeightMirrorY = useEditorStore((s) => s.rigWeightMirrorY);
+  const toggleRigWeightMirrorY = useEditorStore(
+    (s) => s.toggleRigWeightMirrorY
+  );
+  const inspectedWeightPixel = useEditorStore((s) => s.inspectedWeightPixel);
+  const setInspectedWeightPixel = useEditorStore(
+    (s) => s.setInspectedWeightPixel
+  );
   const falloffCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const legendCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rigAutoWeightMethod = useEditorStore((s) => s.rigAutoWeightMethod);
   const setRigAutoWeightMethod = useEditorStore(
     (s) => s.setRigAutoWeightMethod
@@ -134,6 +165,20 @@ export function WeightsPanel() {
     }
     ctx.stroke();
   }, [rigWeightFalloff, bones.length]);
+
+  useEffect(() => {
+    const canvas = legendCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    for (let x = 0; x < w; x++) {
+      const [r, g, b] = heatmapRampColor(x / Math.max(1, w - 1));
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(x, 0, 1, h);
+    }
+  }, [rigWeightOverlay, bones.length]);
 
   const selectedEnvelopeRadius = selectedBone
     ? selectedBone.envelopeRadius ??
@@ -334,33 +379,172 @@ export function WeightsPanel() {
         </div>
       </div>
 
-      {/* Overlay: R6 selected-bone heatmap or the original per-bone colors. */}
+      {/* Overlay: R6/W2 selected-bone heatmap, per-bone colors, or unweighted diagnostic. */}
       {bones.length > 0 && (
-        <div className="rig-option-row">
-          <span>Overlay</span>
-          <div style={{ display: "flex", gap: 3 }}>
-            {(
-              [
-                ["heatmap", "Heatmap"],
-                ["boneColors", "Colors"],
-              ] as const
-            ).map(([mode, label]) => (
-              <button
-                key={mode}
-                type="button"
-                className={`mini-btn ${rigWeightOverlay === mode ? "active" : ""}`}
-                title={
-                  mode === "heatmap"
-                    ? "Show the selected bone's weight as a heatmap"
-                    : "Show every bone's influence color"
-                }
-                onClick={() => setRigWeightOverlay(mode)}
-              >
-                {label}
-              </button>
-            ))}
+        <>
+          <div className="rig-option-row">
+            <span>Overlay</span>
+            <div style={{ display: "flex", gap: 3 }}>
+              {(
+                [
+                  ["heatmap", "Heatmap"],
+                  ["boneColors", "Colors"],
+                  ["unweighted", "Unweighted"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`mini-btn ${rigWeightOverlay === mode ? "active" : ""}`}
+                  title={
+                    mode === "heatmap"
+                      ? "Show the selected bone's weight as a 5-stop heatmap"
+                      : mode === "boneColors"
+                        ? "Show every bone's influence color"
+                        : "Highlight opaque pixels with total weight < 99%"
+                  }
+                  onClick={() => setRigWeightOverlay(mode)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+          {rigWeightOverlay === "heatmap" && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 10,
+                color: "var(--text-muted)",
+              }}
+            >
+              <span>0%</span>
+              <canvas
+                ref={legendCanvasRef}
+                width={120}
+                height={8}
+                style={{
+                  flex: 1,
+                  height: 8,
+                  border: "1px solid #303030",
+                  borderRadius: 0,
+                }}
+              />
+              <span>100%</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Sub-Tools, Flood & Symmetry */}
+      {bones.length > 0 && (
+        <>
+          <div className="rig-option-row">
+            <span>Tool</span>
+            <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+              {(
+                [
+                  ["brush", "Brush"],
+                  ["gradient", "Gradient"],
+                  ["flood", "Flood"],
+                  ["inspector", "Inspect"],
+                ] as const
+              ).map(([sub, label]) => (
+                <button
+                  key={sub}
+                  type="button"
+                  className={`mini-btn ${rigWeightSubTool === sub ? "active" : ""}`}
+                  onClick={() => setRigWeightSubTool(sub)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {rigWeightSubTool === "flood" && (
+            <>
+              <label className="rig-slider-row">
+                <span>Tolerance</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={64}
+                  value={rigWeightFloodTolerance}
+                  onChange={(e) =>
+                    setRigWeightFloodTolerance(Number(e.target.value))
+                  }
+                />
+                <span className="mono-value">{rigWeightFloodTolerance}</span>
+              </label>
+              <div className="rig-option-row">
+                <label className="modal-checkbox" style={{ fontSize: 11 }}>
+                  <input
+                    type="checkbox"
+                    checked={rigWeightFloodContiguous}
+                    onChange={toggleRigWeightFloodContiguous}
+                  />
+                  <span>Contiguous Only</span>
+                </label>
+              </div>
+            </>
+          )}
+
+          <div className="rig-option-row">
+            <label className="modal-checkbox" style={{ fontSize: 11 }}>
+              <input
+                type="checkbox"
+                checked={rigWeightMirrorX}
+                onChange={toggleRigWeightMirrorX}
+              />
+              <span>Mirror X</span>
+            </label>
+            <label className="modal-checkbox" style={{ fontSize: 11 }}>
+              <input
+                type="checkbox"
+                checked={rigWeightMirrorY}
+                onChange={toggleRigWeightMirrorY}
+              />
+              <span>Mirror Y</span>
+            </label>
+            <div style={{ display: "flex", gap: 3 }}>
+              <button
+                type="button"
+                className="mini-btn"
+                title="Mirror all weights from Left to Right"
+                onClick={() => {
+                  mutateRig("Mirror weights L→R", () => {
+                    pixelEngine.rig.mirrorAllBoneWeights(
+                      "LtoR",
+                      canvasWidth / 2
+                    );
+                  });
+                  setStatusMessage("Mirrored bone weights L → R");
+                }}
+              >
+                L→R
+              </button>
+              <button
+                type="button"
+                className="mini-btn"
+                title="Mirror all weights from Right to Left"
+                onClick={() => {
+                  mutateRig("Mirror weights R→L", () => {
+                    pixelEngine.rig.mirrorAllBoneWeights(
+                      "RtoL",
+                      canvasWidth / 2
+                    );
+                  });
+                  setStatusMessage("Mirrored bone weights R → L");
+                }}
+              >
+                R→L
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Brush: R6 strength/mode/falloff around the existing size control. */}
@@ -466,8 +650,216 @@ export function WeightsPanel() {
           </div>
 
           <span className="rotate3d-hint">
-            Left-drag paint · Right-drag subtract · W selects the brush
+            Left-drag paint · Right-drag subtract · Alt+click inspect · W brush
           </span>
+
+          {/* Global Weight Utilities */}
+          <div className="rig-option-row" style={{ flexWrap: "wrap", gap: 3 }}>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Flood selected bone weights across opaque/selected pixels"
+              onClick={() => {
+                if (!selectedBone) return;
+                const composited = pixelEngine.compositeFrame(
+                  layers,
+                  currentFrame
+                );
+                const buf = new PixelBuffer(
+                  canvasWidth,
+                  canvasHeight,
+                  composited
+                );
+                const mask =
+                  rigAutoWeightRespectSelection && pixelEngine.selection
+                    ? pixelEngine.selection
+                    : null;
+                mutateRig("Flood bone weights", () => {
+                  pixelEngine.rig.floodAllBoneWeights(
+                    buf,
+                    selectedBone.id,
+                    rigWeightStrength,
+                    mask
+                  );
+                });
+                setStatusMessage(
+                  `Flooded "${selectedBone.name}" to ${Math.round(rigWeightStrength * 100)}%`
+                );
+              }}
+            >
+              Flood
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Smooth all weights globally"
+              onClick={() => {
+                const composited = pixelEngine.compositeFrame(
+                  layers,
+                  currentFrame
+                );
+                const buf = new PixelBuffer(
+                  canvasWidth,
+                  canvasHeight,
+                  composited
+                );
+                const mask =
+                  rigAutoWeightRespectSelection && pixelEngine.selection
+                    ? pixelEngine.selection
+                    : null;
+                mutateRig("Smooth all weights", () => {
+                  pixelEngine.rig.smoothAllBoneWeights(buf, 2, 0.5, mask);
+                });
+                setStatusMessage("Smoothed all skin weights");
+              }}
+            >
+              Smooth All
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Quantize weights to 25% steps"
+              onClick={() => {
+                mutateRig("Quantize weights 25%", () => {
+                  pixelEngine.rig.quantizeAllBoneWeights(0.25);
+                });
+                setStatusMessage("Quantized weights to 25% steps");
+              }}
+            >
+              Quant 25%
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Snap weights to hard 100% single-bone bind (RotSprite fast-path)"
+              onClick={() => {
+                mutateRig("Hard-bind weights", () => {
+                  pixelEngine.rig.quantizeAllBoneWeights(1.0);
+                });
+                setStatusMessage("Snapped weights to 100% hard bind");
+              }}
+            >
+              Hard 100%
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Prune influences below 5%"
+              onClick={() => {
+                mutateRig("Prune micro-weights", () => {
+                  pixelEngine.rig.pruneAllBoneWeights(0.05);
+                });
+                setStatusMessage("Pruned weights below 5%");
+              }}
+            >
+              Prune 5%
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Invert selected bone weights"
+              onClick={() => {
+                if (!selectedBone) return;
+                const composited = pixelEngine.compositeFrame(
+                  layers,
+                  currentFrame
+                );
+                const buf = new PixelBuffer(
+                  canvasWidth,
+                  canvasHeight,
+                  composited
+                );
+                mutateRig("Invert bone weights", () => {
+                  pixelEngine.rig.invertAllBoneWeights(
+                    buf,
+                    selectedBone.id,
+                    selectedBone.parentId
+                  );
+                });
+                setStatusMessage(`Inverted weights for "${selectedBone.name}"`);
+              }}
+            >
+              Invert
+            </button>
+          </div>
+
+          {/* Inspected Pixel Card */}
+          {inspectedWeightPixel && (() => {
+            const w = pixelEngine.rig.getBoneWeights();
+            const px = inspectedWeightPixel.x;
+            const py = inspectedWeightPixel.y;
+            const infs = w?.entries.get(py * canvasWidth + px) ?? [];
+            return (
+              <div className="rig-influence-box" style={{ marginTop: 4 }}>
+                <div className="rig-option-row">
+                  <span style={{ fontSize: 11, fontWeight: 600 }}>
+                    Pixel ({px}, {py})
+                  </span>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() => setInspectedWeightPixel(null)}
+                  >
+                    Clear
+                  </button>
+                </div>
+                {infs.length === 0 ? (
+                  <span className="rotate3d-hint">No bone influences on this pixel.</span>
+                ) : (
+                  infs.map((inf) => {
+                    const bIndex = bones.findIndex((b) => b.id === inf.boneId);
+                    const bone = bIndex >= 0 ? bones[bIndex] : null;
+                    const c = getBoneInfluenceColor(Math.max(0, bIndex));
+                    const swatch =
+                      bone?.color ?? rgbaToHex(c[0], c[1], c[2]);
+                    return (
+                      <label key={inf.boneId} className="rig-slider-row">
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            minWidth: 68,
+                          }}
+                        >
+                          <span
+                            className="rig-influence-swatch"
+                            style={{ backgroundColor: swatch }}
+                          />
+                          <span style={{ fontSize: 10 }}>
+                            {bone?.name ?? inf.boneId}
+                          </span>
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={inf.w}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            mutateRig("Edit pixel weight", () => {
+                              pixelEngine.rig.setPixelBoneWeight(
+                                px,
+                                py,
+                                canvasWidth,
+                                canvasHeight,
+                                inf.boneId,
+                                val
+                              );
+                            });
+                          }}
+                        />
+                        <span className="mono-value">
+                          {Math.round(inf.w * 100)}%
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            );
+          })()}
 
           {selectedBone && rigTool !== "weightPaint" && (
             <button

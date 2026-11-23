@@ -124,7 +124,8 @@ export type RigTool =
   | "weightPaint"
   | "meshEdit"
   | "pin";
-export type RigWeightOverlayMode = "heatmap" | "boneColors";
+export type RigWeightOverlayMode = "heatmap" | "boneColors" | "unweighted";
+export type RigWeightSubTool = "brush" | "gradient" | "flood" | "inspector";
 export type DataTool = "hitbox" | "hurtbox" | "collision" | "socket";
 
 export type ToolId =
@@ -373,6 +374,18 @@ interface EditorState {
   rigWeightOverlay: RigWeightOverlayMode;
   /** W1 airbrush accumulation toggle (when false, caps per-stroke dab falloff). */
   rigWeightAirbrush: boolean;
+  /** W2 active weight-paint sub-tool. */
+  rigWeightSubTool: RigWeightSubTool;
+  /** W2 flood-fill RGB color tolerance (0..255). */
+  rigWeightFloodTolerance: number;
+  /** W2 flood-fill contiguous-region toggle. */
+  rigWeightFloodContiguous: boolean;
+  /** W2 live horizontal symmetry painting. */
+  rigWeightMirrorX: boolean;
+  /** W2 live vertical symmetry painting. */
+  rigWeightMirrorY: boolean;
+  /** W2 inspected pixel coordinate for per-pixel weight editing. */
+  inspectedWeightPixel: { x: number; y: number } | null;
   /** W0 smart auto-weight solver method. */
   rigAutoWeightMethod: AutoWeightMethod;
   /** W0 falloff power (0.5..6). */
@@ -665,6 +678,12 @@ interface EditorState {
   setRigWeightFalloff: (falloff: WeightFalloff) => void;
   setRigWeightOverlay: (mode: RigWeightOverlayMode) => void;
   toggleRigWeightAirbrush: () => void;
+  setRigWeightSubTool: (subTool: RigWeightSubTool) => void;
+  setRigWeightFloodTolerance: (tolerance: number) => void;
+  toggleRigWeightFloodContiguous: () => void;
+  toggleRigWeightMirrorX: () => void;
+  toggleRigWeightMirrorY: () => void;
+  setInspectedWeightPixel: (pixel: { x: number; y: number } | null) => void;
   setRigAutoWeightMethod: (method: AutoWeightMethod) => void;
   setRigAutoWeightPower: (power: number) => void;
   setRigAutoWeightColorPenalty: (penalty: number) => void;
@@ -962,6 +981,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigWeightFalloff: "linear",
   rigWeightOverlay: "heatmap",
   rigWeightAirbrush: false,
+  rigWeightSubTool: "brush",
+  rigWeightFloodTolerance: 16,
+  rigWeightFloodContiguous: true,
+  rigWeightMirrorX: false,
+  rigWeightMirrorY: false,
+  inspectedWeightPixel: null,
   rigAutoWeightMethod: "geodesic",
   rigAutoWeightPower: 2,
   rigAutoWeightColorPenalty: 0.35,
@@ -2173,6 +2198,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRigWeightOverlay: (rigWeightOverlay) => set({ rigWeightOverlay }),
   toggleRigWeightAirbrush: () =>
     set((s) => ({ rigWeightAirbrush: !s.rigWeightAirbrush })),
+  setRigWeightSubTool: (rigWeightSubTool) => set({ rigWeightSubTool }),
+  setRigWeightFloodTolerance: (tolerance) =>
+    set({
+      rigWeightFloodTolerance: Math.max(0, Math.min(255, Math.round(tolerance))),
+    }),
+  toggleRigWeightFloodContiguous: () =>
+    set((s) => ({
+      rigWeightFloodContiguous: !s.rigWeightFloodContiguous,
+    })),
+  toggleRigWeightMirrorX: () =>
+    set((s) => ({ rigWeightMirrorX: !s.rigWeightMirrorX })),
+  toggleRigWeightMirrorY: () =>
+    set((s) => ({ rigWeightMirrorY: !s.rigWeightMirrorY })),
+  setInspectedWeightPixel: (inspectedWeightPixel) =>
+    set({ inspectedWeightPixel }),
   setRigAutoWeightMethod: (rigAutoWeightMethod) => set({ rigAutoWeightMethod }),
   setRigAutoWeightPower: (power) =>
     set({ rigAutoWeightPower: Math.max(0.5, Math.min(6, power)) }),

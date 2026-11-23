@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PixelBuffer } from "../../engine/document/PixelBuffer";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import {
   type BoneWeightInfluence,
@@ -16,6 +17,7 @@ import {
   snapAngleDeg,
   snapToPixelCenter,
 } from "../../engine/rig/skeletonTools";
+import { resolveMirroredBoneId } from "../../engine/rig/weightTools";
 import { useEditorStore } from "../../store/editorStore";
 import {
   buildConstraintTargetShapes,
@@ -30,8 +32,16 @@ export interface UseRigPointerOptions {
   onHoverPixels: (px: number, py: number) => void;
 }
 
+export interface RigDraftGradient {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 export interface UseRigPointerResult {
   draftBone: RigDraftBone | null;
+  draftGradient: RigDraftGradient | null;
   hoveredBoneId: string | null;
   onPointerDown: (e: React.PointerEvent<HTMLCanvasElement>) => boolean;
   onPointerMove: (e: React.PointerEvent<HTMLCanvasElement>) => boolean;
@@ -50,6 +60,7 @@ type RigDragKind =
   | "addBone"
   | "ik"
   | "weightPaint"
+  | "weightGradient"
   | "constraintTarget";
 
 interface RigDrag {
@@ -251,6 +262,9 @@ export function useRigPointer({
     anchorY: number;
   } | null>(null);
   const [draftBone, setDraftBone] = useState<RigDraftBone | null>(null);
+  const [draftGradient, setDraftGradient] = useState<RigDraftGradient | null>(
+    null
+  );
   const [hoveredBoneId, setHoveredBoneId] = useState<string | null>(null);
 
   const rigTool = useEditorStore((s) => s.rigTool);
@@ -343,6 +357,41 @@ export function useRigPointer({
     if (e.button !== 0 && e.button !== 2) return true;
 
     if (state.rigTool === "weightPaint" && (e.button === 0 || e.button === 2)) {
+      const paintPt =
+        state.rigMode === "animate"
+          ? rig.mapPosedPointToRest(
+              pt.px,
+              pt.py,
+              state.currentFrame,
+              state.rigPixelSnap
+            )
+          : { x: pt.px, y: pt.py };
+
+      if (e.altKey || state.rigWeightSubTool === "inspector") {
+        const ix = Math.max(
+          0,
+          Math.min(state.canvasWidth - 1, Math.round(paintPt.x))
+        );
+        const iy = Math.max(
+          0,
+          Math.min(state.canvasHeight - 1, Math.round(paintPt.y))
+        );
+        state.setInspectedWeightPixel({ x: ix, y: iy });
+        if (e.ctrlKey && e.altKey) {
+          const weights = rig.getBoneWeights();
+          const infs = weights?.entries.get(iy * state.canvasWidth + ix);
+          if (infs && infs.length > 0) {
+            const dominant = [...infs].sort((a, b) => b.w - a.w)[0];
+            state.setSelectedBoneId(dominant.boneId);
+            const b = rig.bones.find((item) => item.id === dominant.boneId);
+            state.setStatusMessage(
+              `Picked "${b?.name ?? dominant.boneId}" (${Math.round(dominant.w * 100)}%)`
+            );
+          }
+        }
+        return true;
+      }
+
       const targetBoneId =
         state.selectedBoneId ?? rig.bones[0]?.id ?? null;
       if (!targetBoneId) {
@@ -363,17 +412,95 @@ export function useRigPointer({
       if (state.selectedBoneId !== targetBoneId) {
         state.setSelectedBoneId(targetBoneId);
       }
-      e.currentTarget.setPointerCapture(e.pointerId);
+      const selectionMask =
+        state.rigAutoWeightRespectSelection && pixelEngine.selection
+          ? pixelEngine.selection
+          : null;
 
-      const paintPt =
-        state.rigMode === "animate"
-          ? rig.mapPosedPointToRest(
-              pt.px,
-              pt.py,
-              state.currentFrame,
-              state.rigPixelSnap
-            )
-          : { x: pt.px, y: pt.py };
+      if (state.rigWeightSubTool === "flood") {
+        const composited = pixelEngine.compositeFrame(
+          state.layers,
+          state.currentFrame
+        );
+        const buf = new PixelBuffer(
+          state.canvasWidth,
+          state.canvasHeight,
+          composited
+        );
+        const targetWeight = eraseMask ? 0 : state.rigWeightStrength;
+        mutateRig("Flood fill weights", () => {
+          rig.floodFillBoneWeights(
+            buf,
+            targetBoneId,
+            paintPt.x,
+            paintPt.y,
+            targetWeight,
+            {
+              colorTolerance: state.rigWeightFloodTolerance,
+              contiguous: state.rigWeightFloodContiguous,
+              selectionMask,
+            }
+          );
+          if (state.rigWeightMirrorX) {
+            const mirrorBone = resolveMirroredBoneId(rig.bones, targetBoneId);
+            rig.floodFillBoneWeights(
+              buf,
+              mirrorBone,
+              state.canvasWidth - 1 - paintPt.x,
+              paintPt.y,
+              targetWeight,
+              {
+                colorTolerance: state.rigWeightFloodTolerance,
+                contiguous: state.rigWeightFloodContiguous,
+                selectionMask,
+              }
+            );
+          }
+          if (state.rigWeightMirrorY) {
+            rig.floodFillBoneWeights(
+              buf,
+              targetBoneId,
+              paintPt.x,
+              state.canvasHeight - 1 - paintPt.y,
+              targetWeight,
+              {
+                colorTolerance: state.rigWeightFloodTolerance,
+                contiguous: state.rigWeightFloodContiguous,
+                selectionMask,
+              }
+            );
+          }
+        });
+        return true;
+      }
+
+      if (state.rigWeightSubTool === "gradient") {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setDraftGradient({ x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y });
+        dragRef.current = {
+          kind: "weightGradient",
+          boneId: targetBoneId,
+          startX: pt.x,
+          startY: pt.y,
+          jointX: 0,
+          jointY: 0,
+          parentWorldDeg: 0,
+          parentScaleX: 1,
+          parentScaleY: 1,
+          origLocalX: 0,
+          origLocalY: 0,
+          origScaleX: 1,
+          origScaleY: 1,
+          origLength: 0,
+          startDist: 1,
+          addTipX: pt.x,
+          addTipY: pt.y,
+          eraseMask,
+        };
+        return true;
+      }
+
+      e.currentTarget.setPointerCapture(e.pointerId);
 
       let strokeVisitedMax: Map<number, number> | undefined;
       let strokeBaseWeights: Map<number, BoneWeightInfluence[]> | undefined;
@@ -391,13 +518,16 @@ export function useRigPointer({
         }
       }
 
-      const selectionMask =
-        state.rigAutoWeightRespectSelection && pixelEngine.selection
-          ? pixelEngine.selection
-          : null;
-
       beginRigGesture("Paint weights");
       mutateRig("Paint weights", () => {
+        const dabOpts = {
+          strength: state.rigWeightStrength,
+          mode: effectiveMode,
+          falloff: state.rigWeightFalloff,
+          selectionMask,
+          strokeVisitedMax: strokeVisitedMax ?? null,
+          strokeBaseWeights: strokeBaseWeights ?? null,
+        };
         rig.paintBoneWeights(
           targetBoneId,
           state.canvasWidth,
@@ -405,15 +535,31 @@ export function useRigPointer({
           paintPt.x,
           paintPt.y,
           state.rigBrushSize / 2,
-          {
-            strength: state.rigWeightStrength,
-            mode: effectiveMode,
-            falloff: state.rigWeightFalloff,
-            selectionMask,
-            strokeVisitedMax: strokeVisitedMax ?? null,
-            strokeBaseWeights: strokeBaseWeights ?? null,
-          }
+          dabOpts
         );
+        if (state.rigWeightMirrorX) {
+          const mirrorBone = resolveMirroredBoneId(rig.bones, targetBoneId);
+          rig.paintBoneWeights(
+            mirrorBone,
+            state.canvasWidth,
+            state.canvasHeight,
+            state.canvasWidth - 1 - paintPt.x,
+            paintPt.y,
+            state.rigBrushSize / 2,
+            dabOpts
+          );
+        }
+        if (state.rigWeightMirrorY) {
+          rig.paintBoneWeights(
+            targetBoneId,
+            state.canvasWidth,
+            state.canvasHeight,
+            paintPt.x,
+            state.canvasHeight - 1 - paintPt.y,
+            state.rigBrushSize / 2,
+            dabOpts
+          );
+        }
       });
       dragRef.current = {
         kind: "weightPaint",
@@ -771,6 +917,18 @@ export function useRigPointer({
 
     const rig = pixelEngine.rig;
 
+    if (drag.kind === "weightGradient") {
+      drag.addTipX = pt.x;
+      drag.addTipY = pt.y;
+      setDraftGradient({
+        x0: drag.startX,
+        y0: drag.startY,
+        x1: pt.x,
+        y1: pt.y,
+      });
+      return true;
+    }
+
     if (drag.kind === "weightPaint") {
       ensureGesture(drag, "Paint weights");
       const nextPt =
@@ -789,6 +947,14 @@ export function useRigPointer({
           ? pixelEngine.selection
           : null;
       mutateRig("Paint weights", () => {
+        const strokeOpts = {
+          strength: state.rigWeightStrength,
+          mode: drag.eraseMask ? "subtract" : state.rigWeightMode,
+          falloff: state.rigWeightFalloff,
+          selectionMask,
+          strokeVisitedMax: drag.strokeVisitedMax ?? null,
+          strokeBaseWeights: drag.strokeBaseWeights ?? null,
+        };
         rig.paintBoneWeightStroke(
           drag.boneId,
           state.canvasWidth,
@@ -798,15 +964,35 @@ export function useRigPointer({
           nextPt.x,
           nextPt.y,
           state.rigBrushSize / 2,
-          {
-            strength: state.rigWeightStrength,
-            mode: drag.eraseMask ? "subtract" : state.rigWeightMode,
-            falloff: state.rigWeightFalloff,
-            selectionMask,
-            strokeVisitedMax: drag.strokeVisitedMax ?? null,
-            strokeBaseWeights: drag.strokeBaseWeights ?? null,
-          }
+          strokeOpts
         );
+        if (state.rigWeightMirrorX) {
+          const mirrorBone = resolveMirroredBoneId(rig.bones, drag.boneId);
+          rig.paintBoneWeightStroke(
+            mirrorBone,
+            state.canvasWidth,
+            state.canvasHeight,
+            state.canvasWidth - 1 - lastX,
+            lastY,
+            state.canvasWidth - 1 - nextPt.x,
+            nextPt.y,
+            state.rigBrushSize / 2,
+            strokeOpts
+          );
+        }
+        if (state.rigWeightMirrorY) {
+          rig.paintBoneWeightStroke(
+            drag.boneId,
+            state.canvasWidth,
+            state.canvasHeight,
+            lastX,
+            state.canvasHeight - 1 - lastY,
+            nextPt.x,
+            state.canvasHeight - 1 - nextPt.y,
+            state.rigBrushSize / 2,
+            strokeOpts
+          );
+        }
       });
       drag.lastPx = nextPt.x;
       drag.lastPy = nextPt.y;
@@ -974,11 +1160,96 @@ export function useRigPointer({
     if (!drag) return true;
     dragRef.current = null;
     setDraftBone(null);
+    setDraftGradient(null);
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
     const state = useEditorStore.getState();
     endRigGesture();
+
+    if (drag.kind === "weightGradient") {
+      const rig = pixelEngine.rig;
+      const p0 =
+        state.rigMode === "animate"
+          ? rig.mapPosedPointToRest(
+              drag.startX,
+              drag.startY,
+              state.currentFrame,
+              state.rigPixelSnap
+            )
+          : { x: drag.startX, y: drag.startY };
+      const p1 =
+        state.rigMode === "animate"
+          ? rig.mapPosedPointToRest(
+              drag.addTipX,
+              drag.addTipY,
+              state.currentFrame,
+              state.rigPixelSnap
+            )
+          : { x: drag.addTipX, y: drag.addTipY };
+      const composited = pixelEngine.compositeFrame(
+        state.layers,
+        state.currentFrame
+      );
+      const buf = new PixelBuffer(
+        state.canvasWidth,
+        state.canvasHeight,
+        composited
+      );
+      const selectionMask =
+        state.rigAutoWeightRespectSelection && pixelEngine.selection
+          ? pixelEngine.selection
+          : null;
+      const falloff =
+        state.rigWeightFalloff === "smoothstep" ? "smoothstep" : "linear";
+      mutateRig("Apply weight gradient", () => {
+        rig.applyBoneWeightGradient(
+          buf,
+          drag.boneId,
+          p0.x,
+          p0.y,
+          p1.x,
+          p1.y,
+          {
+            falloff,
+            strength: state.rigWeightStrength,
+            selectionMask,
+          }
+        );
+        if (state.rigWeightMirrorX) {
+          const mirrorBone = resolveMirroredBoneId(rig.bones, drag.boneId);
+          rig.applyBoneWeightGradient(
+            buf,
+            mirrorBone,
+            state.canvasWidth - p0.x,
+            p0.y,
+            state.canvasWidth - p1.x,
+            p1.y,
+            {
+              falloff,
+              strength: state.rigWeightStrength,
+              selectionMask,
+            }
+          );
+        }
+        if (state.rigWeightMirrorY) {
+          rig.applyBoneWeightGradient(
+            buf,
+            drag.boneId,
+            p0.x,
+            state.canvasHeight - p0.y,
+            p1.x,
+            state.canvasHeight - p1.y,
+            {
+              falloff,
+              strength: state.rigWeightStrength,
+              selectionMask,
+            }
+          );
+        }
+      });
+      return true;
+    }
 
     if (drag.kind === "addBone") {
       if (state.rigMode !== "setup") {
@@ -1116,6 +1387,7 @@ export function useRigPointer({
 
   return {
     draftBone,
+    draftGradient,
     hoveredBoneId,
     onPointerDown,
     onPointerMove,

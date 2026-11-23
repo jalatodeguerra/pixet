@@ -17,6 +17,10 @@ export function RigToolOptionsBar() {
   const toggleRigShowInfluence = useEditorStore((s) => s.toggleRigShowInfluence);
   const rigAutoKey = useEditorStore((s) => s.rigAutoKey);
   const toggleRigAutoKey = useEditorStore((s) => s.toggleRigAutoKey);
+  const rigWeightSubTool = useEditorStore((s) => s.rigWeightSubTool);
+  const setRigWeightSubTool = useEditorStore((s) => s.setRigWeightSubTool);
+  const rigWeightMirrorX = useEditorStore((s) => s.rigWeightMirrorX);
+  const toggleRigWeightMirrorX = useEditorStore((s) => s.toggleRigWeightMirrorX);
 
   const tool = RIG_TOOL_BY_ID.get(rigTool);
   const setupMode = rigMode === "setup";
@@ -58,18 +62,49 @@ export function RigToolOptionsBar() {
         </span>
 
         {rigTool === "weightPaint" && (
-          <label className="option-label">
-            <span>Brush</span>
-            <input
-              type="range"
-              className="compact-range"
-              min={1}
-              max={12}
-              value={rigBrushSize}
-              onChange={(e) => setRigBrushSize(Number(e.target.value))}
-            />
-            <span className="mono-value">{rigBrushSize}px</span>
-          </label>
+          <>
+            <div style={{ display: "flex", gap: 3 }}>
+              {(
+                [
+                  ["brush", "Brush"],
+                  ["gradient", "Grad"],
+                  ["flood", "Flood"],
+                  ["inspector", "Inspect"],
+                ] as const
+              ).map(([sub, label]) => (
+                <button
+                  key={sub}
+                  type="button"
+                  className={`toggle-chip ${rigWeightSubTool === sub ? "active" : ""}`}
+                  onClick={() => setRigWeightSubTool(sub)}
+                >
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+            {rigWeightSubTool === "brush" && (
+              <label className="option-label">
+                <span>Brush</span>
+                <input
+                  type="range"
+                  className="compact-range"
+                  min={1}
+                  max={12}
+                  value={rigBrushSize}
+                  onChange={(e) => setRigBrushSize(Number(e.target.value))}
+                />
+                <span className="mono-value">{rigBrushSize}px</span>
+              </label>
+            )}
+            <button
+              type="button"
+              className={`toggle-chip ${rigWeightMirrorX ? "active" : ""}`}
+              title="Mirror weight painting horizontally across canvas center"
+              onClick={toggleRigWeightMirrorX}
+            >
+              <span>Mirror X</span>
+            </button>
+          </>
         )}
 
         <div className="option-divider" />

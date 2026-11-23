@@ -3,9 +3,18 @@ import test from "node:test";
 import { PixelBuffer } from "../src/engine/document/PixelBuffer.ts";
 import { computeAutoWeightsV2 } from "../src/engine/rig/autoWeights.ts";
 import {
+  heatmapRampColor,
   renderBoneInfluenceOverlay,
   RigState,
 } from "../src/engine/rig/RigEngine.ts";
+import {
+  applyWeightGradient,
+  floodFillWeights,
+  mirrorBoneWeights,
+  pruneWeights,
+  quantizeWeights,
+  transferBoneWeights,
+} from "../src/engine/rig/weightTools.ts";
 import {
   falloffAt,
   paintWeightBrush,
@@ -407,4 +416,136 @@ test("W1: mapPosedPointToRest and renderBoneInfluenceOverlay follow bone deforma
   });
   assert.ok(overlay.getPixel(4, 8)[3] > 0, "expected deformed overlay pixel at (4,8)");
   assert.equal(overlay.getPixel(8, 4)[3], 0, "expected rest-only pixel (8,4) to be empty after 90deg rotation");
+});
+
+test("W2: applyWeightGradient creates linear ramp from 1.0 to 0.0 and respects selectionMask", () => {
+  const buf = new PixelBuffer(8, 2);
+  for (let y = 0; y < 2; y++) {
+    for (let x = 0; x < 8; x++) {
+      buf.setPixel(x, y, 200, 200, 200, 255);
+    }
+  }
+  const weights = {
+    width: 8,
+    height: 2,
+    entries: new Map<number, { boneId: string; w: number }[]>(),
+  };
+  for (let i = 0; i < 16; i++) {
+    weights.entries.set(i, [{ boneId: "b2", w: 1 }]);
+  }
+
+  applyWeightGradient(weights, buf, "b1", 0.5, 0.5, 7.5, 0.5, {
+    falloff: "linear",
+    strength: 1,
+    selectionMask: { contains: (x) => x <= 6 },
+  });
+
+  assert.ok(Math.abs(weightFor(weights.entries.get(0), "b1") - 1) < 1e-4);
+  assert.ok(weightFor(weights.entries.get(3), "b1") > weightFor(weights.entries.get(5), "b1"));
+  // Pixel x=7 outside selectionMask remains untouched
+  assert.equal(weightFor(weights.entries.get(7), "b1"), 0);
+  assert.equal(weightFor(weights.entries.get(7), "b2"), 1);
+});
+
+test("W2: floodFillWeights fills contiguous same-color region without leaking across different colors", () => {
+  const buf = new PixelBuffer(6, 4);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 6; x++) {
+      if (x <= 2) buf.setPixel(x, y, 255, 0, 0, 255);
+      else buf.setPixel(x, y, 0, 255, 0, 255);
+    }
+  }
+  const weights = {
+    width: 6,
+    height: 4,
+    entries: new Map<number, { boneId: string; w: number }[]>(),
+  };
+  for (let i = 0; i < 24; i++) {
+    weights.entries.set(i, [{ boneId: "b2", w: 1 }]);
+  }
+
+  floodFillWeights(weights, buf, "b1", 1, 1, 1.0, {
+    colorTolerance: 0,
+    contiguous: true,
+  });
+
+  assert.equal(weightFor(weights.entries.get(1 * 6 + 0), "b1"), 1);
+  assert.equal(weightFor(weights.entries.get(2 * 6 + 2), "b1"), 1);
+  assert.equal(weightFor(weights.entries.get(1 * 6 + 3), "b1"), 0);
+  assert.equal(weightFor(weights.entries.get(1 * 6 + 3), "b2"), 1);
+});
+
+test("W2: mirrorBoneWeights swaps Arm_L and Arm_R across axisX", () => {
+  const bones = [
+    { id: "armL", name: "Arm_L" },
+    { id: "armR", name: "Arm_R" },
+  ];
+  const weights = {
+    width: 6,
+    height: 2,
+    entries: new Map<number, { boneId: string; w: number }[]>([
+      [1, [{ boneId: "armL", w: 1 }]],
+    ]),
+  };
+
+  mirrorBoneWeights(weights, bones, "LtoR", 3);
+  assert.equal(weightFor(weights.entries.get(4), "armR"), 1);
+  assert.equal(weightFor(weights.entries.get(4), "armL"), 0);
+});
+
+test("W2: quantizeWeights(1.0), pruneWeights, and transferBoneWeights", () => {
+  const weights = {
+    width: 4,
+    height: 2,
+    entries: new Map<number, { boneId: string; w: number }[]>([
+      [0, [{ boneId: "b1", w: 0.72 }, { boneId: "b2", w: 0.25 }, { boneId: "b3", w: 0.03 }]],
+    ]),
+  };
+
+  pruneWeights(weights, 0.05);
+  assert.equal(weightFor(weights.entries.get(0), "b3"), 0);
+  const prunedSum = weights.entries.get(0)!.reduce((a, b) => a + b.w, 0);
+  assert.ok(Math.abs(prunedSum - 1) < 1e-5);
+
+  transferBoneWeights(weights, "b2", "b4");
+  assert.equal(weightFor(weights.entries.get(0), "b2"), 0);
+  assert.ok(weightFor(weights.entries.get(0), "b4") > 0.2);
+
+  quantizeWeights(weights, 1.0);
+  assert.equal(weightsAreHard(weights), true);
+  assert.equal(weightFor(weights.entries.get(0), "b1"), 1);
+});
+
+test("W2: unweighted overlay highlights under-weighted opaque pixels and heatmapRampColor endpoints", () => {
+  assert.deepEqual(heatmapRampColor(0), [29, 78, 216]);
+  assert.deepEqual(heatmapRampColor(1), [239, 68, 68]);
+
+  const rig = new RigState();
+  const bone = rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 1,
+    localY: 1,
+    length: 2,
+    rotationDeg: 0,
+  });
+  rig.setBoneWeights({
+    width: 4,
+    height: 2,
+    entries: new Map([[0, [{ boneId: bone.id, w: 1 }]]]),
+  });
+
+  const src = new PixelBuffer(4, 2);
+  src.setPixel(0, 0, 255, 255, 255, 255); // weighted
+  src.setPixel(1, 0, 255, 255, 255, 255); // unweighted opaque
+
+  const overlay = new PixelBuffer(4, 2);
+  renderBoneInfluenceOverlay(rig, overlay, bone.id, {
+    mode: "unweighted",
+    sourceAlpha: src.data,
+  });
+
+  assert.equal(overlay.getPixel(0, 0)[3], 0);
+  assert.deepEqual(overlay.getPixel(1, 0), [255, 46, 151, 210]);
+  assert.equal(overlay.getPixel(2, 0)[3], 0);
 });

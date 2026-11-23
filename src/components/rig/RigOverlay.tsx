@@ -9,6 +9,7 @@ import {
   GIZMO_RING_RADIUS_PX,
   type RigDraftBone,
 } from "./rigGizmo";
+import type { RigDraftGradient } from "./useRigPointer";
 
 /**
  * SVG skeleton + gizmo overlay for the Rig workspace. Bones are drawn from
@@ -16,13 +17,19 @@ import {
  */
 export function RigOverlay({
   draftBone,
+  draftGradient,
   hoveredBoneId,
 }: {
   draftBone: RigDraftBone | null;
+  draftGradient: RigDraftGradient | null;
   hoveredBoneId: string | null;
 }) {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const rigMode = useEditorStore((s) => s.rigMode);
+  const rigTool = useEditorStore((s) => s.rigTool);
+  const rigBrushSize = useEditorStore((s) => s.rigBrushSize);
+  const rigWeightSubTool = useEditorStore((s) => s.rigWeightSubTool);
+  const hoverPixel = useEditorStore((s) => s.cursorPos);
   const rigShowBones = useEditorStore((s) => s.rigShowBones);
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const currentFrame = useEditorStore((s) => s.currentFrame);
@@ -290,6 +297,63 @@ export function RigOverlay({
           x2={draftBone.x1}
           y2={draftBone.y1}
         />
+      )}
+
+      {rigTool === "weightPaint" &&
+        rigWeightSubTool === "brush" &&
+        hoverPixel && (
+          <g style={{ pointerEvents: "none" }}>
+            <circle
+              cx={hoverPixel.x + 0.5}
+              cy={hoverPixel.y + 0.5}
+              r={Math.max(0.5, rigBrushSize / 2)}
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth={1 / safeZoom}
+              strokeOpacity={0.9}
+            />
+            <circle
+              cx={hoverPixel.x + 0.5}
+              cy={hoverPixel.y + 0.5}
+              r={Math.max(0.35, rigBrushSize / 4)}
+              fill="none"
+              stroke="#4c8bf5"
+              strokeWidth={1 / safeZoom}
+              strokeDasharray={`${2 / safeZoom} ${2 / safeZoom}`}
+              strokeOpacity={0.9}
+            />
+          </g>
+        )}
+
+      {draftGradient && (
+        <g style={{ pointerEvents: "none" }}>
+          <line
+            x1={draftGradient.x0}
+            y1={draftGradient.y0}
+            x2={draftGradient.x1}
+            y2={draftGradient.y1}
+            stroke="#4c8bf5"
+            strokeWidth={1.2 / safeZoom}
+          />
+          <rect
+            x={draftGradient.x0 - handleHalf}
+            y={draftGradient.y0 - handleHalf}
+            width={handleHalf * 2}
+            height={handleHalf * 2}
+            fill="#4c8bf5"
+            stroke="#ffffff"
+            strokeWidth={0.8 / safeZoom}
+          />
+          <rect
+            x={draftGradient.x1 - handleHalf}
+            y={draftGradient.y1 - handleHalf}
+            width={handleHalf * 2}
+            height={handleHalf * 2}
+            fill="#141414"
+            stroke="#4c8bf5"
+            strokeWidth={0.8 / safeZoom}
+          />
+        </g>
       )}
     </svg>
   );
