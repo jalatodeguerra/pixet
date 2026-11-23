@@ -280,6 +280,8 @@ interface EditorState {
   rotate3dModalOpen: boolean;
   newSpriteModalOpen: boolean;
   canvasSizeModalOpen: boolean;
+  filterModalOpen: boolean;
+  filterModalTab: string;
   pendingImportImage: PendingImageImport | null;
   contextMenu: ContextMenuState | null;
 
@@ -522,6 +524,7 @@ interface EditorState {
   setRotate3dModalOpen: (open: boolean) => void;
   setNewSpriteModalOpen: (open: boolean) => void;
   setCanvasSizeModalOpen: (open: boolean) => void;
+  setFilterModalOpen: (open: boolean, tab?: string) => void;
   setCanvasSize: (w: number, h: number) => void;
   setPendingImportImage: (img: PendingImageImport | null) => void;
   openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
@@ -706,6 +709,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rotate3dModalOpen: false,
   newSpriteModalOpen: false,
   canvasSizeModalOpen: false,
+  filterModalOpen: false,
+  filterModalTab: "outline",
   pendingImportImage: null,
   contextMenu: null,
 
@@ -1635,6 +1640,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
   setNewSpriteModalOpen: (newSpriteModalOpen) => set({ newSpriteModalOpen }),
   setCanvasSizeModalOpen: (canvasSizeModalOpen) => set({ canvasSizeModalOpen }),
+  setFilterModalOpen: (filterModalOpen, tab) =>
+    set((s) => ({
+      filterModalOpen,
+      filterModalTab: tab ?? s.filterModalTab,
+    })),
   setCanvasSize: (canvasWidth, canvasHeight) => set({ canvasWidth, canvasHeight }),
   setPendingImportImage: (pendingImportImage) => set({ pendingImportImage }),
   openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),

@@ -18,6 +18,14 @@ import {
 } from "../engine/document/selectionActions";
 import { beginFreeTransformAction } from "../engine/document/transformActions";
 import {
+  applyBufferFilterAction,
+  autoCropSpriteAction,
+} from "../engine/document/filterActions";
+import {
+  applyDesaturateFilter,
+  applyInvertFilter,
+} from "../engine/tools/filters";
+import {
   addEmptyFrameAction,
   duplicateCurrentFrameAction,
 } from "../engine/document/timelineActions";
@@ -396,9 +404,111 @@ export function CommandPalette() {
         keywords: ["3d", "rotate", "turntable", "voxel"],
         run: () => st().setRotate3dModalOpen(true),
       },
+      {
+        id: "sprite.autoCrop",
+        label: "Sprite: Auto-Crop / Trim",
+        category: "Sprite",
+        keywords: ["crop", "trim", "bounds", "transparent"],
+        run: () => autoCropSpriteAction(),
+      },
+      {
+        id: "sprite.scaleSprite",
+        label: "Sprite: Scale Sprite...",
+        category: "Sprite",
+        keywords: ["scale", "resize", "nearest", "scale2x", "rotsprite"],
+        run: () => st().setFilterModalOpen(true, "scaleSprite"),
+      },
     ];
 
-    return [...toolCmds, ...viewCmds, ...editCmds, ...fileCmds, ...spriteCmds];
+    const filterCmds: ActionCommandEntry[] = [
+      {
+        id: "filter.open",
+        label: "Filter: Open Filters & Adjustments...",
+        category: "Filter",
+        keywords: ["filters", "adjustments", "effects"],
+        run: () => st().setFilterModalOpen(true, "outline"),
+      },
+      {
+        id: "filter.outline",
+        label: "Filter: Auto-Outline...",
+        category: "Filter",
+        keywords: ["outline", "border", "selective", "stroke"],
+        run: () => st().setFilterModalOpen(true, "outline"),
+      },
+      {
+        id: "filter.dropShadow",
+        label: "Filter: Drop Shadow...",
+        category: "Filter",
+        keywords: ["shadow", "drop", "offset"],
+        run: () => st().setFilterModalOpen(true, "dropShadow"),
+      },
+      {
+        id: "filter.hsv",
+        label: "Filter: HSV Adjust...",
+        category: "Filter",
+        keywords: ["hue", "saturation", "value", "color", "adjust"],
+        run: () => st().setFilterModalOpen(true, "hsv"),
+      },
+      {
+        id: "filter.colorReplace",
+        label: "Filter: Color Replace...",
+        category: "Filter",
+        keywords: ["replace", "swap", "color", "tolerance"],
+        run: () => st().setFilterModalOpen(true, "colorReplace"),
+      },
+      {
+        id: "filter.quantize",
+        label: "Filter: Quantize to Palette...",
+        category: "Filter",
+        keywords: ["quantize", "palette", "dither", "bayer", "floyd"],
+        run: () => st().setFilterModalOpen(true, "quantize"),
+      },
+      {
+        id: "filter.cleanup",
+        label: "Filter: Pixel Cleanup...",
+        category: "Filter",
+        keywords: ["cleanup", "orphan", "holes", "specks"],
+        run: () => st().setFilterModalOpen(true, "cleanup"),
+      },
+      {
+        id: "filter.offsetWrap",
+        label: "Filter: Offset / Wrap...",
+        category: "Filter",
+        keywords: ["offset", "wrap", "shift", "tile", "seamless"],
+        run: () => st().setFilterModalOpen(true, "offsetWrap"),
+      },
+      {
+        id: "filter.invert",
+        label: "Filter: Invert Colors",
+        category: "Filter",
+        keywords: ["invert", "negative", "rgb"],
+        run: () => {
+          applyBufferFilterAction("Invert Colors", "cel", (buf, mask) =>
+            applyInvertFilter(buf, mask)
+          );
+        },
+      },
+      {
+        id: "filter.desaturate",
+        label: "Filter: Desaturate",
+        category: "Filter",
+        keywords: ["desaturate", "grayscale", "greyscale", "luminance"],
+        run: () => {
+          applyBufferFilterAction("Desaturate", "cel", (buf, mask) =>
+            applyDesaturateFilter(buf, mask)
+          );
+        },
+      },
+    ];
+
+    return [
+      ...toolCmds,
+      ...viewCmds,
+      ...editCmds,
+      ...fileCmds,
+      ...spriteCmds,
+      ...filterCmds,
+    ];
   }, []);
 
   const results = useMemo(

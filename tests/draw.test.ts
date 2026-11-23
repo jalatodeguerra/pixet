@@ -65,6 +65,32 @@ import {
   computeTransformGizmo,
   type TransformState,
 } from "../src/engine/tools/transform.ts";
+import {
+  applyBrightnessContrast,
+  applyColorReplace,
+  applyDesaturateFilter,
+  applyDropShadowFilter,
+  applyHsvAdjust,
+  applyInvertFilter,
+  applyOutlineFilter,
+  applyPixelCleanupFilter,
+  applyQuantizeToPalette,
+} from "../src/engine/tools/filters.ts";
+import {
+  computeTightBounds,
+  cropBufferToBounds,
+  offsetWrapBuffer,
+  scaleBufferAlgorithm,
+} from "../src/engine/tools/spriteOps.ts";
+import { TileHistory } from "../src/engine/history/TileHistory.ts";
+import { pixelEngine } from "../src/engine/document/PixelEngine.ts";
+import {
+  applyBufferFilterAction,
+  autoCropSpriteAction,
+  scaleSpriteAction,
+} from "../src/engine/document/filterActions.ts";
+import { performRedo, performUndo } from "../src/engine/document/historyActions.ts";
+import { useEditorStore } from "../src/store/editorStore.ts";
 
 function makeCfg(overrides: Partial<BrushConfig> = {}): BrushConfig {
   return {
@@ -1607,4 +1633,424 @@ test("transform gizmo: geometry, corner/edge scale with aspect lock, 15deg snap 
   assert.equal(pivPatch.x, 4);
   assert.equal(pivPatch.y, 6);
 });
+
+test("D4 applyOutlineFilter: 4-way vs 8-way counts, inside vs outside, thickness, mask, and selective tinted outline", () => {
+  const countOpaque = (buf: PixelBuffer): number => {
+    let n = 0;
+    for (let i = 3; i < buf.data.length; i += 4) {
+      if (buf.data[i] > 0) n++;
+    }
+    return n;
+  };
+
+  // Single bright warm pixel at center of 7x7 canvas
+  const single = new PixelBuffer(7, 7);
+  single.setPixel(3, 3, 240, 120, 60, 255);
+  const singleBefore = new Uint8ClampedArray(single.data);
+
+  const out4 = applyOutlineFilter(single, {
+    thickness: 1,
+    connectivity: 4,
+    placement: "outside",
+    mode: "solid",
+    color: [0, 0, 0, 255],
+  });
+  // Input buffer must never be mutated
+  assert.deepEqual(single.data, singleBefore);
+  // 1 center + 4 cardinal = 5
+  assert.equal(countOpaque(out4), 5);
+  assert.deepEqual(out4.getPixel(3, 2), [0, 0, 0, 255]);
+  assert.deepEqual(out4.getPixel(2, 2), [0, 0, 0, 0]);
+
+  const out8 = applyOutlineFilter(single, {
+    thickness: 1,
+    connectivity: 8,
+    placement: "outside",
+    mode: "solid",
+    color: [0, 0, 0, 255],
+  });
+  // 1 center + 8 surrounding = 9
+  assert.equal(countOpaque(out8), 9);
+  assert.deepEqual(out8.getPixel(2, 2), [0, 0, 0, 255]);
+
+  // Thickness 2 with 4-way: 1 + 4 + 8 = 13
+  const out4t2 = applyOutlineFilter(single, {
+    thickness: 2,
+    connectivity: 4,
+    placement: "outside",
+    mode: "solid",
+    color: [10, 20, 30, 255],
+  });
+  assert.equal(countOpaque(out4t2), 13);
+
+  // Selective outline produces opaque border pixels darker than adjacent interior pixel
+  const sel = applyOutlineFilter(single, {
+    thickness: 1,
+    connectivity: 4,
+    placement: "outside",
+    mode: "selective",
+    color: [0, 0, 0, 255],
+  });
+  const neighbor = single.getPixel(3, 3);
+  const border = sel.getPixel(3, 2);
+  assert.equal(border[3], 255);
+  const luma = (c: RGBA) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  assert.ok(luma(border) < luma(neighbor));
+  assert.ok(border[2] > 0); // cool shadow shift retains blue component
+
+  // Inside outline on a 4x4 solid square inside a 6x6 canvas
+  const sq = new PixelBuffer(6, 6);
+  for (let y = 1; y <= 4; y++) {
+    for (let x = 1; x <= 4; x++) {
+      sq.setPixel(x, y, 200, 180, 100, 255);
+    }
+  }
+  const inside4 = applyOutlineFilter(sq, {
+    thickness: 1,
+    connectivity: 4,
+    placement: "inside",
+    mode: "solid",
+    color: [15, 15, 25, 255],
+  });
+  assert.equal(countOpaque(inside4), 16);
+  // Perimeter of 4x4 (12 px) receives outline color, inner 2x2 (4 px) stays original
+  assert.deepEqual(inside4.getPixel(1, 1), [15, 15, 25, 255]);
+  assert.deepEqual(inside4.getPixel(2, 2), [200, 180, 100, 255]);
+
+  // Mask restricts outside outline writes
+  const mask = createRectSelection(7, 7, 3, 2, 3, 2);
+  const masked = applyOutlineFilter(
+    single,
+    {
+      thickness: 1,
+      connectivity: 4,
+      placement: "outside",
+      mode: "solid",
+      color: [255, 0, 0, 255],
+    },
+    mask
+  );
+  assert.equal(countOpaque(masked), 2);
+  assert.deepEqual(masked.getPixel(3, 2), [255, 0, 0, 255]);
+  assert.deepEqual(masked.getPixel(4, 3), [0, 0, 0, 0]);
+});
+
+test("D4 applyDropShadowFilter: renders shadow at offset without overwriting foreground", () => {
+  const src = new PixelBuffer(6, 6);
+  src.setPixel(1, 1, 255, 0, 0, 255);
+  src.setPixel(2, 1, 0, 255, 0, 255);
+
+  const out = applyDropShadowFilter(src, {
+    offsetX: 1,
+    offsetY: 2,
+    color: [10, 20, 40, 255],
+    opacity: 50,
+  });
+
+  // Foreground stays crisp on top (even if shadow overlaps another foreground pixel)
+  assert.deepEqual(out.getPixel(1, 1), [255, 0, 0, 255]);
+  assert.deepEqual(out.getPixel(2, 1), [0, 255, 0, 255]);
+  // Shadow appears at (1+1, 1+2) = (2, 3) and (2+1, 1+2) = (3, 3)
+  const s1 = out.getPixel(2, 3);
+  assert.equal(s1[0], 10);
+  assert.equal(s1[1], 20);
+  assert.equal(s1[2], 40);
+  assert.ok(s1[3] >= 127 && s1[3] <= 128);
+  assert.deepEqual(out.getPixel(3, 3), s1);
+
+  // Overlapping shadow behind opaque foreground pixel does not alter foreground
+  const overlap = applyDropShadowFilter(src, {
+    offsetX: 1,
+    offsetY: 0,
+    color: [0, 0, 0, 255],
+    opacity: 100,
+  });
+  assert.deepEqual(overlap.getPixel(2, 1), [0, 255, 0, 255]);
+  assert.deepEqual(overlap.getPixel(3, 1), [0, 0, 0, 255]);
+});
+
+test("D4 applyHsvAdjust & applyBrightnessContrast: identity at 0, hue shift, brightness, and alpha preservation", () => {
+  const src = new PixelBuffer(3, 1);
+  src.setPixel(0, 0, 255, 0, 0, 200);
+  src.setPixel(1, 0, 100, 150, 200, 128);
+  src.setPixel(2, 0, 0, 0, 0, 0);
+
+  const hsvId = applyHsvAdjust(src, { hueDeg: 0, satDelta: 0, valDelta: 0 });
+  assert.deepEqual(hsvId.data, src.data);
+
+  // +120 deg hue shift turns pure red (255,0,0) into pure green (0,255,0) preserving alpha
+  const hueShifted = applyHsvAdjust(src, { hueDeg: 120, satDelta: 0, valDelta: 0 });
+  assert.deepEqual(hueShifted.getPixel(0, 0), [0, 255, 0, 200]);
+  assert.deepEqual(hueShifted.getPixel(2, 0), [0, 0, 0, 0]);
+
+  const bcId = applyBrightnessContrast(src, { brightness: 0, contrast: 0 });
+  assert.deepEqual(bcId.data, src.data);
+
+  const brighter = applyBrightnessContrast(src, { brightness: 20, contrast: 0 });
+  assert.ok(brighter.getPixel(1, 0)[0] > 100);
+  assert.ok(brighter.getPixel(1, 0)[1] > 150);
+  assert.ok(brighter.getPixel(1, 0)[2] > 200);
+  assert.equal(brighter.getPixel(1, 0)[3], 128);
+  assert.deepEqual(brighter.getPixel(2, 0), [0, 0, 0, 0]);
+});
+
+test("D4 applyColorReplace: exact and tolerance-based replacement", () => {
+  const src = new PixelBuffer(4, 1);
+  src.setPixel(0, 0, 100, 100, 100, 255);
+  src.setPixel(1, 0, 105, 96, 102, 255);
+  src.setPixel(2, 0, 120, 100, 100, 255);
+  src.setPixel(3, 0, 100, 100, 100, 0);
+
+  const exact = applyColorReplace(src, {
+    fromRgba: [100, 100, 100, 255],
+    toRgba: [10, 20, 30, 255],
+    tolerance: 0,
+  });
+  assert.deepEqual(exact.getPixel(0, 0), [10, 20, 30, 255]);
+  assert.deepEqual(exact.getPixel(1, 0), [105, 96, 102, 255]);
+  assert.deepEqual(exact.getPixel(3, 0), [100, 100, 100, 0]);
+
+  const tol10 = applyColorReplace(src, {
+    fromRgba: [100, 100, 100, 255],
+    toRgba: [10, 20, 30, 255],
+    tolerance: 10,
+  });
+  assert.deepEqual(tol10.getPixel(0, 0), [10, 20, 30, 255]);
+  assert.deepEqual(tol10.getPixel(1, 0), [10, 20, 30, 255]); // max diff is 5 <= 10
+  assert.deepEqual(tol10.getPixel(2, 0), [120, 100, 100, 255]); // diff is 20 > 10
+});
+
+test("D4 applyQuantizeToPalette: none, bayer4, and floydSteinberg emit only palette colors", () => {
+  const palette: RGBA[] = [
+    [0, 0, 0, 255],
+    [255, 255, 255, 255],
+    [255, 0, 0, 255],
+    [0, 0, 255, 255],
+  ];
+  const src = new PixelBuffer(8, 4);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 8; x++) {
+      if (x === 7 && y === 3) continue; // keep one transparent pixel
+      src.setPixel(x, y, Math.round((x / 7) * 255), Math.round((y / 3) * 128), 110, 200);
+    }
+  }
+
+  const paletteSet = new Set(palette.map((c) => `${c[0]},${c[1]},${c[2]}`));
+
+  for (const dither of ["none", "bayer4", "floydSteinberg"] as const) {
+    const q = applyQuantizeToPalette(src, { palette, dither });
+    assert.deepEqual(q.getPixel(7, 3), [0, 0, 0, 0]);
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 8; x++) {
+        if (x === 7 && y === 3) continue;
+        const p = q.getPixel(x, y);
+        assert.equal(p[3], 200);
+        assert.ok(paletteSet.has(`${p[0]},${p[1]},${p[2]}`), `${dither} emitted non-palette color`);
+      }
+    }
+  }
+
+  // Empty palette returns clone
+  const emptyPal = applyQuantizeToPalette(src, { palette: [], dither: "floydSteinberg" });
+  assert.deepEqual(emptyPal.data, src.data);
+});
+
+test("D4 applyInvertFilter, applyDesaturateFilter, and applyPixelCleanupFilter", () => {
+  const src = new PixelBuffer(7, 7);
+  // 3x3 ring around (3,3) hole
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 2; x <= 4; x++) {
+      if (x === 3 && y === 3) continue;
+      src.setPixel(x, y, 200, 100, 40, 180);
+    }
+  }
+  // True orphan pixel at (0, 0) with 0 opaque 8-neighbors
+  src.setPixel(0, 0, 10, 20, 30, 255);
+
+  const inv = applyInvertFilter(src);
+  assert.deepEqual(inv.getPixel(0, 0), [245, 235, 225, 255]);
+  assert.deepEqual(inv.getPixel(2, 2), [55, 155, 215, 180]);
+  assert.deepEqual(inv.getPixel(3, 3), [0, 0, 0, 0]);
+
+  const desat = applyDesaturateFilter(src);
+  const expectedLuma = Math.round(0.2126 * 200 + 0.7152 * 100 + 0.0722 * 40);
+  assert.deepEqual(desat.getPixel(2, 2), [expectedLuma, expectedLuma, expectedLuma, 180]);
+  assert.deepEqual(desat.getPixel(3, 3), [0, 0, 0, 0]);
+
+  const cleaned = applyPixelCleanupFilter(src, {
+    removeOrphans: true,
+    fillHoles: true,
+  });
+  assert.deepEqual(cleaned.getPixel(0, 0), [0, 0, 0, 0]);
+  assert.deepEqual(cleaned.getPixel(3, 3), [200, 100, 40, 180]);
+});
+
+test("D4 spriteOps: computeTightBounds, cropBufferToBounds, offsetWrapBuffer, and scaleBufferAlgorithm", () => {
+  const emptyA = new PixelBuffer(8, 8);
+  const emptyB = new PixelBuffer(8, 8);
+  assert.equal(computeTightBounds([emptyA, emptyB]), null);
+
+  const bufA = new PixelBuffer(8, 8);
+  bufA.setPixel(2, 3, 255, 0, 0, 255);
+  const bufB = new PixelBuffer(8, 8);
+  bufB.setPixel(5, 6, 0, 255, 0, 255);
+
+  const bounds = computeTightBounds([bufA, bufB]);
+  assert.deepEqual(bounds, { x: 2, y: 3, width: 4, height: 4 });
+
+  const cropped = cropBufferToBounds(bufA, bounds!);
+  assert.equal(cropped.width, 4);
+  assert.equal(cropped.height, 4);
+  assert.deepEqual(cropped.getPixel(0, 0), [255, 0, 0, 255]);
+  assert.deepEqual(cropped.getPixel(3, 3), [0, 0, 0, 0]);
+
+  // offsetWrapBuffer round-trip (+dx, +dy) then (-dx, -dy) === exact identity
+  const pat = new PixelBuffer(6, 5);
+  for (let y = 0; y < 5; y++) {
+    for (let x = 0; x < 6; x++) {
+      pat.setPixel(x, y, x * 40, y * 50, (x + y) * 20, 255);
+    }
+  }
+  const shifted = offsetWrapBuffer(pat, 4, -3);
+  assert.deepEqual(shifted.getPixel(4, 2), pat.getPixel(0, 0));
+  const roundTrip = offsetWrapBuffer(shifted, -4, 3);
+  assert.deepEqual(roundTrip.data, pat.data);
+
+  // Masked offsetWrapBuffer only shifts inside mask bounds
+  const subMask = createRectSelection(6, 5, 1, 1, 3, 2); // 3x2 box
+  const maskedShift = offsetWrapBuffer(pat, 1, 0, subMask);
+  assert.deepEqual(maskedShift.getPixel(0, 0), pat.getPixel(0, 0));
+  assert.deepEqual(maskedShift.getPixel(2, 1), pat.getPixel(1, 1));
+  assert.deepEqual(maskedShift.getPixel(1, 1), pat.getPixel(3, 1));
+
+  // scaleBufferAlgorithm: clamping and upscaling via nearest / scale2x / rotsprite
+  const small = new PixelBuffer(2, 2);
+  small.setPixel(0, 0, 255, 0, 0, 255);
+  small.setPixel(1, 0, 0, 255, 0, 255);
+  small.setPixel(0, 1, 0, 0, 255, 255);
+  small.setPixel(1, 1, 255, 255, 0, 255);
+
+  const clampedMin = scaleBufferAlgorithm(small, 0, -5, "nearest");
+  assert.equal(clampedMin.width, 1);
+  assert.equal(clampedMin.height, 1);
+
+  const clampedMax = scaleBufferAlgorithm(small, 9999, 4, "nearest");
+  assert.equal(clampedMax.width, 2048);
+  assert.equal(clampedMax.height, 4);
+
+  const upNearest = scaleBufferAlgorithm(small, 4, 4, "nearest");
+  assert.deepEqual(upNearest.getPixel(0, 0), [255, 0, 0, 255]);
+  assert.deepEqual(upNearest.getPixel(3, 3), [255, 255, 0, 255]);
+
+  const upScale2x = scaleBufferAlgorithm(small, 4, 4, "scale2x");
+  assert.equal(upScale2x.width, 4);
+  assert.equal(upScale2x.height, 4);
+  assert.deepEqual(upScale2x.getPixel(0, 0), [255, 0, 0, 255]);
+
+  const upRotsprite = scaleBufferAlgorithm(small, 6, 6, "rotsprite");
+  assert.equal(upRotsprite.width, 6);
+  assert.equal(upRotsprite.height, 6);
+  assert.deepEqual(upRotsprite.getPixel(5, 5), [255, 255, 0, 255]);
+});
+
+test("D4-UI: TileHistory multi-cel atomic undo/redo and filterActions scope/auto-crop/scale", () => {
+  const hist = new TileHistory(20);
+  const celA = new PixelBuffer(8, 8);
+  const celB = new PixelBuffer(8, 8);
+  celA.setPixel(1, 1, 10, 20, 30, 255);
+  celB.setPixel(2, 2, 40, 50, 60, 255);
+
+  hist.beginMultiCelTransaction("Batch Invert");
+  hist.captureMultiCel("layer-a", 0, celA);
+  hist.captureMultiCel("layer-a", 1, celB);
+  celA.setPixel(1, 1, 245, 235, 225, 255);
+  celB.setPixel(2, 2, 215, 205, 195, 255);
+  assert.equal(hist.commitMultiCelTransaction(), true);
+
+  const undone = hist.undo((_layerId, frame) => (frame === 0 ? celA : celB));
+  assert.ok(undone);
+  assert.deepEqual(celA.getPixel(1, 1), [10, 20, 30, 255]);
+  assert.deepEqual(celB.getPixel(2, 2), [40, 50, 60, 255]);
+
+  const redone = hist.redo((_layerId, frame) => (frame === 0 ? celA : celB));
+  assert.ok(redone);
+  assert.deepEqual(celA.getPixel(1, 1), [245, 235, 225, 255]);
+  assert.deepEqual(celB.getPixel(2, 2), [215, 205, 195, 255]);
+
+  // Test applyBufferFilterAction across "layer" scope with single-step performUndo/performRedo
+  pixelEngine.resetForDocument(16, 16);
+  useEditorStore.getState().loadProjectState({
+    documentName: "filter-test.pixet",
+    filePath: null,
+    canvasWidth: 16,
+    canvasHeight: 16,
+    colorMode: "RGBA",
+    paletteName: "Default",
+    palette: ["#000000", "#ffffff"],
+    layers: [
+      {
+        id: "layer-1",
+        name: "Layer 1",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        cels: { 0: true, 1: true },
+      },
+    ],
+    frames: [
+      { id: "f0", index: 0, durationMs: 100 },
+      { id: "f1", index: 1, durationMs: 100 },
+    ],
+    tags: [],
+  });
+
+  const f0 = pixelEngine.getOrCreateCel("layer-1", 0);
+  const f1 = pixelEngine.getOrCreateCel("layer-1", 1);
+  f0.setPixel(4, 5, 10, 20, 30, 255);
+  f1.setPixel(8, 9, 100, 120, 140, 255);
+
+  const ok = applyBufferFilterAction("Invert Colors", "layer", (buf, mask) =>
+    applyInvertFilter(buf, mask)
+  );
+  assert.equal(ok, true);
+  assert.deepEqual(f0.getPixel(4, 5), [245, 235, 225, 255]);
+  assert.deepEqual(f1.getPixel(8, 9), [155, 135, 115, 255]);
+  assert.equal(useEditorStore.getState().canUndo, true);
+
+  performUndo();
+  assert.deepEqual(f0.getPixel(4, 5), [10, 20, 30, 255]);
+  assert.deepEqual(f1.getPixel(8, 9), [100, 120, 140, 255]);
+
+  performRedo();
+  assert.deepEqual(f0.getPixel(4, 5), [245, 235, 225, 255]);
+  assert.deepEqual(f1.getPixel(8, 9), [155, 135, 115, 255]);
+
+  // Test autoCropSpriteAction and scaleSpriteAction
+  const croppedOk = autoCropSpriteAction();
+  assert.equal(croppedOk, true);
+  assert.equal(pixelEngine.width, 5);
+  assert.equal(pixelEngine.height, 5);
+  assert.equal(useEditorStore.getState().canvasWidth, 5);
+  assert.equal(useEditorStore.getState().canvasHeight, 5);
+
+  const scaledOk = scaleSpriteAction(10, 10, "nearest");
+  assert.equal(scaledOk, true);
+  assert.equal(pixelEngine.width, 10);
+  assert.equal(pixelEngine.height, 10);
+  assert.equal(useEditorStore.getState().canvasWidth, 10);
+  assert.equal(useEditorStore.getState().canvasHeight, 10);
+
+  // Store filterModal state check
+  useEditorStore.getState().setFilterModalOpen(true, "dropShadow");
+  assert.equal(useEditorStore.getState().filterModalOpen, true);
+  assert.equal(useEditorStore.getState().filterModalTab, "dropShadow");
+  useEditorStore.getState().setFilterModalOpen(false);
+  assert.equal(useEditorStore.getState().filterModalOpen, false);
+});
+
+
 

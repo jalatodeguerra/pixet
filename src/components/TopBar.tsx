@@ -28,6 +28,7 @@ import {
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
 import { beginFreeTransformAction } from "../engine/document/transformActions";
+import { autoCropSpriteAction } from "../engine/document/filterActions";
 import {
   addEmptyFrameAction,
   duplicateCurrentFrameAction,
@@ -116,6 +117,7 @@ export function TopBar() {
   const setRotate3dModalOpen = useEditorStore((s) => s.setRotate3dModalOpen);
   const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
   const setCanvasSizeModalOpen = useEditorStore((s) => s.setCanvasSizeModalOpen);
+  const setFilterModalOpen = useEditorStore((s) => s.setFilterModalOpen);
 
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
   const menuStripRef = useRef<HTMLDivElement>(null);
@@ -205,6 +207,13 @@ export function TopBar() {
       { label: "New Layer", action: () => { addLayer(); setOpenMenu(null); } },
       { label: "New Frame", action: () => { addEmptyFrameAction(); setOpenMenu(null); } },
       { label: "Duplicate Frame", action: () => { duplicateCurrentFrameAction(); setOpenMenu(null); } },
+      { label: "Filters & Adjustments...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "outline"); } },
+      { label: "Auto-Outline...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "outline"); } },
+      { label: "Drop Shadow...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "dropShadow"); } },
+      { label: "Color Replace...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "colorReplace"); } },
+      { label: "Offset / Wrap...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "offsetWrap"); } },
+      { label: "Scale Sprite...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "scaleSprite"); } },
+      { label: "Auto-Crop / Trim", action: () => { autoCropSpriteAction(); setOpenMenu(null); } },
       { label: "3D Rotate & Turntable...", shortcut: "Ctrl+3", action: () => { setOpenMenu(null); setRotate3dModalOpen(true); } },
       { label: "Canvas Size...", action: () => { setOpenMenu(null); setCanvasSizeModalOpen(true); } },
     ],

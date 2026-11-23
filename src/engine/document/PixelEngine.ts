@@ -254,6 +254,31 @@ export class PixelEngine {
     this.emitChange();
   }
 
+  applyResizedCanvasDimensions(newWidth: number, newHeight: number): void {
+    const w = Math.max(1, Math.min(2048, Math.round(newWidth)));
+    const h = Math.max(1, Math.min(2048, Math.round(newHeight)));
+
+    const cols = Math.max(1, Math.ceil(w / this.tileset.tileWidth));
+    const rows = Math.max(1, Math.ceil(h / this.tileset.tileHeight));
+    for (const tm of this.tilemaps.values()) {
+      tm.resize(cols, rows);
+    }
+
+    this.width = w;
+    this.height = h;
+    const byteLen = w * h * 4;
+    this.compositeBuffer = new Uint8ClampedArray(byteLen);
+    this.overlayBuffer = new PixelBuffer(w, h);
+    this.onionBuffer = new Uint8ClampedArray(byteLen);
+    this.onionScratch = new Uint8ClampedArray(byteLen);
+    this.selection = null;
+    this.floating = null;
+    this.history.clear();
+    this.undoCoordinator.clear();
+    this.rigDeformCache.clear();
+    this.emitChange();
+  }
+
   private celKey(layerId: string, frameIndex: number): string {
     return `${layerId}:${frameIndex}`;
   }

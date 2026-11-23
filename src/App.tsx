@@ -4,6 +4,7 @@ import { CanvasSizeModal } from "./components/CanvasSizeModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportModal } from "./components/ExportModal";
+import { FilterModal } from "./components/draw/FilterModal";
 import { RigExportModal } from "./components/rig/RigExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { NewSpriteModal } from "./components/NewSpriteModal";
@@ -644,6 +645,7 @@ export function App() {
       <ImportImageModal />
       <NewSpriteModal />
       <CanvasSizeModal />
+      <FilterModal />
       <ImportTilesetModal />
       <CommandPalette />
       <ContextMenu />

@@ -13,11 +13,18 @@ export interface TileDelta {
   after: Uint8ClampedArray;
 }
 
+export interface CelDelta {
+  layerId: string;
+  frameIndex: number;
+  tiles: TileDelta[];
+}
+
 export interface HistoryEntry {
   label: string;
   layerId: string;
   frameIndex: number;
   tiles: TileDelta[];
+  celDeltas?: CelDelta[];
 }
 
 interface PendingTile {
@@ -35,6 +42,18 @@ interface ActiveTransaction {
   layerId: string;
   frameIndex: number;
   tiles: Map<string, PendingTile>;
+}
+
+interface PendingMultiCel {
+  layerId: string;
+  frameIndex: number;
+  buffer: PixelBuffer;
+  tiles: Map<string, PendingTile>;
+}
+
+interface ActiveMultiCelTransaction {
+  label: string;
+  cels: PendingMultiCel[];
 }
 
 function copyRegion(
@@ -77,10 +96,34 @@ function buffersEqual(a: Uint8ClampedArray, b: Uint8ClampedArray): boolean {
   return true;
 }
 
+function captureAllBufferTiles(buffer: PixelBuffer): Map<string, PendingTile> {
+  const tiles = new Map<string, PendingTile>();
+  for (let ty = 0; ty * TILE_SIZE < buffer.height; ty++) {
+    for (let tx = 0; tx * TILE_SIZE < buffer.width; tx++) {
+      const tileX = tx * TILE_SIZE;
+      const tileY = ty * TILE_SIZE;
+      const w = Math.min(TILE_SIZE, buffer.width - tileX);
+      const h = Math.min(TILE_SIZE, buffer.height - tileY);
+      const before = copyRegion(buffer, tileX, tileY, w, h);
+      tiles.set(`${tx},${ty}`, {
+        tx,
+        ty,
+        x: tileX,
+        y: tileY,
+        w,
+        h,
+        before,
+      });
+    }
+  }
+  return tiles;
+}
+
 export class TileHistory {
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
   private activeTx: ActiveTransaction | null = null;
+  private activeMultiTx: ActiveMultiCelTransaction | null = null;
   private readonly maxEntries: number;
   onCommit?: () => void;
 
@@ -97,7 +140,7 @@ export class TileHistory {
   }
 
   get hasActiveTransaction(): boolean {
-    return this.activeTx !== null;
+    return this.activeTx !== null || this.activeMultiTx !== null;
   }
 
   beginTransaction(layerId: string, frameIndex: number, label: string): void {
@@ -107,6 +150,89 @@ export class TileHistory {
       frameIndex,
       tiles: new Map(),
     };
+  }
+
+  beginMultiCelTransaction(label: string): void {
+    this.activeMultiTx = {
+      label,
+      cels: [],
+    };
+  }
+
+  captureMultiCel(
+    layerId: string,
+    frameIndex: number,
+    buffer: PixelBuffer
+  ): void {
+    if (!this.activeMultiTx) return;
+    if (
+      this.activeMultiTx.cels.some(
+        (c) => c.layerId === layerId && c.frameIndex === frameIndex
+      )
+    ) {
+      return;
+    }
+    this.activeMultiTx.cels.push({
+      layerId,
+      frameIndex,
+      buffer,
+      tiles: captureAllBufferTiles(buffer),
+    });
+  }
+
+  commitMultiCelTransaction(): boolean {
+    if (!this.activeMultiTx) return false;
+    const tx = this.activeMultiTx;
+    this.activeMultiTx = null;
+
+    const celDeltas: CelDelta[] = [];
+    for (const pendingCel of tx.cels) {
+      const changedTiles: TileDelta[] = [];
+      for (const pending of pendingCel.tiles.values()) {
+        const after = copyRegion(
+          pendingCel.buffer,
+          pending.x,
+          pending.y,
+          pending.w,
+          pending.h
+        );
+        if (!buffersEqual(pending.before, after)) {
+          changedTiles.push({
+            ...pending,
+            after,
+          });
+        }
+      }
+      if (changedTiles.length > 0) {
+        celDeltas.push({
+          layerId: pendingCel.layerId,
+          frameIndex: pendingCel.frameIndex,
+          tiles: changedTiles,
+        });
+      }
+    }
+
+    if (celDeltas.length === 0) return false;
+
+    this.undoStack.push({
+      label: tx.label,
+      layerId: celDeltas[0].layerId,
+      frameIndex: celDeltas[0].frameIndex,
+      tiles: [],
+      celDeltas,
+    });
+
+    if (this.undoStack.length > this.maxEntries) {
+      this.undoStack.shift();
+    }
+
+    this.redoStack.length = 0;
+    this.onCommit?.();
+    return true;
+  }
+
+  cancelMultiCelTransaction(): void {
+    this.activeMultiTx = null;
   }
 
   capturePixelTile(buffer: PixelBuffer, x: number, y: number): void {
@@ -212,9 +338,18 @@ export class TileHistory {
     const entry = this.undoStack.pop();
     if (!entry) return null;
 
-    const buffer = getBuffer(entry.layerId, entry.frameIndex);
-    for (const tile of entry.tiles) {
-      writeRegion(buffer, tile.x, tile.y, tile.w, tile.h, tile.before);
+    if (entry.celDeltas && entry.celDeltas.length > 0) {
+      for (const celDelta of entry.celDeltas) {
+        const buffer = getBuffer(celDelta.layerId, celDelta.frameIndex);
+        for (const tile of celDelta.tiles) {
+          writeRegion(buffer, tile.x, tile.y, tile.w, tile.h, tile.before);
+        }
+      }
+    } else {
+      const buffer = getBuffer(entry.layerId, entry.frameIndex);
+      for (const tile of entry.tiles) {
+        writeRegion(buffer, tile.x, tile.y, tile.w, tile.h, tile.before);
+      }
     }
 
     this.redoStack.push(entry);
@@ -231,9 +366,18 @@ export class TileHistory {
     const entry = this.redoStack.pop();
     if (!entry) return null;
 
-    const buffer = getBuffer(entry.layerId, entry.frameIndex);
-    for (const tile of entry.tiles) {
-      writeRegion(buffer, tile.x, tile.y, tile.w, tile.h, tile.after);
+    if (entry.celDeltas && entry.celDeltas.length > 0) {
+      for (const celDelta of entry.celDeltas) {
+        const buffer = getBuffer(celDelta.layerId, celDelta.frameIndex);
+        for (const tile of celDelta.tiles) {
+          writeRegion(buffer, tile.x, tile.y, tile.w, tile.h, tile.after);
+        }
+      }
+    } else {
+      const buffer = getBuffer(entry.layerId, entry.frameIndex);
+      for (const tile of entry.tiles) {
+        writeRegion(buffer, tile.x, tile.y, tile.w, tile.h, tile.after);
+      }
     }
 
     this.undoStack.push(entry);
@@ -248,5 +392,6 @@ export class TileHistory {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.activeTx = null;
+    this.activeMultiTx = null;
   }
 }
