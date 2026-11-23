@@ -3,7 +3,10 @@ import { computeAimLocalAngleDeg, solveFabrik } from "./constraints.ts";
 import type { PixelCleanupOptions } from "./pixelCleanup.ts";
 import type { RigMesh, RigMeshKeyframe } from "./mesh.ts";
 import {
-  autoAssignWeights,
+  computeAutoWeightsV2,
+  type AutoWeightV2Options,
+} from "./autoWeights.ts";
+import {
   normalizeInfluences,
   paintWeightBrush,
   type WeightBrushMode,
@@ -43,6 +46,10 @@ export interface Bone {
   minAngleDeg?: number;
   /** Local rotation upper bound in degrees, applied to procedural motion. */
   maxAngleDeg?: number;
+  /** Capsule envelope radius in pixels for envelope auto-weighting. */
+  envelopeRadius?: number;
+  /** Locks this bone's painted weights against overwrite during auto-weighting & painting. */
+  weightLocked?: boolean;
 }
 
 export interface BonePose {
@@ -1058,6 +1065,8 @@ export class RigState {
     locked?: boolean;
     minAngleDeg?: number;
     maxAngleDeg?: number;
+    envelopeRadius?: number;
+    weightLocked?: boolean;
   }): Bone {
     const num = this.nextBoneNum++;
     const bone: Bone = {
@@ -1077,6 +1086,12 @@ export class RigState {
     if (partial.locked !== undefined) bone.locked = partial.locked;
     if (partial.minAngleDeg !== undefined) bone.minAngleDeg = partial.minAngleDeg;
     if (partial.maxAngleDeg !== undefined) bone.maxAngleDeg = partial.maxAngleDeg;
+    if (partial.envelopeRadius !== undefined) {
+      bone.envelopeRadius = Math.max(1, partial.envelopeRadius);
+    }
+    if (partial.weightLocked !== undefined) {
+      bone.weightLocked = partial.weightLocked;
+    }
     this.bones.push(bone);
     this.invalidateEvaluation();
     return bone;
@@ -1111,6 +1126,14 @@ export class RigState {
     if ("maxAngleDeg" in patch) {
       if (patch.maxAngleDeg === undefined) delete bone.maxAngleDeg;
       else bone.maxAngleDeg = patch.maxAngleDeg;
+    }
+    if ("envelopeRadius" in patch) {
+      if (patch.envelopeRadius === undefined) delete bone.envelopeRadius;
+      else bone.envelopeRadius = Math.max(1, patch.envelopeRadius);
+    }
+    if ("weightLocked" in patch) {
+      if (patch.weightLocked === undefined) delete bone.weightLocked;
+      else bone.weightLocked = patch.weightLocked;
     }
     this.invalidateEvaluation();
   }
@@ -1263,7 +1286,14 @@ export class RigState {
    * Smooth auto weights: distance-to-bone-segment falloff, top-4 influences
    * per opaque pixel, normalized to 1.
    */
-  autoAssignBoneWeights(src: PixelBuffer, frame = 0): void {
+  autoAssignBoneWeights(
+    src: PixelBuffer,
+    frame = 0,
+    options: Omit<AutoWeightV2Options, "existingWeights" | "targetBoneIds"> & {
+      targetBoneIds?: readonly string[];
+    } = {}
+  ): void {
+    const existingWeights = this.getBoneWeights();
     this.boneMasks.clear();
     this.skinWeights = null;
     if (this.bones.length === 0) {
@@ -1284,9 +1314,18 @@ export class RigState {
         y: transform.y,
         tipX: transform.tipX,
         tipY: transform.tipY,
+        envelopeRadius: bone.envelopeRadius,
+        weightLocked: bone.weightLocked,
       }));
 
-    const weights = autoAssignWeights(src, autoBones);
+    const weights = computeAutoWeightsV2(src, autoBones, {
+      ...options,
+      method: options.method ?? "geodesic",
+      existingWeights,
+      targetBoneIds: options.targetBoneIds
+        ? new Set(options.targetBoneIds)
+        : null,
+    });
     this.skinWeights = weights;
     this.cachedWeights = weights;
     this.cachedWeightsRevision = this.revision;

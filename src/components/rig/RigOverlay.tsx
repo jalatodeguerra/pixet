@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { pixelEngine } from "../../engine/document/PixelEngine";
+import { defaultEnvelopeRadius } from "../../engine/rig/autoWeights";
 import { useEditorStore } from "../../store/editorStore";
 import {
   buildConstraintTargetShapes,
@@ -33,6 +34,7 @@ export function RigOverlay({
   const onionSkin = useEditorStore((s) => s.onionSkin);
   const onionPrevFrames = useEditorStore((s) => s.onionPrevFrames);
   const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
+  const rigAutoWeightMethod = useEditorStore((s) => s.rigAutoWeightMethod);
   const frames = useEditorStore((s) => s.frames);
 
   const shapes = useMemo(() => {
@@ -123,6 +125,35 @@ export function RigOverlay({
   const ringRadius = GIZMO_RING_RADIUS_PX / safeZoom;
   const handleHalf = GIZMO_HANDLE_SIZE_PX / safeZoom / 2;
   const selected = shapes.find((shape) => shape.primarySelected && !shape.locked);
+  const selectedEnvelope = (() => {
+    if (!selected || rigAutoWeightMethod !== "envelope") return null;
+    const bone = pixelEngine.rig.bones.find((b) => b.id === selected.id);
+    const r =
+      bone?.envelopeRadius ??
+      defaultEnvelopeRadius({
+        x: selected.x,
+        y: selected.y,
+        tipX: selected.tipX,
+        tipY: selected.tipY,
+      });
+    const dx = selected.tipX - selected.x;
+    const dy = selected.tipY - selected.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-4) {
+      return { kind: "circle" as const, cx: selected.x, cy: selected.y, r };
+    }
+    const nx = (-dy / len) * r;
+    const ny = (dx / len) * r;
+    const d = [
+      `M ${selected.x + nx} ${selected.y + ny}`,
+      `L ${selected.tipX + nx} ${selected.tipY + ny}`,
+      `A ${r} ${r} 0 0 0 ${selected.tipX - nx} ${selected.tipY - ny}`,
+      `L ${selected.x - nx} ${selected.y - ny}`,
+      `A ${r} ${r} 0 0 0 ${selected.x + nx} ${selected.y + ny}`,
+      "Z",
+    ].join(" ");
+    return { kind: "path" as const, d };
+  })();
 
   return (
     <svg
@@ -166,6 +197,32 @@ export function RigOverlay({
           />
         </g>
       ))}
+
+      {selectedEnvelope && (
+        <g style={{ pointerEvents: "none" }}>
+          {selectedEnvelope.kind === "circle" ? (
+            <circle
+              cx={selectedEnvelope.cx}
+              cy={selectedEnvelope.cy}
+              r={selectedEnvelope.r}
+              fill="none"
+              stroke="var(--accent, #4ec9b0)"
+              strokeWidth={1.2 / safeZoom}
+              strokeDasharray={`${3 / safeZoom} ${2 / safeZoom}`}
+              strokeOpacity={0.85}
+            />
+          ) : (
+            <path
+              d={selectedEnvelope.d}
+              fill="none"
+              stroke="var(--accent, #4ec9b0)"
+              strokeWidth={1.2 / safeZoom}
+              strokeDasharray={`${3 / safeZoom} ${2 / safeZoom}`}
+              strokeOpacity={0.85}
+            />
+          )}
+        </g>
+      )}
 
       {selected && (
         <g key={`gizmo-${selected.id}`}>

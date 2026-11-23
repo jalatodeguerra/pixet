@@ -5,6 +5,7 @@ import type { AutoTileMode } from "../engine/tiles/autoTile";
 import type { CellFlags } from "../engine/tiles/cell";
 import type { TileTool } from "../components/tiles/tileTools";
 import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
+import type { AutoWeightMethod } from "../engine/rig/autoWeights";
 import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
 import {
   bringPanelToFrontState,
@@ -370,6 +371,16 @@ interface EditorState {
   rigWeightFalloff: WeightFalloff;
   /** R6 influence overlay: selected-bone heatmap or per-bone colors. */
   rigWeightOverlay: RigWeightOverlayMode;
+  /** W0 smart auto-weight solver method. */
+  rigAutoWeightMethod: AutoWeightMethod;
+  /** W0 falloff power (0.5..6). */
+  rigAutoWeightPower: number;
+  /** W0 color-boundary respect penalty (0..2). */
+  rigAutoWeightColorPenalty: number;
+  /** W0 auto-weight only currently selected bone(s). */
+  rigAutoWeightSelectedOnly: boolean;
+  /** W0 clip auto-weight to active pixel selection mask when present. */
+  rigAutoWeightRespectSelection: boolean;
   /** R6 post-deformation pixel cleanup toggles. */
   rigCleanupOrphans: boolean;
   rigCleanupHoles: boolean;
@@ -651,6 +662,11 @@ interface EditorState {
   setRigWeightMode: (mode: WeightBrushMode) => void;
   setRigWeightFalloff: (falloff: WeightFalloff) => void;
   setRigWeightOverlay: (mode: RigWeightOverlayMode) => void;
+  setRigAutoWeightMethod: (method: AutoWeightMethod) => void;
+  setRigAutoWeightPower: (power: number) => void;
+  setRigAutoWeightColorPenalty: (penalty: number) => void;
+  toggleRigAutoWeightSelectedOnly: () => void;
+  toggleRigAutoWeightRespectSelection: () => void;
   toggleRigCleanupOrphans: () => void;
   toggleRigCleanupHoles: () => void;
   toggleRigCleanupPaletteLock: () => void;
@@ -942,6 +958,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigWeightMode: "add",
   rigWeightFalloff: "linear",
   rigWeightOverlay: "heatmap",
+  rigAutoWeightMethod: "geodesic",
+  rigAutoWeightPower: 2,
+  rigAutoWeightColorPenalty: 0.35,
+  rigAutoWeightSelectedOnly: false,
+  rigAutoWeightRespectSelection: true,
   rigCleanupOrphans: false,
   rigCleanupHoles: false,
   rigCleanupPaletteLock: false,
@@ -2146,6 +2167,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRigWeightMode: (rigWeightMode) => set({ rigWeightMode }),
   setRigWeightFalloff: (rigWeightFalloff) => set({ rigWeightFalloff }),
   setRigWeightOverlay: (rigWeightOverlay) => set({ rigWeightOverlay }),
+  setRigAutoWeightMethod: (rigAutoWeightMethod) => set({ rigAutoWeightMethod }),
+  setRigAutoWeightPower: (power) =>
+    set({ rigAutoWeightPower: Math.max(0.5, Math.min(6, power)) }),
+  setRigAutoWeightColorPenalty: (penalty) =>
+    set({ rigAutoWeightColorPenalty: Math.max(0, Math.min(2, penalty)) }),
+  toggleRigAutoWeightSelectedOnly: () =>
+    set((s) => ({ rigAutoWeightSelectedOnly: !s.rigAutoWeightSelectedOnly })),
+  toggleRigAutoWeightRespectSelection: () =>
+    set((s) => ({
+      rigAutoWeightRespectSelection: !s.rigAutoWeightRespectSelection,
+    })),
   toggleRigCleanupOrphans: () =>
     set((s) => ({ rigCleanupOrphans: !s.rigCleanupOrphans })),
   toggleRigCleanupHoles: () =>
