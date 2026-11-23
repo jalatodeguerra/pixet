@@ -62,6 +62,7 @@ import {
   computePivotTransformPatch,
   computeRotateTransformPatch,
   computeScaleTransformPatch,
+  computeSkewTransformPatch,
   computeTransformGizmo,
   type TransformState,
 } from "../src/engine/tools/transform.ts";
@@ -1678,6 +1679,49 @@ test("transform gizmo: geometry, corner/edge scale with aspect lock, 15deg snap 
   assert.equal(pivPatch.pivotY, 0);
   assert.equal(pivPatch.x, 4);
   assert.equal(pivPatch.y, 6);
+
+  // Edge skew (Ctrl+Drag): n/s adjusts skewX, e/w adjusts skewY, clamped to -2..2
+  const skewS = computeSkewTransformPatch(
+    10,
+    8,
+    baseState,
+    "s",
+    { x: 9, y: 14 },
+    { x: 13, y: 14 }
+  );
+  assert.equal(skewS.skewX, 0.5);
+  assert.equal(skewS.skewY, undefined);
+
+  const skewN = computeSkewTransformPatch(
+    10,
+    8,
+    baseState,
+    "n",
+    { x: 9, y: 6 },
+    { x: 13, y: 6 }
+  );
+  assert.equal(skewN.skewX, -0.5);
+
+  const skewE = computeSkewTransformPatch(
+    10,
+    8,
+    baseState,
+    "e",
+    { x: 14, y: 10 },
+    { x: 14, y: 15 }
+  );
+  assert.equal(skewE.skewY, 0.5);
+  assert.equal(skewE.skewX, undefined);
+
+  const skewWClamp = computeSkewTransformPatch(
+    10,
+    8,
+    baseState,
+    "w",
+    { x: 4, y: 10 },
+    { x: 4, y: -100 }
+  );
+  assert.equal(skewWClamp.skewY, 2);
 });
 
 test("D4 applyOutlineFilter: 4-way vs 8-way counts, inside vs outside, thickness, mask, and selective tinted outline", () => {

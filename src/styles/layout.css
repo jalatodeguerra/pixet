@@ -2958,21 +2958,29 @@
 .draw-ruler-guide-mark-h {
   position: absolute;
   bottom: 0;
-  width: 2px;
-  height: 5px;
-  margin-left: -1px;
+  width: 6px;
+  height: 9px;
+  margin-left: -3px;
+  border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
   background: var(--accent);
-  pointer-events: none;
+  background-clip: content-box;
+  cursor: col-resize;
+  pointer-events: auto;
 }
 
 .draw-ruler-guide-mark-v {
   position: absolute;
   right: 0;
-  width: 5px;
-  height: 2px;
-  margin-top: -1px;
+  width: 9px;
+  height: 6px;
+  margin-top: -3px;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
   background: var(--accent);
-  pointer-events: none;
+  background-clip: content-box;
+  cursor: row-resize;
+  pointer-events: auto;
 }
 
 .draw-ruler-span-h {

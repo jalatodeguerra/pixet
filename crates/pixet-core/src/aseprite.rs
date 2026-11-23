@@ -302,6 +302,7 @@ pub fn read_aseprite_bytes(bytes: &[u8]) -> Result<ProjectData, PixetError> {
                             from_frame,
                             to_frame,
                             color: format!("#{r:02x}{g:02x}{b:02x}"),
+                            direction: None,
                         });
                     }
                 }
@@ -521,6 +522,7 @@ pub fn read_aseprite_bytes(bytes: &[u8]) -> Result<ProjectData, PixetError> {
         tile_projection: TileProjection::Orthogonal,
         tiles_version: 1,
         tiles_ext: None,
+        draw_ext: None,
         rig: None,
         game_data: None,
     };

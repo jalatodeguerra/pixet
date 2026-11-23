@@ -13,6 +13,7 @@ import {
   computePivotTransformPatch,
   computeRotateTransformPatch,
   computeScaleTransformPatch,
+  computeSkewTransformPatch,
   computeTransformGizmo,
   type TransformHandleId,
   type TransformPoint,
@@ -43,6 +44,7 @@ type GizmoDragMode =
       startState: TransformState;
       srcW: number;
       srcH: number;
+      startPt: TransformPoint;
     }
   | {
       kind: "rotate";
@@ -338,6 +340,32 @@ export function DrawOverlay({
     }
 
     if (drag.kind === "scale") {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        (drag.handle === "t" ||
+          drag.handle === "b" ||
+          drag.handle === "l" ||
+          drag.handle === "r")
+      ) {
+        const edgeHandle =
+          drag.handle === "t"
+            ? "n"
+            : drag.handle === "b"
+            ? "s"
+            : drag.handle === "r"
+            ? "e"
+            : "w";
+        const patch = computeSkewTransformPatch(
+          drag.srcW,
+          drag.srcH,
+          drag.startState,
+          edgeHandle,
+          drag.startPt,
+          pt
+        );
+        updateFreeTransformAction(patch);
+        return;
+      }
       const patch = computeScaleTransformPatch(
         drag.srcW,
         drag.srcH,
@@ -686,6 +714,7 @@ export function DrawOverlay({
                     startState: freeTransformState,
                     srcW: ftGizmo.srcW,
                     srcH: ftGizmo.srcH,
+                    startPt: getCanvasFloatPoint(e),
                   })
                 }
                 onPointerMove={handleGizmoPointerMove}

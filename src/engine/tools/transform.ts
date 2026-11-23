@@ -506,3 +506,49 @@ export function computePivotTransformPatch(
   };
 }
 
+export function computeSkewTransformPatch(
+  srcW: number,
+  srcH: number,
+  startState: TransformState,
+  handle: "n" | "s" | "e" | "w",
+  startPt: TransformPoint,
+  currentPt: TransformPoint
+): Partial<TransformState> {
+  const safeW = Math.max(1, srcW);
+  const safeH = Math.max(1, srcH);
+
+  const dx = currentPt.x - startPt.x;
+  const dy = currentPt.y - startPt.y;
+
+  const rad = (startState.rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  // Project drag delta into unrotated local axes (u along X, v along Y)
+  const u = dx * cos + dy * sin;
+  const v = -dx * sin + dy * cos;
+
+  const clampSkew = (val: number) =>
+    Math.max(-2, Math.min(2, Math.round(val * 1000) / 1000));
+
+  if (handle === "n" || handle === "s") {
+    const transformedH = Math.max(
+      1,
+      Math.abs(safeH * startState.scaleY)
+    );
+    const sign = handle === "s" ? 1 : -1;
+    const deltaSkewX = (sign * u) / transformedH;
+    return {
+      skewX: clampSkew(startState.skewX + deltaSkewX),
+    };
+  }
+
+  const transformedW = Math.max(
+    1,
+    Math.abs(safeW * startState.scaleX)
+  );
+  const sign = handle === "e" ? 1 : -1;
+  const deltaSkewY = (sign * v) / transformedW;
+  return {
+    skewY: clampSkew(startState.skewY + deltaSkewY),
+  };
+}

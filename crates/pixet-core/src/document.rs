@@ -118,6 +118,8 @@ pub struct AnimationTag {
     pub from_frame: u32,
     pub to_frame: u32,
     pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +150,8 @@ pub struct Document {
     pub tiles_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiles_ext: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw_ext: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rig: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -215,11 +219,13 @@ impl Document {
                 from_frame: 0,
                 to_frame: 3,
                 color: "#5b8cff".to_string(),
+                direction: None,
             }],
             tileset: None,
             tile_projection: TileProjection::Orthogonal,
             tiles_version: 1,
             tiles_ext: None,
+            draw_ext: None,
             rig: None,
             game_data: None,
         }
@@ -323,5 +329,35 @@ mod tests {
             vec![1, 0x8000_0002]
         );
         assert!(parsed_v2.tiles_ext.is_some());
+    }
+
+    #[test]
+    fn animation_tag_direction_and_draw_ext_round_trip_and_legacy_compat() {
+        let mut doc = Document::new_default(32, 32);
+        doc.tags[0].direction = Some("pingpong".to_string());
+        doc.draw_ext = Some(serde_json::json!({
+            "guides": [
+                { "id": "guide-1", "axis": "x", "pos": 16 },
+                { "id": "guide-2", "axis": "y", "pos": 8 }
+            ]
+        }));
+
+        let json = doc.to_json_pretty().expect("serialize with direction and draw_ext");
+        let parsed = Document::from_json(&json).expect("deserialize with direction and draw_ext");
+        assert_eq!(parsed.tags[0].direction.as_deref(), Some("pingpong"));
+        assert_eq!(parsed.draw_ext, doc.draw_ext);
+
+        // Legacy JSON omitting both tag.direction and doc.draw_ext must still deserialize cleanly
+        let mut legacy_val = serde_json::to_value(&doc).expect("to_value");
+        let obj = legacy_val.as_object_mut().unwrap();
+        obj.remove("draw_ext");
+        obj["tags"].as_array_mut().unwrap()[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("direction");
+        let legacy_json = serde_json::to_string(&legacy_val).expect("legacy to_string");
+        let parsed_legacy = Document::from_json(&legacy_json).expect("parse legacy json");
+        assert_eq!(parsed_legacy.tags[0].direction, None);
+        assert_eq!(parsed_legacy.draw_ext, None);
     }
 }

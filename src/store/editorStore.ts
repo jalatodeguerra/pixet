@@ -640,6 +640,7 @@ interface EditorState {
     layers: LayerItem[];
     frames: FrameItem[];
     tags: AnimationTag[];
+    guides?: GuideLine[];
   }) => void;
 }
 
@@ -2128,6 +2129,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       frames: payload.frames,
       currentFrame: 0,
       tags: payload.tags,
+      guides: payload.guides ?? [],
       activeTagId: null,
       playbackPingPongDir: 1,
       selectedCels: [],

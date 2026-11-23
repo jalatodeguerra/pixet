@@ -5,6 +5,7 @@ import {
   type LayerItem,
   type LayerKind,
   type LayerMapRole,
+  type TagDirection,
   useEditorStore,
 } from "../../store/editorStore.ts";
 import { PixelBuffer } from "../document/PixelBuffer.ts";
@@ -22,6 +23,7 @@ import {
   TilemapData,
   type TilesetRegistryExtSnapshot,
 } from "../tiles/TilemapEngine.ts";
+import type { GuideLine } from "../tools/guides.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
 export type PackMode = "grid" | "tight";
@@ -113,6 +115,7 @@ interface RustDocument {
     from_frame: number;
     to_frame: number;
     color: string;
+    direction?: string | null;
   }[];
   tileset?: RustTilesetMeta | null;
   tile_projection?: "orthogonal" | "isometric";
@@ -123,6 +126,9 @@ interface RustDocument {
     terrainSets?: TerrainSet[];
     autoMapRules?: AutoMapRule[];
   };
+  draw_ext?: {
+    guides?: GuideLine[];
+  } | null;
   rig?: unknown;
   game_data?: unknown;
 }
@@ -332,6 +338,7 @@ export function serializeProjectTransfer(): ProjectTransfer {
       from_frame: t.fromFrame,
       to_frame: t.toFrame,
       color: t.color,
+      direction: t.direction ?? "forward",
     })),
     tileset: {
       id: pixelEngine.tileset.id,
@@ -347,6 +354,13 @@ export function serializeProjectTransfer(): ProjectTransfer {
       autoTileRuleset: serializeAutoTileRuleset(pixelEngine.autoTileRuleset),
       terrainSets: cloneTerrainSets(pixelEngine.terrainSets),
       autoMapRules: cloneAutoMapRules(pixelEngine.autoMapRules),
+    },
+    draw_ext: {
+      guides: state.guides.map((g) => ({
+        id: g.id,
+        axis: g.axis,
+        pos: g.pos,
+      })),
     },
     rig:
       pixelEngine.rig.bones.length > 0
@@ -462,6 +476,23 @@ export function hydrateProjectTransfer(
     cels: {},
   }));
 
+  const hydratedGuides: GuideLine[] = Array.isArray(doc.draw_ext?.guides)
+    ? doc.draw_ext.guides
+        .filter(
+          (g): g is GuideLine =>
+            Boolean(g) &&
+            typeof g.id === "string" &&
+            (g.axis === "x" || g.axis === "y") &&
+            typeof g.pos === "number" &&
+            Number.isFinite(g.pos)
+        )
+        .map((g) => ({
+          id: g.id,
+          axis: g.axis,
+          pos: Math.round(g.pos),
+        }))
+    : [];
+
   useEditorStore.getState().loadProjectState({
     documentName: filePath ? extractBasename(filePath) : doc.name,
     filePath,
@@ -476,13 +507,23 @@ export function hydrateProjectTransfer(
       index: f.index,
       durationMs: f.duration_ms,
     })),
-    tags: doc.tags.map((t) => ({
-      id: t.id,
-      name: t.name,
-      fromFrame: t.from_frame,
-      toFrame: t.to_frame,
-      color: t.color,
-    })),
+    tags: doc.tags.map((t) => {
+      const direction: TagDirection =
+        t.direction === "forward" ||
+        t.direction === "reverse" ||
+        t.direction === "pingpong"
+          ? t.direction
+          : "forward";
+      return {
+        id: t.id,
+        name: t.name,
+        fromFrame: t.from_frame,
+        toFrame: t.to_frame,
+        color: t.color,
+        direction,
+      };
+    }),
+    guides: hydratedGuides,
   });
 
   syncTimelineCels();

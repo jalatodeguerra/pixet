@@ -125,6 +125,42 @@ export function RulersOverlay({
     }
   };
 
+  const handleGuideMarkerPointerDown = (
+    axis: GuideAxis,
+    guideId: string,
+    e: React.PointerEvent<HTMLDivElement>
+  ) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    activeDragRef.current = {
+      axis,
+      guideId,
+    };
+    const rulerEl = e.currentTarget.parentElement;
+    if (rulerEl) {
+      rulerEl.setPointerCapture(e.pointerId);
+    }
+  };
+
+  const handleGuideMarkerContextMenu = (
+    guideId: string,
+    e: React.MouseEvent<HTMLDivElement>
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    removeGuide(guideId);
+  };
+
+  const handleGuideMarkerDoubleClick = (
+    guideId: string,
+    e: React.MouseEvent<HTMLDivElement>
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    removeGuide(guideId);
+  };
+
   const step = getTickStep(zoom);
   const hTicks: number[] = [];
   for (let x = 0; x <= canvasWidth; x += step) {
@@ -175,6 +211,12 @@ export function RulersOverlay({
                 key={g.id}
                 className="draw-ruler-guide-mark-h"
                 style={{ left: leftPx }}
+                title={`Vertical guide at ${g.pos}px (drag to move, double-click or right-click to delete)`}
+                onPointerDown={(e) =>
+                  handleGuideMarkerPointerDown("x", g.id, e)
+                }
+                onContextMenu={(e) => handleGuideMarkerContextMenu(g.id, e)}
+                onDoubleClick={(e) => handleGuideMarkerDoubleClick(g.id, e)}
               />
             );
           })}
@@ -212,6 +254,12 @@ export function RulersOverlay({
                 key={g.id}
                 className="draw-ruler-guide-mark-v"
                 style={{ top: topPx }}
+                title={`Horizontal guide at ${g.pos}px (drag to move, double-click or right-click to delete)`}
+                onPointerDown={(e) =>
+                  handleGuideMarkerPointerDown("y", g.id, e)
+                }
+                onContextMenu={(e) => handleGuideMarkerContextMenu(g.id, e)}
+                onDoubleClick={(e) => handleGuideMarkerDoubleClick(g.id, e)}
               />
             );
           })}
