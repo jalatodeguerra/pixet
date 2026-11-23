@@ -1,8 +1,16 @@
 import type { PixelBuffer, RGBA } from "../document/PixelBuffer.ts";
+import { shouldPlotDither, type DitherPattern } from "./dither.ts";
 
 export interface Point {
   x: number;
   y: number;
+}
+
+export interface FloodFillOptions {
+  tolerance?: number;
+  diagonal8?: boolean;
+  ditherPattern?: DitherPattern | "none";
+  sampleBuffer?: PixelBuffer;
 }
 
 export function constrainAngle(
@@ -293,9 +301,10 @@ export function floodFill(
   contiguous: boolean,
   alphaLock: boolean,
   onBeforeWrite?: (x: number, y: number) => void,
-  selectionMask?: { contains(x: number, y: number): boolean } | null
+  selectionMask?: { contains(x: number, y: number): boolean } | null,
+  opts?: FloodFillOptions
 ): number {
-  const { width, height, data } = buffer;
+  const { width, height } = buffer;
   if (startX < 0 || startY < 0 || startX >= width || startY >= height) {
     return 0;
   }
@@ -303,18 +312,68 @@ export function floodFill(
     return 0;
   }
 
-  const [tr, tg, tb, ta] = buffer.getPixel(startX, startY);
+  const sampleBuf =
+    opts?.sampleBuffer &&
+    opts.sampleBuffer.width === width &&
+    opts.sampleBuffer.height === height
+      ? opts.sampleBuffer
+      : buffer;
+  const sampleData = sampleBuf.data;
+
+  const [tr, tg, tb, ta] = sampleBuf.getPixel(startX, startY);
   const [fr, fg, fb, fa] = fillRgba;
 
-  if (tr === fr && tg === fg && tb === fb && ta === fa) {
+  const tolerance = Math.max(0, opts?.tolerance ?? 0);
+  const diagonal8 = opts?.diagonal8 ?? false;
+  const ditherPattern = opts?.ditherPattern ?? "none";
+
+  // Preserve fast early-out when reading and writing same buffer with exact target color
+  if (
+    sampleBuf === buffer &&
+    tolerance === 0 &&
+    tr === fr &&
+    tg === fg &&
+    tb === fb &&
+    ta === fa
+  ) {
     return 0;
   }
 
-  const matchesTarget = (idx: number) =>
-    data[idx] === tr &&
-    data[idx + 1] === tg &&
-    data[idx + 2] === tb &&
-    data[idx + 3] === ta;
+  const matchesTarget = (idx: number): boolean => {
+    if (tolerance === 0) {
+      return (
+        sampleData[idx] === tr &&
+        sampleData[idx + 1] === tg &&
+        sampleData[idx + 2] === tb &&
+        sampleData[idx + 3] === ta
+      );
+    }
+    return (
+      Math.max(
+        Math.abs(sampleData[idx] - tr),
+        Math.abs(sampleData[idx + 1] - tg),
+        Math.abs(sampleData[idx + 2] - tb),
+        Math.abs(sampleData[idx + 3] - ta)
+      ) <= tolerance
+    );
+  };
+
+  const tryWrite = (x: number, y: number): boolean => {
+    if (ditherPattern !== "none" && !shouldPlotDither(x, y, 0.5, ditherPattern)) {
+      return false;
+    }
+    const [pr, pg, pb, pa] = buffer.getPixel(x, y);
+    let nextA = fa;
+    if (alphaLock) {
+      if (pa === 0 || fa === 0) return false;
+      nextA = Math.round((fa / 255) * pa);
+    }
+    if (pr === fr && pg === fg && pb === fb && pa === nextA) {
+      return false;
+    }
+    onBeforeWrite?.(x, y);
+    return buffer.setPixel(x, y, fr, fg, fb, fa, alphaLock);
+  };
 
   let modified = 0;
 
@@ -324,8 +383,7 @@ export function floodFill(
         if (selectionMask && !selectionMask.contains(x, y)) continue;
         const idx = (y * width + x) * 4;
         if (matchesTarget(idx)) {
-          onBeforeWrite?.(x, y);
-          if (buffer.setPixel(x, y, fr, fg, fb, fa, alphaLock)) {
+          if (tryWrite(x, y)) {
             modified++;
           }
         }
@@ -343,6 +401,15 @@ export function floodFill(
   queue[tail++] = startFlat;
   visited[startFlat] = 1;
 
+  const enqueue = (nx: number, ny: number) => {
+    if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
+    const n = ny * width + nx;
+    if (!visited[n]) {
+      visited[n] = 1;
+      queue[tail++] = n;
+    }
+  };
+
   while (head < tail) {
     const flat = queue[head++];
     const x = flat % width;
@@ -352,38 +419,19 @@ export function floodFill(
 
     if (!matchesTarget(idx)) continue;
 
-    onBeforeWrite?.(x, y);
-    if (buffer.setPixel(x, y, fr, fg, fb, fa, alphaLock)) {
+    if (tryWrite(x, y)) {
       modified++;
     }
 
-    if (x > 0) {
-      const n = flat - 1;
-      if (!visited[n]) {
-        visited[n] = 1;
-        queue[tail++] = n;
-      }
-    }
-    if (x + 1 < width) {
-      const n = flat + 1;
-      if (!visited[n]) {
-        visited[n] = 1;
-        queue[tail++] = n;
-      }
-    }
-    if (y > 0) {
-      const n = flat - width;
-      if (!visited[n]) {
-        visited[n] = 1;
-        queue[tail++] = n;
-      }
-    }
-    if (y + 1 < height) {
-      const n = flat + width;
-      if (!visited[n]) {
-        visited[n] = 1;
-        queue[tail++] = n;
-      }
+    enqueue(x - 1, y);
+    enqueue(x + 1, y);
+    enqueue(x, y - 1);
+    enqueue(x, y + 1);
+    if (diagonal8) {
+      enqueue(x - 1, y - 1);
+      enqueue(x + 1, y - 1);
+      enqueue(x - 1, y + 1);
+      enqueue(x + 1, y + 1);
     }
   }
 

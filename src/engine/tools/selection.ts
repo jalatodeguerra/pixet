@@ -1,5 +1,7 @@
 import { PixelBuffer } from "../document/PixelBuffer.ts";
-import type { Point } from "./pixelAlgos.ts";
+import { plotEllipse, type Point } from "./pixelAlgos.ts";
+
+export type SelectionCombineMode = "replace" | "add" | "subtract" | "intersect";
 
 export interface SelectionBounds {
   x: number;
@@ -101,6 +103,73 @@ export class SelectionMask {
     }
     return next;
   }
+
+  static fromEllipse(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    width: number,
+    height: number
+  ): SelectionMask {
+    const mask = new SelectionMask(width, height);
+    const pts = plotEllipse(x0, y0, x1, y1, true);
+    for (const pt of pts) {
+      mask.set(pt.x, pt.y, true);
+    }
+    return mask;
+  }
+
+  static fromFloodFill(
+    buffer: PixelBuffer,
+    startX: number,
+    startY: number,
+    contiguous: boolean,
+    tolerance = 0,
+    diagonal8 = false
+  ): SelectionMask {
+    return createMagicWandSelection(
+      buffer,
+      startX,
+      startY,
+      contiguous,
+      tolerance,
+      diagonal8
+    );
+  }
+}
+
+export function combineSelectionMasks(
+  current: SelectionMask | null,
+  next: SelectionMask,
+  mode: SelectionCombineMode
+): SelectionMask {
+  if (mode === "replace" || !current) {
+    if (mode === "subtract") {
+      return new SelectionMask(next.width, next.height);
+    }
+    if (mode === "intersect" && !current) {
+      return new SelectionMask(next.width, next.height);
+    }
+    return next.clone();
+  }
+
+  const width = next.width;
+  const height = next.height;
+  const out = new SelectionMask(width, height);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const a = current.contains(x, y);
+      const b = next.contains(x, y);
+      let keep = false;
+      if (mode === "add") keep = a || b;
+      else if (mode === "subtract") keep = a && !b;
+      else if (mode === "intersect") keep = a && b;
+      if (keep) out.set(x, y, true);
+    }
+  }
+  return out;
 }
 
 export function createRectSelection(
@@ -182,7 +251,9 @@ export function createMagicWandSelection(
   buffer: PixelBuffer,
   startX: number,
   startY: number,
-  contiguous: boolean
+  contiguous: boolean,
+  tolerance = 0,
+  diagonal8 = false
 ): SelectionMask {
   const { width, height, data } = buffer;
   const mask = new SelectionMask(width, height);
@@ -191,11 +262,25 @@ export function createMagicWandSelection(
   }
 
   const [tr, tg, tb, ta] = buffer.getPixel(startX, startY);
-  const matches = (idx: number) =>
-    data[idx] === tr &&
-    data[idx + 1] === tg &&
-    data[idx + 2] === tb &&
-    data[idx + 3] === ta;
+  const tol = Math.max(0, tolerance);
+  const matches = (idx: number) => {
+    if (tol === 0) {
+      return (
+        data[idx] === tr &&
+        data[idx + 1] === tg &&
+        data[idx + 2] === tb &&
+        data[idx + 3] === ta
+      );
+    }
+    return (
+      Math.max(
+        Math.abs(data[idx] - tr),
+        Math.abs(data[idx + 1] - tg),
+        Math.abs(data[idx + 2] - tb),
+        Math.abs(data[idx + 3] - ta)
+      ) <= tol
+    );
+  };
 
   if (!contiguous) {
     for (let y = 0; y < height; y++) {
@@ -215,6 +300,15 @@ export function createMagicWandSelection(
   queue[tail++] = startFlat;
   visited[startFlat] = 1;
 
+  const enqueue = (nx: number, ny: number) => {
+    if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
+    const n = ny * width + nx;
+    if (!visited[n]) {
+      visited[n] = 1;
+      queue[tail++] = n;
+    }
+  };
+
   while (head < tail) {
     const flat = queue[head++];
     const x = flat % width;
@@ -223,21 +317,15 @@ export function createMagicWandSelection(
 
     mask.set(x, y, true);
 
-    if (x > 0 && !visited[flat - 1]) {
-      visited[flat - 1] = 1;
-      queue[tail++] = flat - 1;
-    }
-    if (x + 1 < width && !visited[flat + 1]) {
-      visited[flat + 1] = 1;
-      queue[tail++] = flat + 1;
-    }
-    if (y > 0 && !visited[flat - width]) {
-      visited[flat - width] = 1;
-      queue[tail++] = flat - width;
-    }
-    if (y + 1 < height && !visited[flat + width]) {
-      visited[flat + width] = 1;
-      queue[tail++] = flat + width;
+    enqueue(x - 1, y);
+    enqueue(x + 1, y);
+    enqueue(x, y - 1);
+    enqueue(x, y + 1);
+    if (diagonal8) {
+      enqueue(x - 1, y - 1);
+      enqueue(x + 1, y - 1);
+      enqueue(x - 1, y + 1);
+      enqueue(x + 1, y + 1);
     }
   }
 

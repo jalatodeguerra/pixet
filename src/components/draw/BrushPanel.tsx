@@ -1,5 +1,18 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Paintbrush } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FlipHorizontal2,
+  FlipVertical2,
+  Paintbrush,
+  RotateCw,
+  Trash2,
+} from "lucide-react";
+import {
+  flipCustomBrushH,
+  flipCustomBrushV,
+  rotateCustomBrushCW,
+} from "../../engine/tools/sprayJumble";
 import {
   useEditorStore,
   type BrushShape,
@@ -44,12 +57,29 @@ export function BrushPanel() {
   const rightClickMode = useEditorStore((s) => s.rightClickMode);
   const setRightClickMode = useEditorStore((s) => s.setRightClickMode);
   const customBrush = useEditorStore((s) => s.customBrush);
+  const setCustomBrush = useEditorStore((s) => s.setCustomBrush);
+  const savedCustomBrushes = useEditorStore((s) => s.savedCustomBrushes);
+  const addSavedCustomBrush = useEditorStore((s) => s.addSavedCustomBrush);
+  const removeSavedCustomBrush = useEditorStore(
+    (s) => s.removeSavedCustomBrush
+  );
 
   const [open, setOpen] = useState(false);
 
   const shapeOptions = customBrush
     ? [...BRUSH_SHAPES, { id: "custom" as const, label: "Custom" }]
     : BRUSH_SHAPES;
+
+  const updateActiveCustomBrush = (
+    updater: (b: NonNullable<typeof customBrush>) => NonNullable<typeof customBrush>
+  ) => {
+    if (!customBrush) return;
+    const next = updater(customBrush);
+    setCustomBrush(next);
+    if (savedCustomBrushes.some((b) => b.id === next.id)) {
+      addSavedCustomBrush(next);
+    }
+  };
 
   return (
     <section className="panel-section">
@@ -89,6 +119,92 @@ export function BrushPanel() {
               ))}
             </div>
           </div>
+
+          {brushShape === "custom" && customBrush && (
+            <div className="draw-field-group">
+              <span className="draw-field-label">
+                Custom Brush ({customBrush.width}×{customBrush.height})
+              </span>
+              <div className="draw-chip-grid">
+                <button
+                  type="button"
+                  className="toggle-chip draw-chip-btn"
+                  title="Flip Custom Brush Horizontal"
+                  onClick={() => updateActiveCustomBrush(flipCustomBrushH)}
+                >
+                  <FlipHorizontal2 size={12} />
+                  <span>Flip H</span>
+                </button>
+                <button
+                  type="button"
+                  className="toggle-chip draw-chip-btn"
+                  title="Flip Custom Brush Vertical"
+                  onClick={() => updateActiveCustomBrush(flipCustomBrushV)}
+                >
+                  <FlipVertical2 size={12} />
+                  <span>Flip V</span>
+                </button>
+                <button
+                  type="button"
+                  className="toggle-chip draw-chip-btn"
+                  title="Rotate Custom Brush 90° CW"
+                  onClick={() => updateActiveCustomBrush(rotateCustomBrushCW)}
+                >
+                  <RotateCw size={12} />
+                  <span>Rot 90°</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {savedCustomBrushes.length > 0 && (
+            <div className="draw-field-group">
+              <span className="draw-field-label">Saved Custom Brushes</span>
+              <div className="draw-custom-brush-list">
+                {savedCustomBrushes.map((b) => {
+                  const isActive =
+                    brushShape === "custom" && customBrush?.id === b.id;
+                  return (
+                    <div
+                      key={b.id}
+                      className={`draw-custom-brush-row ${isActive ? "active" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className="draw-custom-brush-select"
+                        onClick={() => {
+                          setCustomBrush(b);
+                          setBrushShape("custom");
+                        }}
+                      >
+                        <span className="draw-custom-brush-name">{b.name}</span>
+                        <span className="mono-value draw-val">
+                          {b.width}×{b.height}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-action-btn"
+                        style={{ width: 20, height: 20 }}
+                        title="Remove saved brush"
+                        onClick={() => {
+                          removeSavedCustomBrush(b.id);
+                          if (customBrush?.id === b.id) {
+                            setCustomBrush(null);
+                            if (brushShape === "custom") {
+                              setBrushShape("circle");
+                            }
+                          }
+                        }}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="draw-slider-list">
             <label className="draw-slider-row">

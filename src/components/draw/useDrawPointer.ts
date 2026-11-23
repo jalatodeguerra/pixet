@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   hexToRgba,
   PixelBuffer,
@@ -18,12 +18,18 @@ import {
   sampleStrokePoints,
   type BrushConfig,
 } from "../../engine/tools/brush";
+import {
+  plotPolygon,
+  plotQuadraticBezier,
+} from "../../engine/tools/curves";
+import { type DitherPattern } from "../../engine/tools/dither";
+import { renderGradientToBuffer } from "../../engine/tools/gradient";
+import { snapPointToGuides } from "../../engine/tools/guides";
 import { applyInkPixel, type InkContext, type InkMode } from "../../engine/tools/ink";
 import {
   applyPixelPerfectFilter,
   constrainAngle,
   constrainSquareBounds,
-  expandSymmetry,
   floodFill,
   plotBresenhamLine,
   plotEllipse,
@@ -31,12 +37,18 @@ import {
   type Point,
 } from "../../engine/tools/pixelAlgos";
 import {
+  combineSelectionMasks,
   createLassoSelection,
   createMagicWandSelection,
   createRectSelection,
-  type SelectionMask,
+  SelectionMask,
+  type SelectionCombineMode,
 } from "../../engine/tools/selection";
-import { snapPointToGuides } from "../../engine/tools/guides";
+import {
+  applyJumbleFootprint,
+  generateSprayPoints,
+} from "../../engine/tools/sprayJumble";
+import { expandSymmetryV2, type SymmetryConfig } from "../../engine/tools/symmetry";
 import {
   isLayerEffectivelyLocked,
   useEditorStore,
@@ -46,15 +58,30 @@ import { buildShadingRamp } from "../../utils/color";
 
 export type DrawDragPreview =
   | { kind: "marquee"; x: number; y: number; w: number; h: number }
+  | { kind: "ellipseMarquee"; x: number; y: number; w: number; h: number }
   | { kind: "lasso"; points: Point[] }
+  | { kind: "polyLasso"; points: Point[]; cursor: Point }
+  | { kind: "gradient"; x0: number; y0: number; x1: number; y1: number }
+  | {
+      kind: "curve";
+      p0: Point;
+      p1: Point;
+      p2: Point;
+      stage: "endpoints" | "control";
+    }
+  | { kind: "polygon"; points: Point[]; cursor: Point }
   | null;
 
 interface ActiveDrawStroke {
   kind:
     | "freehand"
     | "fillBrush"
+    | "spray"
+    | "jumble"
+    | "gradient"
     | "shape"
     | "marquee"
+    | "ellipseMarquee"
     | "lasso"
     | "move"
     | "tileEdit"
@@ -65,6 +92,7 @@ interface ActiveDrawStroke {
   alphaLock: boolean;
   isEraser: boolean;
   rgba: RGBA;
+  secondaryRgba: RGBA;
   brushCfg: BrushConfig;
   inkMode: InkMode;
   inkCtx: InkContext;
@@ -79,6 +107,38 @@ interface ActiveDrawStroke {
   origOffsetY: number;
   origMask: SelectionMask | null;
   stampTileId: number;
+  combineMode: SelectionCombineMode;
+  sprayCounter: number;
+}
+
+interface PendingCurveState {
+  stage: "endpoints" | "control";
+  layerId: string;
+  frameIndex: number;
+  alphaLock: boolean;
+  rgba: RGBA;
+  brushCfg: BrushConfig;
+  p0: Point;
+  p1: Point;
+  p2: Point;
+}
+
+interface PendingPolygonState {
+  layerId: string;
+  frameIndex: number;
+  alphaLock: boolean;
+  rgba: RGBA;
+  brushCfg: BrushConfig;
+  points: Point[];
+  cursor: Point;
+  lastClickTime: number;
+}
+
+interface PendingPolyLassoState {
+  points: Point[];
+  cursor: Point;
+  combineMode: SelectionCombineMode;
+  lastClickTime: number;
 }
 
 export interface UseDrawPointerOptions {
@@ -104,6 +164,42 @@ export function canWriteAt(x: number, y: number): boolean {
   const sel = pixelEngine.selection;
   if (!sel || sel.isEmpty()) return true;
   return sel.contains(x, y);
+}
+
+export function getSelectionCombineMode(e: {
+  shiftKey: boolean;
+  altKey: boolean;
+}): SelectionCombineMode {
+  if (e.shiftKey && e.altKey) return "intersect";
+  if (e.shiftKey) return "add";
+  if (e.altKey) return "subtract";
+  return "replace";
+}
+
+export function getSymmetryConfigFromState(state: {
+  canvasWidth: number;
+  canvasHeight: number;
+  symmetryX: boolean;
+  symmetryY: boolean;
+  symmetryAxisX: number | null;
+  symmetryAxisY: number | null;
+  symmetryDiag45: boolean;
+  symmetryDiag135: boolean;
+  symmetryRadial: number;
+}): SymmetryConfig {
+  const axisX = state.symmetryAxisX ?? state.canvasWidth / 2;
+  const axisY = state.symmetryAxisY ?? state.canvasHeight / 2;
+  return {
+    symX: state.symmetryX,
+    symY: state.symmetryY,
+    axisX,
+    axisY,
+    diag45: state.symmetryDiag45,
+    diag135: state.symmetryDiag135,
+    radialSegments: state.symmetryRadial,
+    radialCx: axisX - 0.5,
+    radialCy: axisY - 0.5,
+  };
 }
 
 export function getFillBrushPoints(
@@ -165,12 +261,28 @@ export interface StampBrushOptions {
   rgba: RGBA;
   isEraser?: boolean;
   alphaLock: boolean;
-  symX: boolean;
-  symY: boolean;
+  symX?: boolean;
+  symY?: boolean;
+  symmetry?: SymmetryConfig;
   seamlessWrap: boolean;
   inkMode?: InkMode;
   inkCtx?: InkContext;
   visitedPixels?: Set<string>;
+}
+
+function resolveSymmetry(celWidth: number, celHeight: number, opts: StampBrushOptions): SymmetryConfig {
+  if (opts.symmetry) return opts.symmetry;
+  return {
+    symX: Boolean(opts.symX),
+    symY: Boolean(opts.symY),
+    axisX: celWidth / 2,
+    axisY: celHeight / 2,
+    diag45: false,
+    diag135: false,
+    radialSegments: 0,
+    radialCx: celWidth / 2 - 0.5,
+    radialCy: celHeight / 2 - 0.5,
+  };
 }
 
 export function stampBrushPoint(
@@ -183,15 +295,10 @@ export function stampBrushPoint(
   const trackVisited =
     opts.visitedPixels !== undefined &&
     (mode === "shadingRamp" || mode === "alphaBlend");
+  const symCfg = resolveSymmetry(cel.width, cel.height, opts);
 
   for (const fp of footprint) {
-    const syms = expandSymmetry(
-      { x: fp.x, y: fp.y },
-      cel.width,
-      cel.height,
-      opts.symX,
-      opts.symY
-    );
+    const syms = expandSymmetryV2({ x: fp.x, y: fp.y }, symCfg);
     for (const rawSp of syms) {
       const sp = wrapPoint(rawSp, cel.width, cel.height, opts.seamlessWrap);
       if (sp.x < 0 || sp.y < 0 || sp.x >= cel.width || sp.y >= cel.height) {
@@ -246,8 +353,7 @@ function paintTilemapBrushPoint(
   brushCfg: BrushConfig,
   rgba: RGBA,
   alphaLock: boolean,
-  symX: boolean,
-  symY: boolean,
+  symCfg: SymmetryConfig,
   seamlessWrapEnabled: boolean,
   layerId: string,
   frameIndex: number,
@@ -255,13 +361,7 @@ function paintTilemapBrushPoint(
 ): void {
   const footprint = getBrushFootprint(pt.x, pt.y, brushCfg);
   for (const fp of footprint) {
-    const syms = expandSymmetry(
-      { x: fp.x, y: fp.y },
-      pixelEngine.width,
-      pixelEngine.height,
-      symX,
-      symY
-    );
+    const syms = expandSymmetryV2({ x: fp.x, y: fp.y }, symCfg);
     for (const rawSp of syms) {
       const sp = wrapPoint(
         rawSp,
@@ -287,7 +387,8 @@ export function buildInkContextForDraw(
   primaryHex: string,
   secondaryHex: string,
   brushOpacity: number,
-  shadingDirection: 1 | -1
+  shadingDirection: 1 | -1,
+  ditherPattern: DitherPattern = "bayer4"
 ): InkContext {
   const rampHexes = buildShadingRamp(primaryHex);
   const shadingRamp = rampHexes.map((h) => hexToRgba(h, 255));
@@ -297,11 +398,44 @@ export function buildInkContextForDraw(
     shadingRamp,
     shadingDirection,
     ditherThreshold: Math.max(0, Math.min(1, brushOpacity / 100)),
+    ditherPattern,
   };
 }
 
 export function isDrawRightClickPaintTool(tool: ToolId): boolean {
-  return tool === "pencil" || tool === "eraser" || tool === "fillBrush";
+  return (
+    tool === "pencil" ||
+    tool === "eraser" ||
+    tool === "fillBrush" ||
+    tool === "ditherBrush" ||
+    tool === "shading"
+  );
+}
+
+function makeSelectionPreviewForTool(
+  tool: "marquee" | "ellipseMarquee",
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number
+): DrawDragPreview {
+  const minX = Math.min(startX, endX);
+  const minY = Math.min(startY, endY);
+  const w = Math.abs(endX - startX) + 1;
+  const h = Math.abs(endY - startY) + 1;
+  return tool === "ellipseMarquee"
+    ? { kind: "ellipseMarquee", x: minX, y: minY, w, h }
+    : { kind: "marquee", x: minX, y: minY, w, h };
+}
+
+function applySelectionMaskWithMode(
+  nextMask: SelectionMask,
+  mode: SelectionCombineMode
+): void {
+  const state = useEditorStore.getState();
+  const combined = combineSelectionMasks(pixelEngine.selection, nextMask, mode);
+  pixelEngine.setSelection(combined);
+  state.setHasSelection(!combined.isEmpty());
 }
 
 export function useDrawPointer({
@@ -309,6 +443,9 @@ export function useDrawPointer({
   renderOverlayOnly,
 }: UseDrawPointerOptions) {
   const strokeRef = useRef<ActiveDrawStroke | null>(null);
+  const curveRef = useRef<PendingCurveState | null>(null);
+  const polygonRef = useRef<PendingPolygonState | null>(null);
+  const polyLassoRef = useRef<PendingPolyLassoState | null>(null);
   const lastStrokeEndRef = useRef<Map<string, Point>>(new Map());
   const suppressContextMenuRef = useRef(false);
   const [dragPreview, setDragPreview] = useState<DrawDragPreview>(null);
@@ -327,7 +464,11 @@ export function useDrawPointer({
     state.setStatusMessage(`Picked ${hex.toUpperCase()}`);
   };
 
-  const hasActiveStroke = () => strokeRef.current !== null;
+  const hasActiveStroke = () =>
+    strokeRef.current !== null ||
+    curveRef.current !== null ||
+    polygonRef.current !== null ||
+    polyLassoRef.current !== null;
 
   const consumeSuppressContextMenu = (): boolean => {
     if (!suppressContextMenuRef.current) return false;
@@ -335,8 +476,333 @@ export function useDrawPointer({
     return true;
   };
 
+  const renderCurveToOverlay = (curve: PendingCurveState) => {
+    const state = useEditorStore.getState();
+    const symCfg = getSymmetryConfigFromState(state);
+    pixelEngine.clearOverlay();
+    const pts = plotQuadraticBezier(
+      curve.p0,
+      curve.p1,
+      curve.p2,
+      state.pixelPerfect
+    );
+    const shapeBrushCfg: BrushConfig = {
+      ...curve.brushCfg,
+      size: state.brushSize,
+    };
+    for (const pt of pts) {
+      for (const fp of getBrushFootprint(pt.x, pt.y, shapeBrushCfg)) {
+        for (const rawSp of expandSymmetryV2({ x: fp.x, y: fp.y }, symCfg)) {
+          const sp = wrapPoint(
+            rawSp,
+            state.canvasWidth,
+            state.canvasHeight,
+            state.seamlessWrap
+          );
+          if (!canWriteAt(sp.x, sp.y)) continue;
+          pixelEngine.overlayBuffer.setPixel(
+            sp.x,
+            sp.y,
+            curve.rgba[0],
+            curve.rgba[1],
+            curve.rgba[2],
+            curve.rgba[3]
+          );
+        }
+      }
+    }
+    renderOverlayOnly();
+  };
+
+  const renderPolygonToOverlay = (poly: PendingPolygonState) => {
+    const state = useEditorStore.getState();
+    const symCfg = getSymmetryConfigFromState(state);
+    pixelEngine.clearOverlay();
+    const previewVerts = [...poly.points, poly.cursor];
+    const pts = plotPolygon(previewVerts, state.shapeFilled, false);
+    const stampSize = state.shapeFilled ? 1 : state.brushSize;
+    const shapeBrushCfg: BrushConfig = {
+      ...poly.brushCfg,
+      shape: state.shapeFilled ? "circle" : poly.brushCfg.shape,
+      size: stampSize,
+    };
+    for (const pt of pts) {
+      for (const fp of getBrushFootprint(pt.x, pt.y, shapeBrushCfg)) {
+        for (const rawSp of expandSymmetryV2({ x: fp.x, y: fp.y }, symCfg)) {
+          const sp = wrapPoint(
+            rawSp,
+            state.canvasWidth,
+            state.canvasHeight,
+            state.seamlessWrap
+          );
+          if (!canWriteAt(sp.x, sp.y)) continue;
+          pixelEngine.overlayBuffer.setPixel(
+            sp.x,
+            sp.y,
+            poly.rgba[0],
+            poly.rgba[1],
+            poly.rgba[2],
+            poly.rgba[3]
+          );
+        }
+      }
+    }
+    renderOverlayOnly();
+  };
+
+  const commitCurve = (): boolean => {
+    const curve = curveRef.current;
+    if (!curve) return false;
+    curveRef.current = null;
+    setDragPreview(null);
+    pixelEngine.clearOverlay();
+
+    const state = useEditorStore.getState();
+    const symCfg = getSymmetryConfigFromState(state);
+    const cel = pixelEngine.getOrCreateCel(curve.layerId, curve.frameIndex);
+    pixelEngine.history.beginTransaction(
+      curve.layerId,
+      curve.frameIndex,
+      "Bezier Curve"
+    );
+    const pts = plotQuadraticBezier(
+      curve.p0,
+      curve.p1,
+      curve.p2,
+      state.pixelPerfect
+    );
+    const shapeBrushCfg: BrushConfig = {
+      ...curve.brushCfg,
+      size: state.brushSize,
+    };
+    for (const pt of pts) {
+      stampBrushPoint(pt, cel, {
+        brushCfg: shapeBrushCfg,
+        rgba: curve.rgba,
+        isEraser: false,
+        alphaLock: curve.alphaLock,
+        symmetry: symCfg,
+        seamlessWrap: state.seamlessWrap,
+        inkMode: "simple",
+        inkCtx: {},
+      });
+    }
+    if (pixelEngine.history.commitTransaction(cel)) {
+      syncHistoryAndCelState(curve.layerId, curve.frameIndex);
+    } else {
+      pixelEngine.history.cancelTransaction();
+    }
+    pixelEngine.emitChange();
+    return true;
+  };
+
+  const commitPolygon = (): boolean => {
+    const poly = polygonRef.current;
+    if (!poly) return false;
+    polygonRef.current = null;
+    setDragPreview(null);
+    pixelEngine.clearOverlay();
+
+    if (poly.points.length < 2) {
+      renderOverlayOnly();
+      return true;
+    }
+
+    const state = useEditorStore.getState();
+    const symCfg = getSymmetryConfigFromState(state);
+    const cel = pixelEngine.getOrCreateCel(poly.layerId, poly.frameIndex);
+    pixelEngine.history.beginTransaction(
+      poly.layerId,
+      poly.frameIndex,
+      "Polygon"
+    );
+    const pts = plotPolygon(poly.points, state.shapeFilled, poly.points.length >= 3);
+    const stampSize = state.shapeFilled ? 1 : state.brushSize;
+    const shapeBrushCfg: BrushConfig = {
+      ...poly.brushCfg,
+      shape: state.shapeFilled ? "circle" : poly.brushCfg.shape,
+      size: stampSize,
+    };
+    for (const pt of pts) {
+      stampBrushPoint(pt, cel, {
+        brushCfg: shapeBrushCfg,
+        rgba: poly.rgba,
+        isEraser: false,
+        alphaLock: poly.alphaLock,
+        symmetry: symCfg,
+        seamlessWrap: state.seamlessWrap,
+        inkMode: "simple",
+        inkCtx: {},
+      });
+    }
+    if (pixelEngine.history.commitTransaction(cel)) {
+      syncHistoryAndCelState(poly.layerId, poly.frameIndex);
+    } else {
+      pixelEngine.history.cancelTransaction();
+    }
+    pixelEngine.emitChange();
+    return true;
+  };
+
+  const commitPolyLasso = (): boolean => {
+    const pl = polyLassoRef.current;
+    if (!pl) return false;
+    polyLassoRef.current = null;
+    setDragPreview(null);
+
+    const state = useEditorStore.getState();
+    if (pl.points.length < 3) {
+      if (pl.combineMode === "replace") {
+        deselectAll();
+      }
+      return true;
+    }
+    const mask = createLassoSelection(
+      state.canvasWidth,
+      state.canvasHeight,
+      pl.points
+    );
+    applySelectionMaskWithMode(mask, pl.combineMode);
+    return true;
+  };
+
+  const cancelPendingMultiStep = (): boolean => {
+    let canceled = false;
+    if (curveRef.current) {
+      curveRef.current = null;
+      canceled = true;
+    }
+    if (polygonRef.current) {
+      polygonRef.current = null;
+      canceled = true;
+    }
+    if (polyLassoRef.current) {
+      polyLassoRef.current = null;
+      canceled = true;
+    }
+    if (canceled) {
+      setDragPreview(null);
+      pixelEngine.clearOverlay();
+      renderOverlayOnly();
+    }
+    return canceled;
+  };
+
+  const commitPendingMultiStep = (): boolean => {
+    if (curveRef.current && curveRef.current.stage === "control") {
+      return commitCurve();
+    }
+    if (polygonRef.current) {
+      return commitPolygon();
+    }
+    if (polyLassoRef.current) {
+      return commitPolyLasso();
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    const st = useEditorStore.getState();
+    if (curveRef.current && st.activeTool !== "curve") {
+      curveRef.current = null;
+      setDragPreview(null);
+      pixelEngine.clearOverlay();
+      renderOverlayOnly();
+    }
+    if (polygonRef.current && st.activeTool !== "polygon") {
+      polygonRef.current = null;
+      setDragPreview(null);
+      pixelEngine.clearOverlay();
+      renderOverlayOnly();
+    }
+    if (polyLassoRef.current && st.activeTool !== "polyLasso") {
+      polyLassoRef.current = null;
+      setDragPreview(null);
+    }
+  });
+
+  const stampSprayAt = (
+    cx: number,
+    cy: number,
+    cel: PixelBuffer,
+    radius: number,
+    density: number,
+    seed: number,
+    rgba: RGBA,
+    alphaLock: boolean,
+    symCfg: SymmetryConfig,
+    seamlessWrap: boolean,
+    inkMode: InkMode,
+    inkCtx: InkContext
+  ) => {
+    const sprayPts = generateSprayPoints(cx, cy, radius, density, seed);
+    const singleCfg: BrushConfig = {
+      shape: "circle",
+      size: 1,
+      opacity: 100,
+      pixelPerfect: false,
+      spacing: 1,
+    };
+    for (const pt of sprayPts) {
+      stampBrushPoint(pt, cel, {
+        brushCfg: singleCfg,
+        rgba,
+        isEraser: false,
+        alphaLock,
+        symmetry: symCfg,
+        seamlessWrap,
+        inkMode,
+        inkCtx,
+      });
+    }
+  };
+
   const updateDrawHoverOverlay = (px: number, py: number) => {
     const state = useEditorStore.getState();
+    if (curveRef.current) {
+      if (curveRef.current.stage === "control") {
+        curveRef.current.p1 = { x: px, y: py };
+        setDragPreview({
+          kind: "curve",
+          p0: curveRef.current.p0,
+          p1: curveRef.current.p1,
+          p2: curveRef.current.p2,
+          stage: "control",
+        });
+        renderCurveToOverlay(curveRef.current);
+      }
+      return;
+    }
+
+    if (polygonRef.current) {
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      polygonRef.current.cursor = snapped;
+      setDragPreview({
+        kind: "polygon",
+        points: polygonRef.current.points.slice(),
+        cursor: snapped,
+      });
+      renderPolygonToOverlay(polygonRef.current);
+      return;
+    }
+
+    if (polyLassoRef.current) {
+      const clamped = {
+        x: Math.max(0, Math.min(state.canvasWidth - 1, px)),
+        y: Math.max(0, Math.min(state.canvasHeight - 1, py)),
+      };
+      polyLassoRef.current.cursor = clamped;
+      setDragPreview({
+        kind: "polyLasso",
+        points: polyLassoRef.current.points.slice(),
+        cursor: clamped,
+      });
+      return;
+    }
+
     pixelEngine.clearOverlay();
     if (
       state.workspaceMode === "data" ||
@@ -350,17 +816,29 @@ export function useDrawPointer({
     }
 
     const tool = state.activeTool;
-    // Brush footprints for pencil/eraser/fillBrush are rendered by DrawOverlay.tsx
-    if (tool === "pencil" || tool === "eraser" || tool === "fillBrush") {
+    // Brush footprints for pencil/eraser/fillBrush/ditherBrush/shading are rendered by DrawOverlay.tsx
+    if (
+      tool === "pencil" ||
+      tool === "eraser" ||
+      tool === "fillBrush" ||
+      tool === "ditherBrush" ||
+      tool === "shading"
+    ) {
       renderOverlayOnly();
       return;
     }
 
     const isShapeHoverTool =
       tool === "line" ||
+      tool === "curve" ||
+      tool === "polygon" ||
       ((tool === "rect" || tool === "ellipse") && !state.shapeFilled);
     const previewColor: RGBA =
-      tool === "line" || tool === "rect" || tool === "ellipse"
+      tool === "line" ||
+      tool === "curve" ||
+      tool === "polygon" ||
+      tool === "rect" ||
+      tool === "ellipse"
         ? hexToRgba(state.primaryColor, 175)
         : [255, 255, 255, 140];
 
@@ -375,14 +853,9 @@ export function useDrawPointer({
         })
       : [{ x: px, y: py, alpha: 1 }];
 
+    const symCfg = getSymmetryConfigFromState(state);
     for (const fpt of footprint) {
-      const symPts = expandSymmetry(
-        { x: fpt.x, y: fpt.y },
-        state.canvasWidth,
-        state.canvasHeight,
-        state.symmetryX,
-        state.symmetryY
-      );
+      const symPts = expandSymmetryV2({ x: fpt.x, y: fpt.y }, symCfg);
       for (const rawSp of symPts) {
         const sp = wrapPoint(
           rawSp,
@@ -407,8 +880,16 @@ export function useDrawPointer({
     const state = useEditorStore.getState();
     const { x: px, y: py } = getPixelCoords(e);
     const isRightButton = e.button === 2;
+    const tool = state.activeTool;
 
-    if (e.altKey || state.activeTool === "eyedropper") {
+    const isSelectionTool =
+      tool === "marquee" ||
+      tool === "ellipseMarquee" ||
+      tool === "lasso" ||
+      tool === "polyLasso" ||
+      tool === "wand";
+
+    if ((e.altKey && !isSelectionTool) || tool === "eyedropper") {
       if (isRightButton) {
         suppressContextMenuRef.current = true;
       }
@@ -416,14 +897,22 @@ export function useDrawPointer({
       return true;
     }
 
-    const tool = state.activeTool;
-
     if (isRightButton) {
+      if (tool === "polygon" && polygonRef.current) {
+        suppressContextMenuRef.current = true;
+        commitPolygon();
+        return true;
+      }
+      if (tool === "polyLasso" && polyLassoRef.current) {
+        suppressContextMenuRef.current = true;
+        commitPolyLasso();
+        return true;
+      }
       if (!isDrawRightClickPaintTool(tool)) {
         return false;
       }
       suppressContextMenuRef.current = true;
-      if (state.rightClickMode === "eyedropper") {
+      if (tool !== "shading" && state.rightClickMode === "eyedropper") {
         sampleColorAt(px, py, true);
         return true;
       }
@@ -431,7 +920,7 @@ export function useDrawPointer({
       return false;
     }
 
-    if (tool === "marquee") {
+    if (tool === "marquee" || tool === "ellipseMarquee") {
       commitFloatingSelection();
       e.currentTarget.setPointerCapture(e.pointerId);
       const rawX = Math.max(0, Math.min(state.canvasWidth - 1, px));
@@ -442,14 +931,16 @@ export function useDrawPointer({
           : { x: rawX, y: rawY };
       const cx = Math.max(0, Math.min(state.canvasWidth - 1, snapped.x));
       const cy = Math.max(0, Math.min(state.canvasHeight - 1, snapped.y));
+      const kind = tool === "ellipseMarquee" ? "ellipseMarquee" : "marquee";
       strokeRef.current = {
-        kind: "marquee",
+        kind,
         tool,
         layerId: state.activeLayerId,
         frameIndex: state.currentFrame,
         alphaLock: false,
         isEraser: false,
         rgba: [0, 0, 0, 0],
+        secondaryRgba: [0, 0, 0, 0],
         brushCfg: {
           shape: state.brushShape,
           size: state.brushSize,
@@ -471,8 +962,10 @@ export function useDrawPointer({
         origOffsetY: 0,
         origMask: null,
         stampTileId: 0,
+        combineMode: getSelectionCombineMode(e),
+        sprayCounter: 0,
       };
-      setDragPreview({ kind: "marquee", x: cx, y: cy, w: 1, h: 1 });
+      setDragPreview(makeSelectionPreviewForTool(kind, cx, cy, cx, cy));
       return true;
     }
 
@@ -491,6 +984,7 @@ export function useDrawPointer({
         alphaLock: false,
         isEraser: false,
         rgba: [0, 0, 0, 0],
+        secondaryRgba: [0, 0, 0, 0],
         brushCfg: {
           shape: state.brushShape,
           size: state.brushSize,
@@ -512,8 +1006,50 @@ export function useDrawPointer({
         origOffsetY: 0,
         origMask: null,
         stampTileId: 0,
+        combineMode: getSelectionCombineMode(e),
+        sprayCounter: 0,
       };
       setDragPreview({ kind: "lasso", points: [pt] });
+      return true;
+    }
+
+    if (tool === "polyLasso") {
+      commitFloatingSelection();
+      const pt = {
+        x: Math.max(0, Math.min(state.canvasWidth - 1, px)),
+        y: Math.max(0, Math.min(state.canvasHeight - 1, py)),
+      };
+      const now = performance.now();
+      const pl = polyLassoRef.current;
+      if (!pl) {
+        polyLassoRef.current = {
+          points: [pt],
+          cursor: pt,
+          combineMode: getSelectionCombineMode(e),
+          lastClickTime: now,
+        };
+        setDragPreview({ kind: "polyLasso", points: [pt], cursor: pt });
+        return true;
+      }
+
+      const first = pl.points[0];
+      const nearFirst =
+        pl.points.length >= 3 && Math.hypot(pt.x - first.x, pt.y - first.y) <= 2;
+      const isDoubleClick = now - pl.lastClickTime < 300 && pl.points.length >= 3;
+
+      if (nearFirst || isDoubleClick) {
+        commitPolyLasso();
+        return true;
+      }
+
+      pl.points.push(pt);
+      pl.cursor = pt;
+      pl.lastClickTime = now;
+      setDragPreview({
+        kind: "polyLasso",
+        points: pl.points.slice(),
+        cursor: pt,
+      });
       return true;
     }
 
@@ -523,9 +1059,27 @@ export function useDrawPointer({
         state.activeLayerId,
         state.currentFrame
       );
-      const mask = createMagicWandSelection(cel, px, py, state.fillContiguous);
-      pixelEngine.setSelection(mask);
-      state.setHasSelection(!mask.isEmpty());
+      let sampleBuf = cel;
+      if (state.fillSampleAllLayers) {
+        const composited = pixelEngine.compositeFrame(
+          state.layers,
+          state.currentFrame
+        );
+        sampleBuf = new PixelBuffer(
+          state.canvasWidth,
+          state.canvasHeight,
+          composited
+        );
+      }
+      const mask = createMagicWandSelection(
+        sampleBuf,
+        px,
+        py,
+        state.fillContiguous,
+        state.fillTolerance,
+        state.fillDiagonal8
+      );
+      applySelectionMaskWithMode(mask, getSelectionCombineMode(e));
       return true;
     }
 
@@ -544,6 +1098,7 @@ export function useDrawPointer({
         alphaLock: false,
         isEraser: false,
         rgba: [0, 0, 0, 0],
+        secondaryRgba: [0, 0, 0, 0],
         brushCfg: {
           shape: state.brushShape,
           size: state.brushSize,
@@ -565,6 +1120,8 @@ export function useDrawPointer({
         origOffsetY: fl.offsetY,
         origMask: pixelEngine.selection?.clone() ?? null,
         stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: 0,
       };
       return true;
     }
@@ -582,11 +1139,17 @@ export function useDrawPointer({
       return true;
     }
 
-    const rmbErase = isRightButton && state.rightClickMode === "erase";
-    const rmbSecondary = isRightButton && state.rightClickMode === "secondaryColor";
+    const rmbErase =
+      isRightButton && tool !== "shading" && state.rightClickMode === "erase";
+    const rmbSecondary =
+      isRightButton &&
+      tool !== "shading" &&
+      state.rightClickMode === "secondaryColor";
     const isEraser = tool === "eraser" || rmbErase;
     const chosenHex = rmbSecondary ? state.secondaryColor : state.primaryColor;
+    const secondaryHex = rmbSecondary ? state.primaryColor : state.secondaryColor;
     const rgba: RGBA = isEraser ? [0, 0, 0, 0] : hexToRgba(chosenHex, 255);
+    const secondaryRgba: RGBA = hexToRgba(secondaryHex, 255);
     const brushCfg: BrushConfig = {
       shape: state.brushShape,
       size: state.brushSize,
@@ -595,14 +1158,22 @@ export function useDrawPointer({
       spacing: state.brushSpacing,
       customBrush: state.customBrush,
     };
-    const inkMode: InkMode = isEraser ? "simple" : state.inkMode;
+    const effectiveInkMode: InkMode = isEraser
+      ? "simple"
+      : tool === "ditherBrush"
+        ? "dither"
+        : tool === "shading"
+          ? "shadingRamp"
+          : state.inkMode;
     const shadingDirection: 1 | -1 = isRightButton ? -1 : 1;
     const inkCtx = buildInkContextForDraw(
       chosenHex,
-      rmbSecondary ? state.primaryColor : state.secondaryColor,
+      secondaryHex,
       state.brushOpacity,
-      shadingDirection
+      shadingDirection,
+      state.ditherPattern
     );
+    const symCfg = getSymmetryConfigFromState(state);
 
     if (activeLayer.kind === "tilemap") {
       if (tool !== "pencil" && tool !== "eraser") {
@@ -619,8 +1190,7 @@ export function useDrawPointer({
         brushCfg,
         rgba,
         activeLayer.alphaLock,
-        state.symmetryX,
-        state.symmetryY,
+        symCfg,
         state.seamlessWrap,
         activeLayer.id,
         state.currentFrame,
@@ -634,8 +1204,9 @@ export function useDrawPointer({
         alphaLock: activeLayer.alphaLock,
         isEraser,
         rgba,
+        secondaryRgba,
         brushCfg,
-        inkMode,
+        inkMode: effectiveInkMode,
         inkCtx,
         rawPoints: [startPt],
         paintedSet: new Set(),
@@ -648,6 +1219,8 @@ export function useDrawPointer({
         origOffsetY: 0,
         origMask: null,
         stampTileId: state.activeTileId,
+        combineMode: "replace",
+        sprayCounter: 0,
       };
       pixelEngine.emitChange();
       return true;
@@ -655,6 +1228,18 @@ export function useDrawPointer({
 
     if (tool === "fill") {
       const cel = pixelEngine.getOrCreateCel(activeLayer.id, state.currentFrame);
+      let sampleBuffer: PixelBuffer | undefined;
+      if (state.fillSampleAllLayers) {
+        const composited = pixelEngine.compositeFrame(
+          state.layers,
+          state.currentFrame
+        );
+        sampleBuffer = new PixelBuffer(
+          state.canvasWidth,
+          state.canvasHeight,
+          composited
+        );
+      }
       pixelEngine.history.beginTransaction(
         activeLayer.id,
         state.currentFrame,
@@ -668,7 +1253,13 @@ export function useDrawPointer({
         state.fillContiguous,
         activeLayer.alphaLock,
         (cx, cy) => pixelEngine.history.capturePixelTile(cel, cx, cy),
-        pixelEngine.selection
+        pixelEngine.selection,
+        {
+          tolerance: state.fillTolerance,
+          diagonal8: state.fillDiagonal8,
+          ditherPattern: state.fillDitherPattern,
+          sampleBuffer,
+        }
       );
       if (count > 0 && pixelEngine.history.commitTransaction(cel)) {
         syncHistoryAndCelState(activeLayer.id, state.currentFrame);
@@ -676,6 +1267,148 @@ export function useDrawPointer({
       } else {
         pixelEngine.history.cancelTransaction();
       }
+      return true;
+    }
+
+    if (tool === "gradient") {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const startPt =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      strokeRef.current = {
+        kind: "gradient",
+        tool,
+        layerId: activeLayer.id,
+        frameIndex: state.currentFrame,
+        alphaLock: activeLayer.alphaLock,
+        isEraser: false,
+        rgba,
+        secondaryRgba,
+        brushCfg,
+        inkMode: "simple",
+        inkCtx: {},
+        rawPoints: [],
+        paintedSet: new Set(),
+        visitedPixels: new Set(),
+        usePixelPerfect: false,
+        startX: startPt.x,
+        startY: startPt.y,
+        lastPt: startPt,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        origMask: null,
+        stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: 0,
+      };
+      setDragPreview({
+        kind: "gradient",
+        x0: startPt.x,
+        y0: startPt.y,
+        x1: startPt.x,
+        y1: startPt.y,
+      });
+      return true;
+    }
+
+    if (tool === "curve") {
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      if (!curveRef.current) {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const curve: PendingCurveState = {
+          stage: "endpoints",
+          layerId: activeLayer.id,
+          frameIndex: state.currentFrame,
+          alphaLock: activeLayer.alphaLock,
+          rgba,
+          brushCfg,
+          p0: snapped,
+          p1: snapped,
+          p2: snapped,
+        };
+        curveRef.current = curve;
+        setDragPreview({
+          kind: "curve",
+          p0: curve.p0,
+          p1: curve.p1,
+          p2: curve.p2,
+          stage: "endpoints",
+        });
+        renderCurveToOverlay(curve);
+        return true;
+      }
+
+      if (curveRef.current.stage === "control") {
+        curveRef.current.p1 = snapped;
+        commitCurve();
+        return true;
+      }
+      return true;
+    }
+
+    if (tool === "polygon") {
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      const now = performance.now();
+      const poly = polygonRef.current;
+      if (!poly) {
+        const nextPoly: PendingPolygonState = {
+          layerId: activeLayer.id,
+          frameIndex: state.currentFrame,
+          alphaLock: activeLayer.alphaLock,
+          rgba,
+          brushCfg,
+          points: [snapped],
+          cursor: snapped,
+          lastClickTime: now,
+        };
+        polygonRef.current = nextPoly;
+        setDragPreview({
+          kind: "polygon",
+          points: [snapped],
+          cursor: snapped,
+        });
+        renderPolygonToOverlay(nextPoly);
+        return true;
+      }
+
+      const prevPt = poly.points[poly.points.length - 1];
+      const nextPt =
+        e.shiftKey && prevPt
+          ? state.showIsoGrid
+            ? (() => {
+                const isoPts = plotIsoLine(prevPt.x, prevPt.y, snapped.x, snapped.y);
+                return isoPts[isoPts.length - 1] ?? snapped;
+              })()
+            : constrainAngle(prevPt.x, prevPt.y, snapped.x, snapped.y)
+          : snapped;
+
+      const first = poly.points[0];
+      const nearFirst =
+        poly.points.length >= 3 &&
+        Math.hypot(nextPt.x - first.x, nextPt.y - first.y) <= 2;
+      const isDoubleClick = now - poly.lastClickTime < 300 && poly.points.length >= 2;
+
+      if (nearFirst || isDoubleClick) {
+        commitPolygon();
+        return true;
+      }
+
+      poly.points.push(nextPt);
+      poly.cursor = nextPt;
+      poly.lastClickTime = now;
+      setDragPreview({
+        kind: "polygon",
+        points: poly.points.slice(),
+        cursor: nextPt,
+      });
+      renderPolygonToOverlay(poly);
       return true;
     }
 
@@ -700,8 +1433,9 @@ export function useDrawPointer({
         alphaLock: activeLayer.alphaLock,
         isEraser,
         rgba,
+        secondaryRgba,
         brushCfg,
-        inkMode,
+        inkMode: effectiveInkMode,
         inkCtx,
         rawPoints: [startPt],
         paintedSet: new Set(),
@@ -714,25 +1448,150 @@ export function useDrawPointer({
         origOffsetY: 0,
         origMask: null,
         stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: 0,
       };
       return true;
     }
 
-    if (tool === "pencil" || tool === "eraser") {
+    if (tool === "spray") {
       e.currentTarget.setPointerCapture(e.pointerId);
       pixelEngine.clearOverlay();
       const cel = pixelEngine.getOrCreateCel(activeLayer.id, state.currentFrame);
       pixelEngine.history.beginTransaction(
         activeLayer.id,
         state.currentFrame,
-        isEraser ? "Eraser" : "Pencil"
+        "Spray"
+      );
+      const startPt = { x: px, y: py };
+      const seed = (Date.now() ^ (px * 73856093) ^ (py * 19349663)) >>> 0;
+      stampSprayAt(
+        px,
+        py,
+        cel,
+        state.sprayRadius,
+        state.sprayDensity,
+        seed,
+        rgba,
+        activeLayer.alphaLock,
+        symCfg,
+        state.seamlessWrap,
+        state.inkMode,
+        inkCtx
+      );
+      strokeRef.current = {
+        kind: "spray",
+        tool,
+        layerId: activeLayer.id,
+        frameIndex: state.currentFrame,
+        alphaLock: activeLayer.alphaLock,
+        isEraser: false,
+        rgba,
+        secondaryRgba,
+        brushCfg,
+        inkMode: state.inkMode,
+        inkCtx,
+        rawPoints: [startPt],
+        paintedSet: new Set(),
+        visitedPixels: new Set(),
+        usePixelPerfect: false,
+        startX: px,
+        startY: py,
+        lastPt: startPt,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        origMask: null,
+        stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: seed + 1,
+      };
+      pixelEngine.emitChange();
+      return true;
+    }
+
+    if (tool === "jumble") {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      pixelEngine.clearOverlay();
+      const cel = pixelEngine.getOrCreateCel(activeLayer.id, state.currentFrame);
+      pixelEngine.history.beginTransaction(
+        activeLayer.id,
+        state.currentFrame,
+        "Jumble"
+      );
+      const startPt = { x: px, y: py };
+      const radius = Math.max(1, Math.ceil(state.brushSize / 2));
+      const seed = (Date.now() ^ (px * 83492791) ^ (py * 2971215073)) >>> 0;
+      applyJumbleFootprint(
+        cel,
+        px,
+        py,
+        radius,
+        seed,
+        activeLayer.alphaLock,
+        (cx, cy) => pixelEngine.history.capturePixelTile(cel, cx, cy),
+        pixelEngine.selection
+      );
+      strokeRef.current = {
+        kind: "jumble",
+        tool,
+        layerId: activeLayer.id,
+        frameIndex: state.currentFrame,
+        alphaLock: activeLayer.alphaLock,
+        isEraser: false,
+        rgba,
+        secondaryRgba,
+        brushCfg,
+        inkMode: "simple",
+        inkCtx: {},
+        rawPoints: [startPt],
+        paintedSet: new Set(),
+        visitedPixels: new Set(),
+        usePixelPerfect: false,
+        startX: px,
+        startY: py,
+        lastPt: startPt,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        origMask: null,
+        stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: seed + 1,
+      };
+      pixelEngine.emitChange();
+      return true;
+    }
+
+    if (
+      tool === "pencil" ||
+      tool === "eraser" ||
+      tool === "ditherBrush" ||
+      tool === "shading"
+    ) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      pixelEngine.clearOverlay();
+      const cel = pixelEngine.getOrCreateCel(activeLayer.id, state.currentFrame);
+      const txLabel =
+        tool === "ditherBrush"
+          ? "Dither Brush"
+          : tool === "shading"
+            ? isRightButton
+              ? "Darken"
+              : "Lighten"
+            : isEraser
+              ? "Eraser"
+              : "Pencil";
+      pixelEngine.history.beginTransaction(
+        activeLayer.id,
+        state.currentFrame,
+        txLabel
       );
 
       const usePixelPerfect =
+        tool === "pencil" &&
         state.pixelPerfect &&
         state.brushSize === 1 &&
         state.brushShape !== "custom" &&
-        inkMode === "simple" &&
+        effectiveInkMode === "simple" &&
         !isEraser;
       const startPt = { x: px, y: py };
       const paintedSet = new Set<string>();
@@ -754,22 +1613,15 @@ export function useDrawPointer({
             rgba,
             isEraser,
             alphaLock: activeLayer.alphaLock,
-            symX: state.symmetryX,
-            symY: state.symmetryY,
+            symmetry: symCfg,
             seamlessWrap: state.seamlessWrap,
-            inkMode,
+            inkMode: effectiveInkMode,
             inkCtx,
             visitedPixels,
           });
         }
       } else if (usePixelPerfect) {
-        const syms = expandSymmetry(
-          startPt,
-          cel.width,
-          cel.height,
-          state.symmetryX,
-          state.symmetryY
-        );
+        const syms = expandSymmetryV2(startPt, symCfg);
         for (const rawSp of syms) {
           const sp = wrapPoint(rawSp, cel.width, cel.height, state.seamlessWrap);
           if (!canWriteAt(sp.x, sp.y)) continue;
@@ -791,10 +1643,9 @@ export function useDrawPointer({
           rgba,
           isEraser,
           alphaLock: activeLayer.alphaLock,
-          symX: state.symmetryX,
-          symY: state.symmetryY,
+          symmetry: symCfg,
           seamlessWrap: state.seamlessWrap,
-          inkMode,
+          inkMode: effectiveInkMode,
           inkCtx,
           visitedPixels,
         });
@@ -810,8 +1661,9 @@ export function useDrawPointer({
         alphaLock: activeLayer.alphaLock,
         isEraser,
         rgba,
+        secondaryRgba,
         brushCfg,
-        inkMode,
+        inkMode: effectiveInkMode,
         inkCtx,
         rawPoints: [startPt],
         paintedSet,
@@ -824,6 +1676,8 @@ export function useDrawPointer({
         origOffsetY: 0,
         origMask: null,
         stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: 0,
       };
       pixelEngine.emitChange();
       return true;
@@ -839,6 +1693,7 @@ export function useDrawPointer({
         alphaLock: activeLayer.alphaLock,
         isEraser: false,
         rgba,
+        secondaryRgba,
         brushCfg,
         inkMode: "simple",
         inkCtx: {},
@@ -853,6 +1708,8 @@ export function useDrawPointer({
         origOffsetY: 0,
         origMask: null,
         stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: 0,
       };
       pixelEngine.clearOverlay();
       const box = plotIsoBox(px, py, 4, state.isoBoxHeight);
@@ -887,6 +1744,7 @@ export function useDrawPointer({
         alphaLock: activeLayer.alphaLock,
         isEraser: false,
         rgba,
+        secondaryRgba,
         brushCfg,
         inkMode: "simple",
         inkCtx: {},
@@ -901,6 +1759,8 @@ export function useDrawPointer({
         origOffsetY: 0,
         origMask: null,
         stampTileId: 0,
+        combineMode: "replace",
+        sprayCounter: 0,
       };
       pixelEngine.clearOverlay();
       const previewPts = getShapePoints(
@@ -923,13 +1783,7 @@ export function useDrawPointer({
       };
       for (const pt of previewPts) {
         for (const fp of getBrushFootprint(pt.x, pt.y, shapeBrushCfg)) {
-          for (const rawSp of expandSymmetry(
-            { x: fp.x, y: fp.y },
-            state.canvasWidth,
-            state.canvasHeight,
-            state.symmetryX,
-            state.symmetryY
-          )) {
+          for (const rawSp of expandSymmetryV2({ x: fp.x, y: fp.y }, symCfg)) {
             const sp = wrapPoint(
               rawSp,
               state.canvasWidth,
@@ -956,13 +1810,36 @@ export function useDrawPointer({
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>): boolean => {
-    const stroke = strokeRef.current;
-    if (!stroke) return false;
-
     const state = useEditorStore.getState();
     const { x: px, y: py } = getPixelCoords(e);
 
-    if (stroke.kind === "marquee") {
+    if (curveRef.current && curveRef.current.stage === "endpoints" && !strokeRef.current) {
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      curveRef.current.p2 = snapped;
+      curveRef.current.p1 = {
+        x: Math.round((curveRef.current.p0.x + snapped.x) / 2),
+        y: Math.round((curveRef.current.p0.y + snapped.y) / 2),
+      };
+      setDragPreview({
+        kind: "curve",
+        p0: curveRef.current.p0,
+        p1: curveRef.current.p1,
+        p2: curveRef.current.p2,
+        stage: "endpoints",
+      });
+      renderCurveToOverlay(curveRef.current);
+      return true;
+    }
+
+    const stroke = strokeRef.current;
+    if (!stroke) return false;
+
+    const symCfg = getSymmetryConfigFromState(state);
+
+    if (stroke.kind === "marquee" || stroke.kind === "ellipseMarquee") {
       const rawX = Math.max(0, Math.min(state.canvasWidth - 1, px));
       const rawY = Math.max(0, Math.min(state.canvasHeight - 1, py));
       const snapped =
@@ -971,7 +1848,7 @@ export function useDrawPointer({
           : { x: rawX, y: rawY };
       const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, snapped.x));
       const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, snapped.y));
-      const end = e.shiftKey
+      const end = e.shiftKey && stroke.combineMode === "replace"
         ? constrainSquareBounds(stroke.startX, stroke.startY, clampedX, clampedY)
         : { x: clampedX, y: clampedY };
       const minX = Math.max(0, Math.min(stroke.startX, end.x));
@@ -984,13 +1861,9 @@ export function useDrawPointer({
         state.canvasHeight - 1,
         Math.max(stroke.startY, end.y)
       );
-      setDragPreview({
-        kind: "marquee",
-        x: minX,
-        y: minY,
-        w: maxX - minX + 1,
-        h: maxY - minY + 1,
-      });
+      setDragPreview(
+        makeSelectionPreviewForTool(stroke.kind, minX, minY, maxX, maxY)
+      );
       return true;
     }
 
@@ -1002,6 +1875,25 @@ export function useDrawPointer({
         stroke.rawPoints.push({ x: clampedX, y: clampedY });
         setDragPreview({ kind: "lasso", points: stroke.rawPoints.slice() });
       }
+      return true;
+    }
+
+    if (stroke.kind === "gradient") {
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      const endPt = e.shiftKey
+        ? constrainAngle(stroke.startX, stroke.startY, snapped.x, snapped.y)
+        : snapped;
+      stroke.lastPt = endPt;
+      setDragPreview({
+        kind: "gradient",
+        x0: stroke.startX,
+        y0: stroke.startY,
+        x1: endPt.x,
+        y1: endPt.y,
+      });
       return true;
     }
 
@@ -1070,13 +1962,7 @@ export function useDrawPointer({
         ? 160
         : Math.round((state.brushOpacity / 100) * 255);
       for (const pt of fillPts) {
-        for (const rawSp of expandSymmetry(
-          pt,
-          state.canvasWidth,
-          state.canvasHeight,
-          state.symmetryX,
-          state.symmetryY
-        )) {
+        for (const rawSp of expandSymmetryV2(pt, symCfg)) {
           const sp = wrapPoint(
             rawSp,
             state.canvasWidth,
@@ -1109,14 +1995,64 @@ export function useDrawPointer({
           stroke.brushCfg,
           stroke.rgba,
           stroke.alphaLock,
-          state.symmetryX,
-          state.symmetryY,
+          symCfg,
           state.seamlessWrap,
           stroke.layerId,
           stroke.frameIndex,
           stroke.stampTileId
         );
       }
+      pixelEngine.emitChange();
+      return true;
+    }
+
+    if (stroke.kind === "spray") {
+      const last = stroke.lastPt;
+      if (last.x === px && last.y === py) return true;
+      const cel = pixelEngine.getOrCreateCel(stroke.layerId, stroke.frameIndex);
+      const segment = sampleStrokePoints(last.x, last.y, px, py, 2);
+      for (let i = 1; i < segment.length; i++) {
+        const pt = segment[i];
+        stampSprayAt(
+          pt.x,
+          pt.y,
+          cel,
+          state.sprayRadius,
+          state.sprayDensity,
+          stroke.sprayCounter++,
+          stroke.rgba,
+          stroke.alphaLock,
+          symCfg,
+          state.seamlessWrap,
+          stroke.inkMode,
+          stroke.inkCtx
+        );
+      }
+      stroke.lastPt = { x: px, y: py };
+      pixelEngine.emitChange();
+      return true;
+    }
+
+    if (stroke.kind === "jumble") {
+      const last = stroke.lastPt;
+      if (last.x === px && last.y === py) return true;
+      const cel = pixelEngine.getOrCreateCel(stroke.layerId, stroke.frameIndex);
+      const radius = Math.max(1, Math.ceil(state.brushSize / 2));
+      const segment = plotBresenhamLine(last.x, last.y, px, py);
+      for (let i = 1; i < segment.length; i++) {
+        const pt = segment[i];
+        applyJumbleFootprint(
+          cel,
+          pt.x,
+          pt.y,
+          radius,
+          stroke.sprayCounter++,
+          stroke.alphaLock,
+          (cx, cy) => pixelEngine.history.capturePixelTile(cel, cx, cy),
+          pixelEngine.selection
+        );
+      }
+      stroke.lastPt = { x: px, y: py };
       pixelEngine.emitChange();
       return true;
     }
@@ -1144,13 +2080,7 @@ export function useDrawPointer({
         for (const prevKey of stroke.paintedSet) {
           if (nextSet.has(prevKey)) continue;
           const [rx, ry] = prevKey.split(",").map(Number);
-          const syms = expandSymmetry(
-            { x: rx, y: ry },
-            cel.width,
-            cel.height,
-            state.symmetryX,
-            state.symmetryY
-          );
+          const syms = expandSymmetryV2({ x: rx, y: ry }, symCfg);
           for (const rawSp of syms) {
             const sp = wrapPoint(rawSp, cel.width, cel.height, state.seamlessWrap);
             if (!canWriteAt(sp.x, sp.y)) continue;
@@ -1164,13 +2094,7 @@ export function useDrawPointer({
         for (const pt of nextFiltered) {
           const key = `${pt.x},${pt.y}`;
           if (stroke.paintedSet.has(key)) continue;
-          const syms = expandSymmetry(
-            pt,
-            cel.width,
-            cel.height,
-            state.symmetryX,
-            state.symmetryY
-          );
+          const syms = expandSymmetryV2(pt, symCfg);
           for (const rawSp of syms) {
             const sp = wrapPoint(rawSp, cel.width, cel.height, state.seamlessWrap);
             if (!canWriteAt(sp.x, sp.y)) continue;
@@ -1203,8 +2127,7 @@ export function useDrawPointer({
             rgba: stroke.rgba,
             isEraser: stroke.isEraser,
             alphaLock: stroke.alphaLock,
-            symX: state.symmetryX,
-            symY: state.symmetryY,
+            symmetry: symCfg,
             seamlessWrap: state.seamlessWrap,
             inkMode: stroke.inkMode,
             inkCtx: stroke.inkCtx,
@@ -1251,13 +2174,7 @@ export function useDrawPointer({
 
     for (const pt of pts) {
       for (const fp of getBrushFootprint(pt.x, pt.y, shapeBrushCfg)) {
-        for (const rawSp of expandSymmetry(
-          { x: fp.x, y: fp.y },
-          state.canvasWidth,
-          state.canvasHeight,
-          state.symmetryX,
-          state.symmetryY
-        )) {
+        for (const rawSp of expandSymmetryV2({ x: fp.x, y: fp.y }, symCfg)) {
           const sp = wrapPoint(
             rawSp,
             state.canvasWidth,
@@ -1281,6 +2198,35 @@ export function useDrawPointer({
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>): boolean => {
+    const state = useEditorStore.getState();
+    const { x: px, y: py } = getPixelCoords(e);
+
+    if (curveRef.current && curveRef.current.stage === "endpoints" && !strokeRef.current) {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      curveRef.current.p2 = snapped;
+      curveRef.current.p1 = {
+        x: Math.round((curveRef.current.p0.x + snapped.x) / 2),
+        y: Math.round((curveRef.current.p0.y + snapped.y) / 2),
+      };
+      curveRef.current.stage = "control";
+      setDragPreview({
+        kind: "curve",
+        p0: curveRef.current.p0,
+        p1: curveRef.current.p1,
+        p2: curveRef.current.p2,
+        stage: "control",
+      });
+      renderCurveToOverlay(curveRef.current);
+      state.setStatusMessage("Click to place curve control point (Enter to commit, Esc to cancel)");
+      return true;
+    }
+
     const stroke = strokeRef.current;
     if (!stroke) return false;
     strokeRef.current = null;
@@ -1289,10 +2235,9 @@ export function useDrawPointer({
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
 
-    const state = useEditorStore.getState();
-    const { x: px, y: py } = getPixelCoords(e);
+    const symCfg = getSymmetryConfigFromState(state);
 
-    if (stroke.kind === "marquee") {
+    if (stroke.kind === "marquee" || stroke.kind === "ellipseMarquee") {
       setDragPreview(null);
       const rawX = Math.max(0, Math.min(state.canvasWidth - 1, px));
       const rawY = Math.max(0, Math.min(state.canvasHeight - 1, py));
@@ -1302,30 +2247,43 @@ export function useDrawPointer({
           : { x: rawX, y: rawY };
       const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, snapped.x));
       const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, snapped.y));
-      const end = e.shiftKey
+      const end = e.shiftKey && stroke.combineMode === "replace"
         ? constrainSquareBounds(stroke.startX, stroke.startY, clampedX, clampedY)
         : { x: clampedX, y: clampedY };
       if (end.x === stroke.startX && end.y === stroke.startY) {
-        deselectAll();
+        if (stroke.combineMode === "replace") {
+          deselectAll();
+        }
         return true;
       }
-      const mask = createRectSelection(
-        state.canvasWidth,
-        state.canvasHeight,
-        stroke.startX,
-        stroke.startY,
-        end.x,
-        end.y
-      );
-      pixelEngine.setSelection(mask);
-      state.setHasSelection(!mask.isEmpty());
+      const mask =
+        stroke.kind === "ellipseMarquee"
+          ? SelectionMask.fromEllipse(
+              stroke.startX,
+              stroke.startY,
+              end.x,
+              end.y,
+              state.canvasWidth,
+              state.canvasHeight
+            )
+          : createRectSelection(
+              state.canvasWidth,
+              state.canvasHeight,
+              stroke.startX,
+              stroke.startY,
+              end.x,
+              end.y
+            );
+      applySelectionMaskWithMode(mask, stroke.combineMode);
       return true;
     }
 
     if (stroke.kind === "lasso") {
       setDragPreview(null);
       if (stroke.rawPoints.length < 3) {
-        deselectAll();
+        if (stroke.combineMode === "replace") {
+          deselectAll();
+        }
         return true;
       }
       const mask = createLassoSelection(
@@ -1333,8 +2291,7 @@ export function useDrawPointer({
         state.canvasHeight,
         stroke.rawPoints
       );
-      pixelEngine.setSelection(mask);
-      state.setHasSelection(!mask.isEmpty());
+      applySelectionMaskWithMode(mask, stroke.combineMode);
       return true;
     }
 
@@ -1350,6 +2307,49 @@ export function useDrawPointer({
     }
 
     const cel = pixelEngine.getOrCreateCel(stroke.layerId, stroke.frameIndex);
+
+    if (stroke.kind === "gradient") {
+      setDragPreview(null);
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
+      const endPt = e.shiftKey
+        ? constrainAngle(stroke.startX, stroke.startY, snapped.x, snapped.y)
+        : snapped;
+      const paletteSnap = state.gradientPaletteSnap
+        ? state.palette.map((hex) => hexToRgba(hex, 255))
+        : undefined;
+      pixelEngine.history.beginTransaction(
+        stroke.layerId,
+        stroke.frameIndex,
+        "Gradient"
+      );
+      const modified = renderGradientToBuffer(
+        cel,
+        stroke.startX,
+        stroke.startY,
+        endPt.x,
+        endPt.y,
+        stroke.rgba,
+        stroke.secondaryRgba,
+        {
+          mode: state.gradientMode,
+          dither: state.gradientDither,
+          paletteSnap,
+        },
+        stroke.alphaLock,
+        (cx, cy) => pixelEngine.history.capturePixelTile(cel, cx, cy),
+        pixelEngine.selection
+      );
+      if (modified > 0 && pixelEngine.history.commitTransaction(cel)) {
+        syncHistoryAndCelState(stroke.layerId, stroke.frameIndex);
+      } else {
+        pixelEngine.history.cancelTransaction();
+      }
+      pixelEngine.emitChange();
+      return true;
+    }
 
     if (stroke.kind === "isoBox") {
       pixelEngine.clearOverlay();
@@ -1427,8 +2427,7 @@ export function useDrawPointer({
           rgba: stroke.rgba,
           isEraser: stroke.isEraser,
           alphaLock: stroke.alphaLock,
-          symX: state.symmetryX,
-          symY: state.symmetryY,
+          symmetry: symCfg,
           seamlessWrap: state.seamlessWrap,
           inkMode: stroke.inkMode,
           inkCtx: stroke.inkCtx,
@@ -1487,8 +2486,7 @@ export function useDrawPointer({
           rgba: stroke.rgba,
           isEraser: false,
           alphaLock: stroke.alphaLock,
-          symX: state.symmetryX,
-          symY: state.symmetryY,
+          symmetry: symCfg,
           seamlessWrap: state.seamlessWrap,
           inkMode: "simple",
           inkCtx: {},
@@ -1517,6 +2515,8 @@ export function useDrawPointer({
     hasActiveStroke,
     consumeSuppressContextMenu,
     updateDrawHoverOverlay,
+    commitPendingMultiStep,
+    cancelPendingMultiStep,
     onPointerDown,
     onPointerMove,
     onPointerUp,

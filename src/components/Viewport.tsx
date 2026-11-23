@@ -44,8 +44,6 @@ export function Viewport() {
   const zoom = useEditorStore((s) => s.zoom);
   const setZoom = useEditorStore((s) => s.setZoom);
   const showGrid = useEditorStore((s) => s.showGrid);
-  const symmetryX = useEditorStore((s) => s.symmetryX);
-  const symmetryY = useEditorStore((s) => s.symmetryY);
   const setCursorPos = useEditorStore((s) => s.setCursorPos);
   const activeTool = useEditorStore((s) => s.activeTool);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
@@ -418,6 +416,16 @@ export function Viewport() {
       if (e.code === "Space" && !isEditable(e.target)) {
         e.preventDefault();
         setSpacePressed(true);
+        return;
+      }
+      if (!isEditable(e.target)) {
+        if (e.key === "Enter" && drawPointer.commitPendingMultiStep()) {
+          e.preventDefault();
+          e.stopPropagation();
+        } else if (e.key === "Escape" && drawPointer.cancelPendingMultiStep()) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -425,10 +433,10 @@ export function Viewport() {
         setSpacePressed(false);
       }
     };
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keyup", onKeyUp);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp);
     };
   }, []);
@@ -885,7 +893,10 @@ export function Viewport() {
           <TileOverlay />
 
           {workspaceMode !== "rig" && !isTilesMap && (
-            <DrawOverlay isStrokeActive={drawPointer.hasActiveStroke()} />
+            <DrawOverlay
+              isStrokeActive={drawPointer.hasActiveStroke()}
+              dragPreview={dragPreview}
+            />
           )}
 
           {showIsoGrid && isoGridPath && (
@@ -898,7 +909,11 @@ export function Viewport() {
             </svg>
           )}
 
-          {(selectionPath || dragPreview) && (
+          {(selectionPath ||
+            dragPreview?.kind === "marquee" ||
+            dragPreview?.kind === "ellipseMarquee" ||
+            dragPreview?.kind === "lasso" ||
+            dragPreview?.kind === "polyLasso") && (
             <svg
               className="viewport-selection-svg"
               viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
@@ -919,6 +934,15 @@ export function Viewport() {
                   height={dragPreview.h}
                 />
               )}
+              {dragPreview?.kind === "ellipseMarquee" && (
+                <ellipse
+                  className="selection-preview-shape"
+                  cx={dragPreview.x + dragPreview.w / 2}
+                  cy={dragPreview.y + dragPreview.h / 2}
+                  rx={dragPreview.w / 2}
+                  ry={dragPreview.h / 2}
+                />
+              )}
               {dragPreview?.kind === "lasso" && dragPreview.points.length > 1 && (
                 <polyline
                   className="selection-preview-shape"
@@ -927,6 +951,15 @@ export function Viewport() {
                     .join(" ")}
                 />
               )}
+              {dragPreview?.kind === "polyLasso" &&
+                dragPreview.points.length > 0 && (
+                  <polyline
+                    className="selection-preview-shape"
+                    points={[...dragPreview.points, dragPreview.cursor]
+                      .map((p) => `${p.x + 0.5},${p.y + 0.5}`)
+                      .join(" ")}
+                  />
+                )}
             </svg>
           )}
 
@@ -974,9 +1007,6 @@ export function Viewport() {
                 ))}
               </svg>
             )}
-
-          {symmetryX && <div className="viewport-symmetry-x" />}
-          {symmetryY && <div className="viewport-symmetry-y" />}
         </div>
         )}
 

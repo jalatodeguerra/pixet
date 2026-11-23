@@ -1,3 +1,5 @@
+import { shouldPlotDither, type DitherPattern } from "./dither.ts";
+
 export type InkMode =
   | "simple"
   | "alphaBlend"
@@ -12,14 +14,8 @@ export interface InkContext {
   shadingRamp?: [number, number, number, number][];
   shadingDirection?: 1 | -1;
   ditherThreshold?: number;
+  ditherPattern?: DitherPattern;
 }
-
-const BAYER_4X4: readonly (readonly number[])[] = [
-  [0, 8, 2, 10],
-  [12, 4, 14, 6],
-  [3, 11, 1, 9],
-  [15, 7, 13, 5],
-];
 
 function clampByte(v: number): number {
   return Math.max(0, Math.min(255, Math.round(v)));
@@ -132,10 +128,8 @@ export function applyInkPixel(
 
     case "dither": {
       const threshold = ctx.ditherThreshold ?? 0.5;
-      const bx = ((Math.floor(x) % 4) + 4) % 4;
-      const by = ((Math.floor(y) % 4) + 4) % 4;
-      const bayerVal = BAYER_4X4[by][bx] / 16;
-      if (bayerVal >= threshold) return null;
+      const pattern = ctx.ditherPattern ?? "bayer4";
+      if (!shouldPlotDither(x, y, threshold, pattern)) return null;
 
       const out: [number, number, number, number] = [
         src[0],

@@ -1,5 +1,6 @@
 import {
   Box,
+  Brush,
   Contrast,
   EyeOff,
   FlipHorizontal2,
@@ -19,16 +20,29 @@ import {
 } from "lucide-react";
 import { performRedo, performUndo } from "../engine/document/historyActions";
 import {
+  captureCustomBrushFromSelectionAction,
   deselectAll,
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
 import {
   useEditorStore,
   type BrushShape,
+  type DitherPattern,
+  type GradientMode,
   type InkMode,
 } from "../store/editorStore";
 import { RigToolOptionsBar } from "./rig/RigToolOptionsBar";
 import { TileToolOptionsBar } from "./tiles/TileToolOptionsBar";
+
+const DITHER_PATTERNS: Array<{ id: DitherPattern; label: string }> = [
+  { id: "bayer2", label: "Bayer 2×2" },
+  { id: "bayer4", label: "Bayer 4×4" },
+  { id: "bayer8", label: "Bayer 8×8" },
+  { id: "checker", label: "Checker" },
+  { id: "diagL", label: "Diag \\" },
+  { id: "diagR", label: "Diag /" },
+  { id: "dots", label: "Dots" },
+];
 
 export function ToolOptionsBar() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
@@ -43,6 +57,30 @@ export function ToolOptionsBar() {
   const inkMode = useEditorStore((s) => s.inkMode);
   const setInkMode = useEditorStore((s) => s.setInkMode);
   const customBrush = useEditorStore((s) => s.customBrush);
+  const ditherPattern = useEditorStore((s) => s.ditherPattern);
+  const setDitherPattern = useEditorStore((s) => s.setDitherPattern);
+  const gradientMode = useEditorStore((s) => s.gradientMode);
+  const setGradientMode = useEditorStore((s) => s.setGradientMode);
+  const gradientDither = useEditorStore((s) => s.gradientDither);
+  const setGradientDither = useEditorStore((s) => s.setGradientDither);
+  const gradientPaletteSnap = useEditorStore((s) => s.gradientPaletteSnap);
+  const toggleGradientPaletteSnap = useEditorStore(
+    (s) => s.toggleGradientPaletteSnap
+  );
+  const fillTolerance = useEditorStore((s) => s.fillTolerance);
+  const setFillTolerance = useEditorStore((s) => s.setFillTolerance);
+  const fillDiagonal8 = useEditorStore((s) => s.fillDiagonal8);
+  const toggleFillDiagonal8 = useEditorStore((s) => s.toggleFillDiagonal8);
+  const fillSampleAllLayers = useEditorStore((s) => s.fillSampleAllLayers);
+  const toggleFillSampleAllLayers = useEditorStore(
+    (s) => s.toggleFillSampleAllLayers
+  );
+  const fillDitherPattern = useEditorStore((s) => s.fillDitherPattern);
+  const setFillDitherPattern = useEditorStore((s) => s.setFillDitherPattern);
+  const sprayRadius = useEditorStore((s) => s.sprayRadius);
+  const setSprayRadius = useEditorStore((s) => s.setSprayRadius);
+  const sprayDensity = useEditorStore((s) => s.sprayDensity);
+  const setSprayDensity = useEditorStore((s) => s.setSprayDensity);
   const pixelPerfect = useEditorStore((s) => s.pixelPerfect);
   const togglePixelPerfect = useEditorStore((s) => s.togglePixelPerfect);
   const shapeFilled = useEditorStore((s) => s.shapeFilled);
@@ -53,6 +91,18 @@ export function ToolOptionsBar() {
   const toggleSymmetryX = useEditorStore((s) => s.toggleSymmetryX);
   const symmetryY = useEditorStore((s) => s.symmetryY);
   const toggleSymmetryY = useEditorStore((s) => s.toggleSymmetryY);
+  const symmetryAxisX = useEditorStore((s) => s.symmetryAxisX);
+  const setSymmetryAxisX = useEditorStore((s) => s.setSymmetryAxisX);
+  const symmetryAxisY = useEditorStore((s) => s.symmetryAxisY);
+  const setSymmetryAxisY = useEditorStore((s) => s.setSymmetryAxisY);
+  const symmetryDiag45 = useEditorStore((s) => s.symmetryDiag45);
+  const toggleSymmetryDiag45 = useEditorStore((s) => s.toggleSymmetryDiag45);
+  const symmetryDiag135 = useEditorStore((s) => s.symmetryDiag135);
+  const toggleSymmetryDiag135 = useEditorStore((s) => s.toggleSymmetryDiag135);
+  const symmetryRadial = useEditorStore((s) => s.symmetryRadial);
+  const setSymmetryRadial = useEditorStore((s) => s.setSymmetryRadial);
+  const canvasWidth = useEditorStore((s) => s.canvasWidth);
+  const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const showGrid = useEditorStore((s) => s.showGrid);
   const toggleShowGrid = useEditorStore((s) => s.toggleShowGrid);
   const seamlessWrap = useEditorStore((s) => s.seamlessWrap);
@@ -86,18 +136,36 @@ export function ToolOptionsBar() {
   const showBrushShape =
     activeTool === "pencil" ||
     activeTool === "eraser" ||
-    activeTool === "fillBrush";
+    activeTool === "fillBrush" ||
+    activeTool === "ditherBrush" ||
+    activeTool === "shading";
   const showInkControls =
-    activeTool === "pencil" || activeTool === "fillBrush";
+    activeTool === "pencil" ||
+    activeTool === "fillBrush" ||
+    activeTool === "ditherBrush";
+  const showDitherSelector =
+    activeTool === "ditherBrush" ||
+    (showInkControls && inkMode === "dither");
 
   const showShapeFillToggle =
-    activeTool === "rect" || activeTool === "ellipse";
+    activeTool === "rect" ||
+    activeTool === "ellipse" ||
+    activeTool === "polygon";
   const showSelectionControls =
     hasSelection ||
     activeTool === "marquee" ||
+    activeTool === "ellipseMarquee" ||
     activeTool === "lasso" ||
+    activeTool === "polyLasso" ||
     activeTool === "wand" ||
     activeTool === "move";
+
+  const symCenterX = canvasWidth / 2;
+  const symCenterY = canvasHeight / 2;
+  const effectiveAxisX = symmetryAxisX ?? symCenterX;
+  const effectiveAxisY = symmetryAxisY ?? symCenterY;
+  const symAxisShifted =
+    symmetryAxisX !== null || symmetryAxisY !== null;
 
   if (workspaceMode === "rig") {
     return <RigToolOptionsBar />;
@@ -142,18 +210,20 @@ export function ToolOptionsBar() {
 
         <div className="option-divider" />
 
-        <label className="option-label">
-          <span>Size</span>
-          <input
-            type="range"
-            className="compact-range"
-            min={1}
-            max={64}
-            value={brushSize}
-            onChange={(e) => setBrushSize(Number(e.target.value))}
-          />
-          <span className="mono-value">{brushSize}px</span>
-        </label>
+        {activeTool !== "spray" && activeTool !== "gradient" && (
+          <label className="option-label">
+            <span>Size</span>
+            <input
+              type="range"
+              className="compact-range"
+              min={1}
+              max={64}
+              value={brushSize}
+              onChange={(e) => setBrushSize(Number(e.target.value))}
+            />
+            <span className="mono-value">{brushSize}px</span>
+          </label>
+        )}
 
         {showBrushShape && (
           <label className="option-label">
@@ -191,23 +261,122 @@ export function ToolOptionsBar() {
               <span className="mono-value">{brushOpacity}%</span>
             </label>
 
+            {activeTool !== "ditherBrush" && (
+              <label className="option-label">
+                <span>Ink</span>
+                <select
+                  className="palette-select"
+                  style={{ flex: "0 0 auto", width: "auto" }}
+                  value={inkMode}
+                  onChange={(e) => setInkMode(e.target.value as InkMode)}
+                  title="Ink blending mode"
+                >
+                  <option value="simple">Simple</option>
+                  <option value="alphaBlend">Alpha</option>
+                  <option value="shadingRamp">Shading</option>
+                  <option value="replaceColor">Replace</option>
+                  <option value="lockAlpha">Lock α</option>
+                  <option value="dither">Dither</option>
+                </select>
+              </label>
+            )}
+          </>
+        )}
+
+        {showDitherSelector && (
+          <label className="option-label">
+            <span>Dither</span>
+            <select
+              className="palette-select"
+              style={{ flex: "0 0 auto", width: "auto" }}
+              value={ditherPattern}
+              onChange={(e) =>
+                setDitherPattern(e.target.value as DitherPattern)
+              }
+              title="Ordered dither pattern"
+            >
+              {DITHER_PATTERNS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {activeTool === "spray" && (
+          <>
             <label className="option-label">
-              <span>Ink</span>
+              <span>Radius</span>
+              <input
+                type="range"
+                className="compact-range"
+                style={{ width: 64 }}
+                min={1}
+                max={32}
+                value={sprayRadius}
+                onChange={(e) => setSprayRadius(Number(e.target.value))}
+              />
+              <span className="mono-value">{sprayRadius}px</span>
+            </label>
+            <label className="option-label">
+              <span>Density</span>
+              <input
+                type="range"
+                className="compact-range"
+                style={{ width: 64 }}
+                min={1}
+                max={100}
+                value={sprayDensity}
+                onChange={(e) => setSprayDensity(Number(e.target.value))}
+              />
+              <span className="mono-value">{sprayDensity}%</span>
+            </label>
+          </>
+        )}
+
+        {activeTool === "gradient" && (
+          <>
+            <label className="option-label">
+              <span>Mode</span>
               <select
                 className="palette-select"
                 style={{ flex: "0 0 auto", width: "auto" }}
-                value={inkMode}
-                onChange={(e) => setInkMode(e.target.value as InkMode)}
-                title="Ink blending mode"
+                value={gradientMode}
+                onChange={(e) =>
+                  setGradientMode(e.target.value as GradientMode)
+                }
               >
-                <option value="simple">Simple</option>
-                <option value="alphaBlend">Alpha</option>
-                <option value="shadingRamp">Shading</option>
-                <option value="replaceColor">Replace</option>
-                <option value="lockAlpha">Lock α</option>
-                <option value="dither">Dither</option>
+                <option value="linear">Linear</option>
+                <option value="radial">Radial</option>
               </select>
             </label>
+            <label className="option-label">
+              <span>Dither</span>
+              <select
+                className="palette-select"
+                style={{ flex: "0 0 auto", width: "auto" }}
+                value={gradientDither}
+                onChange={(e) =>
+                  setGradientDither(e.target.value as DitherPattern | "none")
+                }
+              >
+                <option value="none">Smooth</option>
+                {DITHER_PATTERNS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className={`toggle-chip ${gradientPaletteSnap ? "active" : ""}`}
+              onClick={toggleGradientPaletteSnap}
+              title="Snap gradient colors to active palette"
+            >
+              <span>Palette Snap</span>
+            </button>
           </>
         )}
 
@@ -234,14 +403,67 @@ export function ToolOptionsBar() {
         )}
 
         {(activeTool === "fill" || activeTool === "wand") && (
-          <button
-            type="button"
-            className={`toggle-chip ${fillContiguous ? "active" : ""}`}
-            onClick={toggleFillContiguous}
-            title="Contiguous region vs global color match"
-          >
-            <span>{fillContiguous ? "Contiguous" : "Global"}</span>
-          </button>
+          <>
+            <button
+              type="button"
+              className={`toggle-chip ${fillContiguous ? "active" : ""}`}
+              onClick={toggleFillContiguous}
+              title="Contiguous region vs global color match"
+            >
+              <span>{fillContiguous ? "Contiguous" : "Global"}</span>
+            </button>
+            <label className="option-label">
+              <span>Tol</span>
+              <input
+                type="range"
+                className="compact-range"
+                style={{ width: 56 }}
+                min={0}
+                max={255}
+                value={fillTolerance}
+                onChange={(e) => setFillTolerance(Number(e.target.value))}
+              />
+              <span className="mono-value">{fillTolerance}</span>
+            </label>
+            <button
+              type="button"
+              className={`toggle-chip ${fillDiagonal8 ? "active" : ""}`}
+              onClick={toggleFillDiagonal8}
+              title="Include diagonal neighbors (8-way flood)"
+            >
+              <span>8-Way</span>
+            </button>
+            <button
+              type="button"
+              className={`toggle-chip ${fillSampleAllLayers ? "active" : ""}`}
+              onClick={toggleFillSampleAllLayers}
+              title="Sample composited visible layers instead of active cel only"
+            >
+              <span>All Layers</span>
+            </button>
+            {activeTool === "fill" && (
+              <label className="option-label">
+                <span>Dither</span>
+                <select
+                  className="palette-select"
+                  style={{ flex: "0 0 auto", width: "auto" }}
+                  value={fillDitherPattern}
+                  onChange={(e) =>
+                    setFillDitherPattern(
+                      e.target.value as DitherPattern | "none"
+                    )
+                  }
+                >
+                  <option value="none">Solid</option>
+                  {DITHER_PATTERNS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </>
         )}
 
         {showSelectionControls && (
@@ -284,15 +506,26 @@ export function ToolOptionsBar() {
               <RotateCw size={13} />
             </button>
             {hasSelection && (
-              <button
-                type="button"
-                className="toggle-chip"
-                onClick={deselectAll}
-                title="Deselect (Ctrl+D)"
-              >
-                <X size={12} />
-                <span>Deselect</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="toggle-chip"
+                  onClick={() => captureCustomBrushFromSelectionAction()}
+                  title="Capture selection as Custom Brush (Ctrl+B)"
+                >
+                  <Brush size={12} />
+                  <span>Capture Brush (Ctrl+B)</span>
+                </button>
+                <button
+                  type="button"
+                  className="toggle-chip"
+                  onClick={deselectAll}
+                  title="Deselect (Ctrl+D)"
+                >
+                  <X size={12} />
+                  <span>Deselect</span>
+                </button>
+              </>
             )}
           </>
         )}
@@ -304,7 +537,7 @@ export function ToolOptionsBar() {
           type="button"
           className={`toggle-chip ${symmetryX ? "active" : ""}`}
           onClick={toggleSymmetryX}
-          title="Mirror horizontally across center axis"
+          title="Mirror horizontally across symmetry X axis"
         >
           <FlipHorizontal2 size={12} />
           <span>X</span>
@@ -313,11 +546,90 @@ export function ToolOptionsBar() {
           type="button"
           className={`toggle-chip ${symmetryY ? "active" : ""}`}
           onClick={toggleSymmetryY}
-          title="Mirror vertically across center axis"
+          title="Mirror vertically across symmetry Y axis"
         >
           <FlipVertical2 size={12} />
           <span>Y</span>
         </button>
+        <button
+          type="button"
+          className={`toggle-chip ${symmetryDiag45 ? "active" : ""}`}
+          onClick={toggleSymmetryDiag45}
+          title="Diagonal 45° symmetry (\)"
+        >
+          <span>Diag \</span>
+        </button>
+        <button
+          type="button"
+          className={`toggle-chip ${symmetryDiag135 ? "active" : ""}`}
+          onClick={toggleSymmetryDiag135}
+          title="Diagonal 135° symmetry (/)"
+        >
+          <span>Diag /</span>
+        </button>
+        <label className="option-label" title="Radial symmetry segments">
+          <span>Radial</span>
+          <select
+            className="palette-select"
+            style={{ flex: "0 0 auto", width: "auto" }}
+            value={symmetryRadial}
+            onChange={(e) => setSymmetryRadial(Number(e.target.value))}
+          >
+            <option value={0}>Off</option>
+            {Array.from({ length: 11 }, (_, i) => i + 2).map((n) => (
+              <option key={n} value={n}>
+                {n}×
+              </option>
+            ))}
+          </select>
+        </label>
+        {(symmetryX ||
+          symmetryY ||
+          symmetryDiag45 ||
+          symmetryDiag135 ||
+          symmetryRadial >= 2) && (
+          <>
+            <label className="option-label" title="Symmetry X axis">
+              <span>AX</span>
+              <input
+                type="number"
+                className="draw-axis-input"
+                step={0.5}
+                value={effectiveAxisX}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setSymmetryAxisX(v);
+                }}
+              />
+            </label>
+            <label className="option-label" title="Symmetry Y axis">
+              <span>AY</span>
+              <input
+                type="number"
+                className="draw-axis-input"
+                step={0.5}
+                value={effectiveAxisY}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setSymmetryAxisY(v);
+                }}
+              />
+            </label>
+            {symAxisShifted && (
+              <button
+                type="button"
+                className="toggle-chip"
+                onClick={() => {
+                  setSymmetryAxisX(null);
+                  setSymmetryAxisY(null);
+                }}
+                title="Reset symmetry axes to canvas center"
+              >
+                <span>Center</span>
+              </button>
+            )}
+          </>
+        )}
 
         <div className="option-divider" />
 

@@ -6,12 +6,16 @@ import type { TileTool } from "../components/tiles/tileTools";
 import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
 import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
 import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
+import type { DitherPattern } from "../engine/tools/dither";
+import type { GradientMode } from "../engine/tools/gradient";
 import type { GuideAxis, GuideLine } from "../engine/tools/guides";
 import type { InkMode } from "../engine/tools/ink";
 
 export type {
   BrushShape,
   CustomBrushData,
+  DitherPattern,
+  GradientMode,
   GuideAxis,
   GuideLine,
   InkMode,
@@ -65,14 +69,23 @@ export type DataTool = "hitbox" | "hurtbox" | "collision" | "socket";
 export type ToolId =
   | "pencil"
   | "fillBrush"
+  | "ditherBrush"
+  | "shading"
+  | "spray"
+  | "jumble"
   | "eraser"
   | "line"
+  | "curve"
+  | "polygon"
   | "rect"
   | "ellipse"
   | "fill"
+  | "gradient"
   | "eyedropper"
   | "marquee"
+  | "ellipseMarquee"
   | "lasso"
+  | "polyLasso"
   | "wand"
   | "move"
   | "tileStamp"
@@ -162,11 +175,27 @@ interface EditorState {
   inkMode: InkMode;
   rightClickMode: RightClickMode;
   customBrush: CustomBrushData | null;
+  savedCustomBrushes: CustomBrushData[];
+  ditherPattern: DitherPattern;
+  gradientMode: GradientMode;
+  gradientDither: DitherPattern | "none";
+  gradientPaletteSnap: boolean;
+  fillTolerance: number;
+  fillDiagonal8: boolean;
+  fillSampleAllLayers: boolean;
+  fillDitherPattern: DitherPattern | "none";
+  sprayRadius: number;
+  sprayDensity: number;
   pixelPerfect: boolean;
   shapeFilled: boolean;
   fillContiguous: boolean;
   symmetryX: boolean;
   symmetryY: boolean;
+  symmetryAxisX: number | null;
+  symmetryAxisY: number | null;
+  symmetryDiag45: boolean;
+  symmetryDiag135: boolean;
+  symmetryRadial: number;
   showGrid: boolean;
   seamlessWrap: boolean;
   showTileGrid: boolean;
@@ -322,11 +351,28 @@ interface EditorState {
   setInkMode: (mode: InkMode) => void;
   setRightClickMode: (mode: RightClickMode) => void;
   setCustomBrush: (brush: CustomBrushData | null) => void;
+  addSavedCustomBrush: (brush: CustomBrushData) => void;
+  removeSavedCustomBrush: (id: string) => void;
+  setDitherPattern: (pattern: DitherPattern) => void;
+  setGradientMode: (mode: GradientMode) => void;
+  setGradientDither: (dither: DitherPattern | "none") => void;
+  toggleGradientPaletteSnap: () => void;
+  setFillTolerance: (tol: number) => void;
+  toggleFillDiagonal8: () => void;
+  toggleFillSampleAllLayers: () => void;
+  setFillDitherPattern: (pattern: DitherPattern | "none") => void;
+  setSprayRadius: (radius: number) => void;
+  setSprayDensity: (density: number) => void;
   togglePixelPerfect: () => void;
   toggleShapeFilled: () => void;
   toggleFillContiguous: () => void;
   toggleSymmetryX: () => void;
   toggleSymmetryY: () => void;
+  setSymmetryAxisX: (axis: number | null) => void;
+  setSymmetryAxisY: (axis: number | null) => void;
+  toggleSymmetryDiag45: () => void;
+  toggleSymmetryDiag135: () => void;
+  setSymmetryRadial: (segments: number) => void;
   toggleShowGrid: () => void;
   toggleSeamlessWrap: () => void;
   toggleShowTileGrid: () => void;
@@ -557,11 +603,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   inkMode: "simple",
   rightClickMode: "secondaryColor",
   customBrush: null,
+  savedCustomBrushes: [],
+  ditherPattern: "bayer4",
+  gradientMode: "linear",
+  gradientDither: "bayer4",
+  gradientPaletteSnap: false,
+  fillTolerance: 0,
+  fillDiagonal8: false,
+  fillSampleAllLayers: false,
+  fillDitherPattern: "none",
+  sprayRadius: 6,
+  sprayDensity: 30,
   pixelPerfect: true,
   shapeFilled: false,
   fillContiguous: true,
   symmetryX: false,
   symmetryY: false,
+  symmetryAxisX: null,
+  symmetryAxisY: null,
+  symmetryDiag45: false,
+  symmetryDiag135: false,
+  symmetryRadial: 0,
   showGrid: true,
   seamlessWrap: false,
   showTileGrid: true,
@@ -759,12 +821,52 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setInkMode: (inkMode) => set({ inkMode }),
   setRightClickMode: (rightClickMode) => set({ rightClickMode }),
   setCustomBrush: (customBrush) => set({ customBrush }),
+  addSavedCustomBrush: (brush) =>
+    set((s) => ({
+      savedCustomBrushes: [
+        brush,
+        ...s.savedCustomBrushes.filter((b) => b.id !== brush.id),
+      ],
+    })),
+  removeSavedCustomBrush: (id) =>
+    set((s) => ({
+      savedCustomBrushes: s.savedCustomBrushes.filter((b) => b.id !== id),
+    })),
+  setDitherPattern: (ditherPattern) => set({ ditherPattern }),
+  setGradientMode: (gradientMode) => set({ gradientMode }),
+  setGradientDither: (gradientDither) => set({ gradientDither }),
+  toggleGradientPaletteSnap: () =>
+    set((s) => ({ gradientPaletteSnap: !s.gradientPaletteSnap })),
+  setFillTolerance: (tol) =>
+    set({ fillTolerance: Math.max(0, Math.min(255, Math.round(tol))) }),
+  toggleFillDiagonal8: () =>
+    set((s) => ({ fillDiagonal8: !s.fillDiagonal8 })),
+  toggleFillSampleAllLayers: () =>
+    set((s) => ({ fillSampleAllLayers: !s.fillSampleAllLayers })),
+  setFillDitherPattern: (fillDitherPattern) => set({ fillDitherPattern }),
+  setSprayRadius: (radius) =>
+    set({ sprayRadius: Math.max(1, Math.min(32, Math.round(radius))) }),
+  setSprayDensity: (density) =>
+    set({ sprayDensity: Math.max(1, Math.min(100, Math.round(density))) }),
   togglePixelPerfect: () => set((s) => ({ pixelPerfect: !s.pixelPerfect })),
   toggleShapeFilled: () => set((s) => ({ shapeFilled: !s.shapeFilled })),
   toggleFillContiguous: () =>
     set((s) => ({ fillContiguous: !s.fillContiguous })),
   toggleSymmetryX: () => set((s) => ({ symmetryX: !s.symmetryX })),
   toggleSymmetryY: () => set((s) => ({ symmetryY: !s.symmetryY })),
+  setSymmetryAxisX: (axis) =>
+    set({ symmetryAxisX: axis === null ? null : Math.round(axis * 2) / 2 }),
+  setSymmetryAxisY: (axis) =>
+    set({ symmetryAxisY: axis === null ? null : Math.round(axis * 2) / 2 }),
+  toggleSymmetryDiag45: () =>
+    set((s) => ({ symmetryDiag45: !s.symmetryDiag45 })),
+  toggleSymmetryDiag135: () =>
+    set((s) => ({ symmetryDiag135: !s.symmetryDiag135 })),
+  setSymmetryRadial: (segments) =>
+    set({
+      symmetryRadial:
+        segments <= 0 ? 0 : Math.max(2, Math.min(12, Math.round(segments))),
+    }),
   toggleShowGrid: () => set((s) => ({ showGrid: !s.showGrid })),
   toggleSeamlessWrap: () => set((s) => ({ seamlessWrap: !s.seamlessWrap })),
   toggleShowTileGrid: () => set((s) => ({ showTileGrid: !s.showTileGrid })),

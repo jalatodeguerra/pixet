@@ -27,6 +27,29 @@ import {
   fuzzyMatchCommands,
   type CommandEntry,
 } from "../src/engine/tools/commandMatcher.ts";
+import { PixelBuffer, type RGBA } from "../src/engine/document/PixelBuffer.ts";
+import { shouldPlotDither, type DitherPattern } from "../src/engine/tools/dither.ts";
+import { renderGradientToBuffer } from "../src/engine/tools/gradient.ts";
+import {
+  plotCubicBezier,
+  plotPolygon,
+  plotQuadraticBezier,
+} from "../src/engine/tools/curves.ts";
+import { expandSymmetryV2, type SymmetryConfig } from "../src/engine/tools/symmetry.ts";
+import {
+  applyJumbleFootprint,
+  captureCustomBrush,
+  flipCustomBrushH,
+  flipCustomBrushV,
+  generateSprayPoints,
+  rotateCustomBrushCW,
+} from "../src/engine/tools/sprayJumble.ts";
+import { expandSymmetry, floodFill } from "../src/engine/tools/pixelAlgos.ts";
+import {
+  combineSelectionMasks,
+  createRectSelection,
+  SelectionMask,
+} from "../src/engine/tools/selection.ts";
 
 function makeCfg(overrides: Partial<BrushConfig> = {}): BrushConfig {
   return {
@@ -733,4 +756,504 @@ test("commandMatcher: fuzzyMatchCommands handles empty query, ranking, keywords,
   // No match
   assert.deepEqual(fuzzyMatchCommands("zzzznope", commands), []);
 });
+
+test("dither: shouldPlotDither covers all patterns, threshold bounds, negative coords, and bayer8 monotonicity", () => {
+  const patterns: DitherPattern[] = [
+    "bayer2",
+    "bayer4",
+    "bayer8",
+    "checker",
+    "diagL",
+    "diagR",
+    "dots",
+  ];
+
+  for (const pat of patterns) {
+    for (let y = -4; y < 8; y++) {
+      for (let x = -4; x < 8; x++) {
+        assert.equal(shouldPlotDither(x, y, 0, pat), false);
+        assert.equal(shouldPlotDither(x, y, -0.5, pat), false);
+        assert.equal(shouldPlotDither(x, y, 1, pat), true);
+        assert.equal(shouldPlotDither(x, y, 1.5, pat), true);
+      }
+    }
+  }
+
+  // Negative coordinate periodicity check
+  for (const pat of patterns) {
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        assert.equal(
+          shouldPlotDither(x - 8, y - 8, 0.5, pat),
+          shouldPlotDither(x, y, 0.5, pat),
+          `negative wrap mismatch for ${pat} at (${x},${y})`
+        );
+      }
+    }
+  }
+
+  // bayer8 monotonicity: higher thresholds never remove previously plotted pixels and count strictly matches k/64
+  let prevHits = 0;
+  let prevMask = new Set<string>();
+  for (let step = 0; step <= 64; step++) {
+    const t = step / 64;
+    let hits = 0;
+    const curMask = new Set<string>();
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        if (shouldPlotDither(x, y, t, "bayer8")) {
+          hits++;
+          curMask.add(`${x},${y}`);
+        }
+      }
+    }
+    assert.equal(hits, step);
+    assert.ok(hits >= prevHits);
+    for (const key of prevMask) {
+      assert.ok(curMask.has(key), `bayer8 monotonicity violated at step ${step} for ${key}`);
+    }
+    prevHits = hits;
+    prevMask = curMask;
+  }
+
+  // applyInkPixel delegates ditherPattern properly
+  const checkerInk = applyInkPixel([0, 0, 0, 0], [255, 0, 0, 255], 1, 0, "dither", {
+    ditherThreshold: 0.5,
+    ditherPattern: "checker",
+  });
+  assert.equal(checkerInk, null);
+  assert.deepEqual(
+    applyInkPixel([0, 0, 0, 0], [255, 0, 0, 255], 0, 0, "dither", {
+      ditherThreshold: 0.5,
+      ditherPattern: "checker",
+    }),
+    [255, 0, 0, 255]
+  );
+});
+
+test("gradient: renderGradientToBuffer handles linear, radial, bayer dither, paletteSnap, and selectionMask", () => {
+  const start: RGBA = [0, 0, 0, 255];
+  const end: RGBA = [200, 100, 50, 255];
+
+  // Linear smooth gradient across x = 0..4
+  const linBuf = new PixelBuffer(5, 2);
+  const linCount = renderGradientToBuffer(
+    linBuf,
+    0,
+    0,
+    4,
+    0,
+    start,
+    end,
+    { mode: "linear", dither: "none" },
+    false
+  );
+  assert.equal(linCount, 10);
+  assert.deepEqual(linBuf.getPixel(0, 0), [0, 0, 0, 255]);
+  assert.deepEqual(linBuf.getPixel(2, 0), [100, 50, 25, 255]);
+  assert.deepEqual(linBuf.getPixel(4, 1), [200, 100, 50, 255]);
+
+  // Bayer dither emits only start or end colors (no intermediate colors)
+  const ditherBuf = new PixelBuffer(8, 4);
+  renderGradientToBuffer(
+    ditherBuf,
+    0,
+    0,
+    7,
+    0,
+    start,
+    end,
+    { mode: "linear", dither: "bayer4" },
+    false
+  );
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 8; x++) {
+      const px = ditherBuf.getPixel(x, y);
+      const isStart = px[0] === 0 && px[1] === 0 && px[2] === 0 && px[3] === 255;
+      const isEnd = px[0] === 200 && px[1] === 100 && px[2] === 50 && px[3] === 255;
+      assert.ok(isStart || isEnd);
+    }
+  }
+  assert.deepEqual(ditherBuf.getPixel(0, 0), start);
+  assert.deepEqual(ditherBuf.getPixel(7, 0), end);
+
+  // Radial gradient + paletteSnap + selectionMask
+  const palette: RGBA[] = [
+    [10, 10, 10, 255],
+    [120, 120, 120, 255],
+    [240, 240, 240, 255],
+  ];
+  const mask = createRectSelection(7, 7, 1, 1, 5, 5);
+  const radBuf = new PixelBuffer(7, 7);
+  let beforeCallbacks = 0;
+  renderGradientToBuffer(
+    radBuf,
+    3,
+    3,
+    6,
+    3,
+    [0, 0, 0, 255],
+    [255, 255, 255, 255],
+    { mode: "radial", dither: "none", paletteSnap: palette },
+    false,
+    () => {
+      beforeCallbacks++;
+    },
+    mask
+  );
+  assert.equal(beforeCallbacks, 25); // 5x5 inside selection
+  assert.deepEqual(radBuf.getPixel(0, 0), [0, 0, 0, 0]); // outside mask untouched
+  assert.deepEqual(radBuf.getPixel(3, 3), palette[0]); // center is start
+  assert.deepEqual(radBuf.getPixel(1, 1), palette[2]); // outer corner snapped to brightest
+  for (let y = 1; y <= 5; y++) {
+    for (let x = 1; x <= 5; x++) {
+      const px = radBuf.getPixel(x, y);
+      assert.ok(
+        palette.some((p) => p[0] === px[0] && p[1] === px[1] && p[2] === px[2] && p[3] === px[3])
+      );
+    }
+  }
+});
+
+test("curves: plotQuadraticBezier, plotCubicBezier, and plotPolygon rasterize cleanly", () => {
+  // Quadratic bezier starts at p0, ends at p2, and has no consecutive duplicates
+  const quad = plotQuadraticBezier({ x: 0, y: 0 }, { x: 5, y: 10 }, { x: 10, y: 0 });
+  assert.deepEqual(quad[0], { x: 0, y: 0 });
+  assert.deepEqual(quad[quad.length - 1], { x: 10, y: 0 });
+  for (let i = 1; i < quad.length; i++) {
+    assert.ok(quad[i].x !== quad[i - 1].x || quad[i].y !== quad[i - 1].y);
+    assert.ok(Math.abs(quad[i].x - quad[i - 1].x) <= 1);
+    assert.ok(Math.abs(quad[i].y - quad[i - 1].y) <= 1);
+  }
+  assert.ok(quad.some((p) => p.y >= 4));
+
+  // Pixel-perfect quadratic bezier removes L-corners
+  const quadPP = plotQuadraticBezier({ x: 0, y: 0 }, { x: 0, y: 8 }, { x: 8, y: 8 }, true);
+  assert.ok(quadPP.length <= quad.length);
+
+  // Cubic bezier endpoints and 8-connected continuity
+  const cubic = plotCubicBezier(
+    { x: 0, y: 0 },
+    { x: 2, y: 12 },
+    { x: 10, y: -4 },
+    { x: 12, y: 8 }
+  );
+  assert.deepEqual(cubic[0], { x: 0, y: 0 });
+  assert.deepEqual(cubic[cubic.length - 1], { x: 12, y: 8 });
+  for (let i = 1; i < cubic.length; i++) {
+    assert.ok(Math.abs(cubic[i].x - cubic[i - 1].x) <= 1);
+    assert.ok(Math.abs(cubic[i].y - cubic[i - 1].y) <= 1);
+  }
+
+  // Open polyline (3 vertices, closed=false) does not connect last->first
+  const openPoly = plotPolygon(
+    [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 4 },
+    ],
+    false,
+    false
+  );
+  assert.equal(openPoly.length, 9);
+  assert.ok(!openPoly.some((p) => p.x === 2 && p.y === 2));
+
+  // Closed triangle outline connects last->first
+  const closedTri = plotPolygon(
+    [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 4 },
+    ],
+    false,
+    true
+  );
+  assert.ok(closedTri.some((p) => p.x === 2 && p.y === 2));
+
+  // Filled square 0..3 x 0..3 => exact 16 unique points
+  const filledSquare = plotPolygon(
+    [
+      { x: 0, y: 0 },
+      { x: 3, y: 0 },
+      { x: 3, y: 3 },
+      { x: 0, y: 3 },
+    ],
+    true,
+    true
+  );
+  assert.equal(filledSquare.length, 16);
+  const sqSet = coordsSet(filledSquare);
+  for (let y = 0; y <= 3; y++) {
+    for (let x = 0; x <= 3; x++) {
+      assert.ok(sqSet.has(`${x},${y}`));
+    }
+  }
+
+  // Filled triangle contains interior points
+  const filledTri = plotPolygon(
+    [
+      { x: 0, y: 0 },
+      { x: 6, y: 0 },
+      { x: 3, y: 6 },
+    ],
+    true
+  );
+  assert.ok(coordsSet(filledTri).has("3,2"));
+});
+
+test("symmetry: expandSymmetryV2 matches expandSymmetry at center and supports movable, diag45/135, and radial", () => {
+  const baseCfg = (overrides: Partial<SymmetryConfig> = {}): SymmetryConfig => ({
+    symX: false,
+    symY: false,
+    axisX: 16,
+    axisY: 16,
+    diag45: false,
+    diag135: false,
+    radialSegments: 1,
+    radialCx: 16,
+    radialCy: 16,
+    ...overrides,
+  });
+
+  // Exact center parity with expandSymmetry for both even and odd dimensions
+  for (const [w, h] of [
+    [32, 32],
+    [15, 11],
+  ]) {
+    const legacy = expandSymmetry({ x: 2, y: 3 }, w, h, true, true);
+    const v2 = expandSymmetryV2(
+      { x: 2, y: 3 },
+      baseCfg({ symX: true, symY: true, axisX: w / 2, axisY: h / 2 })
+    );
+    assert.deepEqual(v2[0], { x: 2, y: 3 });
+    assert.deepEqual(coordsSet(v2), coordsSet(legacy));
+  }
+
+  // Movable axisX = 10 mirrors x=3 -> 2*10 - 3 - 1 = 16
+  const movable = expandSymmetryV2({ x: 3, y: 5 }, baseCfg({ symX: true, axisX: 10 }));
+  assert.deepEqual(movable, [
+    { x: 3, y: 5 },
+    { x: 16, y: 5 },
+  ]);
+
+  // diag45 around (4, 4): (2, 1) -> reflected (1, 2)
+  const d45 = expandSymmetryV2(
+    { x: 2, y: 1 },
+    baseCfg({ diag45: true, axisX: 4, axisY: 4 })
+  );
+  assert.deepEqual(coordsSet(d45), new Set(["2,1", "1,2"]));
+
+  // diag135 around (4, 4): (2, 1): dx = -1.5, dy = -2.5 -> x = 4 - (-2.5) - 0.5 = 6, y = 4 - (-1.5) - 0.5 = 5
+  const d135 = expandSymmetryV2(
+    { x: 2, y: 1 },
+    baseCfg({ diag135: true, axisX: 4, axisY: 4 })
+  );
+  assert.deepEqual(coordsSet(d135), new Set(["2,1", "6,5"]));
+
+  // 4-fold radial around (10, 10)
+  const rad4 = expandSymmetryV2(
+    { x: 14, y: 11 },
+    baseCfg({ radialSegments: 4, radialCx: 10, radialCy: 10 })
+  );
+  assert.deepEqual(rad4[0], { x: 14, y: 11 });
+  assert.deepEqual(
+    coordsSet(rad4),
+    new Set(["14,11", "9,14", "6,9", "11,6"])
+  );
+
+  // 6-fold radial around (20, 20)
+  const rad6 = expandSymmetryV2(
+    { x: 28, y: 20 },
+    baseCfg({ radialSegments: 6, radialCx: 20, radialCy: 20 })
+  );
+  assert.equal(rad6.length, 6);
+  assert.deepEqual(rad6[0], { x: 28, y: 20 });
+});
+
+test("sprayJumble: generateSprayPoints determinism, applyJumbleFootprint conservation, captureCustomBrush & transforms", () => {
+  // Deterministic spray points within radius
+  const s1 = generateSprayPoints(10, 10, 5, 50, 12345);
+  const s2 = generateSprayPoints(10, 10, 5, 50, 12345);
+  const s3 = generateSprayPoints(10, 10, 5, 50, 54321);
+  assert.deepEqual(s1, s2);
+  assert.notDeepEqual(s1, s3);
+  assert.ok(s1.length > 0);
+  for (const pt of s1) {
+    assert.ok(Math.hypot(pt.x - 10, pt.y - 10) <= 5.8);
+  }
+
+  // Jumble conserves exact pixel multiset
+  const buf = new PixelBuffer(6, 6);
+  const paletteColors: RGBA[] = [
+    [255, 0, 0, 255],
+    [0, 255, 0, 255],
+    [0, 0, 255, 255],
+    [255, 255, 0, 255],
+  ];
+  const colorKey = (rgba: RGBA) => rgba.join(",");
+  const beforeHist = new Map<string, number>();
+  for (let y = 0; y < 6; y++) {
+    for (let x = 0; x < 6; x++) {
+      const col = paletteColors[(x + y * 2) % paletteColors.length];
+      buf.setPixel(x, y, col[0], col[1], col[2], col[3]);
+      const k = colorKey(col);
+      beforeHist.set(k, (beforeHist.get(k) ?? 0) + 1);
+    }
+  }
+  const jumbled = applyJumbleFootprint(buf, 3, 3, 2, 777, false);
+  assert.ok(jumbled > 0);
+  const afterHist = new Map<string, number>();
+  for (let y = 0; y < 6; y++) {
+    for (let x = 0; x < 6; x++) {
+      const k = colorKey(buf.getPixel(x, y));
+      afterHist.set(k, (afterHist.get(k) ?? 0) + 1);
+    }
+  }
+  assert.deepEqual(afterHist, beforeHist);
+
+  // captureCustomBrush + flipH/flipV/rotateCW x4 identity
+  const brushSrc = new PixelBuffer(4, 3);
+  brushSrc.setPixel(1, 0, 255, 0, 0, 255);
+  brushSrc.setPixel(2, 0, 0, 255, 0, 255);
+  brushSrc.setPixel(1, 1, 0, 0, 255, 128);
+  brushSrc.setPixel(3, 2, 255, 255, 255, 255);
+  const sel = createRectSelection(4, 3, 1, 0, 3, 2);
+  const captured = captureCustomBrush(
+    brushSrc,
+    {
+      contains: (x, y) => sel.contains(x, y),
+      getBounds: () => {
+        const b = sel.getBounds();
+        return b
+          ? { minX: b.x, minY: b.y, maxX: b.x + b.w - 1, maxY: b.y + b.h - 1 }
+          : null;
+      },
+    },
+    "MyBrush",
+    "rgba"
+  );
+  assert.ok(captured);
+  assert.equal(captured.width, 3);
+  assert.equal(captured.height, 3);
+  assert.equal(captured.name, "MyBrush");
+
+  const flipHH = flipCustomBrushH(flipCustomBrushH(captured));
+  assert.deepEqual(flipHH.pixels, captured.pixels);
+  const flipVV = flipCustomBrushV(flipCustomBrushV(captured));
+  assert.deepEqual(flipVV.pixels, captured.pixels);
+
+  let rot = captured;
+  for (let i = 0; i < 4; i++) {
+    rot = rotateCustomBrushCW(rot);
+  }
+  assert.equal(rot.width, captured.width);
+  assert.equal(rot.height, captured.height);
+  assert.deepEqual(rot.pixels, captured.pixels);
+});
+
+test("floodFill: supports tolerance, 8-connected diagonals, sampleBuffer, and ditherPattern", () => {
+  const fillColor: RGBA = [0, 0, 255, 255];
+
+  // Tolerance: fills near-red pixels within max channel diff <= 20, skips > 20
+  const tolBuf = new PixelBuffer(4, 1);
+  tolBuf.setPixel(0, 0, 200, 10, 10, 255);
+  tolBuf.setPixel(1, 0, 215, 25, 10, 255); // diff 15 -> match
+  tolBuf.setPixel(2, 0, 225, 10, 10, 255); // diff 25 -> barrier
+  tolBuf.setPixel(3, 0, 200, 10, 10, 255); // blocked by barrier
+  const tolWritten = floodFill(tolBuf, 0, 0, fillColor, true, false, undefined, null, {
+    tolerance: 20,
+  });
+  assert.equal(tolWritten, 2);
+  assert.deepEqual(tolBuf.getPixel(0, 0), fillColor);
+  assert.deepEqual(tolBuf.getPixel(1, 0), fillColor);
+  assert.deepEqual(tolBuf.getPixel(2, 0), [225, 10, 10, 255]);
+  assert.deepEqual(tolBuf.getPixel(3, 0), [200, 10, 10, 255]);
+
+  // 8-connected diagonal bridge vs 4-connected
+  const diag4 = new PixelBuffer(3, 3);
+  diag4.setPixel(0, 0, 10, 10, 10, 255);
+  diag4.setPixel(1, 1, 10, 10, 10, 255);
+  diag4.setPixel(2, 2, 10, 10, 10, 255);
+  assert.equal(floodFill(diag4, 0, 0, fillColor, true, false), 1);
+
+  const diag8 = new PixelBuffer(3, 3);
+  diag8.setPixel(0, 0, 10, 10, 10, 255);
+  diag8.setPixel(1, 1, 10, 10, 10, 255);
+  diag8.setPixel(2, 2, 10, 10, 10, 255);
+  assert.equal(
+    floodFill(diag8, 0, 0, fillColor, true, false, undefined, null, {
+      diagonal8: true,
+    }),
+    3
+  );
+
+  // sampleBuffer: barrier exists only on sampleBuffer
+  const sampleBuf = new PixelBuffer(4, 1);
+  sampleBuf.setPixel(2, 0, 255, 0, 0, 255);
+  const targetBuf = new PixelBuffer(4, 1);
+  const sampleWritten = floodFill(targetBuf, 0, 0, fillColor, true, false, undefined, null, {
+    sampleBuffer: sampleBuf,
+  });
+  assert.equal(sampleWritten, 2);
+  assert.deepEqual(targetBuf.getPixel(0, 0), fillColor);
+  assert.deepEqual(targetBuf.getPixel(1, 0), fillColor);
+  assert.deepEqual(targetBuf.getPixel(2, 0), [0, 0, 0, 0]);
+  assert.deepEqual(targetBuf.getPixel(3, 0), [0, 0, 0, 0]);
+
+  // ditherPattern: checker fills 50% of 4x4 region (8 pixels)
+  const ditherBuf = new PixelBuffer(4, 4);
+  const ditherWritten = floodFill(ditherBuf, 0, 0, fillColor, true, false, undefined, null, {
+    ditherPattern: "checker",
+  });
+  assert.equal(ditherWritten, 8);
+  assert.deepEqual(ditherBuf.getPixel(0, 0), fillColor);
+  assert.deepEqual(ditherBuf.getPixel(1, 0), [0, 0, 0, 0]);
+});
+
+test("selection: fromEllipse, combineSelectionMasks (add/subtract/intersect), and fromFloodFill with tolerance & diagonal8", () => {
+  // fromEllipse symmetric filled oval
+  const ellipseMask = SelectionMask.fromEllipse(1, 1, 5, 5, 8, 8);
+  assert.ok(ellipseMask.contains(3, 3));
+  assert.ok(!ellipseMask.contains(0, 0));
+  assert.ok(!ellipseMask.contains(7, 7));
+
+  // combineSelectionMasks: add, subtract, intersect, replace
+  const a = createRectSelection(6, 6, 0, 0, 2, 2); // 3x3 (9 px)
+  const b = createRectSelection(6, 6, 1, 1, 3, 3); // 3x3 (9 px), overlap 2x2 (4 px)
+
+  const added = combineSelectionMasks(a, b, "add");
+  assert.ok(added.contains(0, 0));
+  assert.ok(added.contains(3, 3));
+  assert.equal(added.mask.reduce((acc, v) => acc + v, 0), 14);
+
+  const sub = combineSelectionMasks(a, b, "subtract");
+  assert.ok(sub.contains(0, 0));
+  assert.ok(!sub.contains(1, 1));
+  assert.equal(sub.mask.reduce((acc, v) => acc + v, 0), 5);
+
+  const inter = combineSelectionMasks(a, b, "intersect");
+  assert.deepEqual(inter.getBounds(), { x: 1, y: 1, w: 2, h: 2 });
+  assert.equal(inter.mask.reduce((acc, v) => acc + v, 0), 4);
+
+  const rep = combineSelectionMasks(a, b, "replace");
+  assert.deepEqual(rep.getBounds(), { x: 1, y: 1, w: 3, h: 3 });
+
+  // fromFloodFill with tolerance + diagonal8
+  const wandBuf = new PixelBuffer(4, 3);
+  wandBuf.setPixel(0, 0, 100, 100, 100, 255);
+  wandBuf.setPixel(1, 1, 110, 105, 95, 255); // diagonal + within tol 10
+  wandBuf.setPixel(2, 2, 108, 100, 100, 255); // diagonal + within tol 10
+  wandBuf.setPixel(3, 2, 200, 100, 100, 255); // outside tol
+
+  const wand4 = SelectionMask.fromFloodFill(wandBuf, 0, 0, true, 10, false);
+  assert.ok(wand4.contains(0, 0));
+  assert.ok(!wand4.contains(1, 1));
+
+  const wand8 = SelectionMask.fromFloodFill(wandBuf, 0, 0, true, 10, true);
+  assert.ok(wand8.contains(0, 0));
+  assert.ok(wand8.contains(1, 1));
+  assert.ok(wand8.contains(2, 2));
+  assert.ok(!wand8.contains(3, 2));
+});
+
 

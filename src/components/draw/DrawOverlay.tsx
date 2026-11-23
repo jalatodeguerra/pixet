@@ -6,6 +6,10 @@ import {
 } from "../../engine/tools/drawOverlayGeometry";
 import { buildCustomGridLines } from "../../engine/tools/guides";
 import { useEditorStore } from "../../store/editorStore";
+import {
+  getSymmetryConfigFromState,
+  type DrawDragPreview,
+} from "./useDrawPointer";
 
 export {
   buildFootprintOutlinePath,
@@ -15,8 +19,10 @@ export {
 
 export function DrawOverlay({
   isStrokeActive,
+  dragPreview,
 }: {
   isStrokeActive?: boolean;
+  dragPreview?: DrawDragPreview;
 }) {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const tilesMode = useEditorStore((s) => s.tilesMode);
@@ -30,8 +36,14 @@ export function DrawOverlay({
   const brushSpacing = useEditorStore((s) => s.brushSpacing);
   const pixelPerfect = useEditorStore((s) => s.pixelPerfect);
   const customBrush = useEditorStore((s) => s.customBrush);
+  const sprayRadius = useEditorStore((s) => s.sprayRadius);
   const symmetryX = useEditorStore((s) => s.symmetryX);
   const symmetryY = useEditorStore((s) => s.symmetryY);
+  const symmetryAxisX = useEditorStore((s) => s.symmetryAxisX);
+  const symmetryAxisY = useEditorStore((s) => s.symmetryAxisY);
+  const symmetryDiag45 = useEditorStore((s) => s.symmetryDiag45);
+  const symmetryDiag135 = useEditorStore((s) => s.symmetryDiag135);
+  const symmetryRadial = useEditorStore((s) => s.symmetryRadial);
   const seamlessWrap = useEditorStore((s) => s.seamlessWrap);
   const guides = useEditorStore((s) => s.guides);
   const showCustomGrid = useEditorStore((s) => s.showCustomGrid);
@@ -44,7 +56,9 @@ export function DrawOverlay({
   const isFootprintTool =
     activeTool === "pencil" ||
     activeTool === "eraser" ||
-    activeTool === "fillBrush";
+    activeTool === "fillBrush" ||
+    activeTool === "ditherBrush" ||
+    activeTool === "shading";
   const footprintEnabled =
     workspaceMode !== "rig" &&
     workspaceMode !== "data" &&
@@ -52,6 +66,32 @@ export function DrawOverlay({
     isFootprintTool &&
     !isStrokeActive &&
     cursorPos !== null;
+
+  const symCfg = useMemo(
+    () =>
+      getSymmetryConfigFromState({
+        canvasWidth,
+        canvasHeight,
+        symmetryX,
+        symmetryY,
+        symmetryAxisX,
+        symmetryAxisY,
+        symmetryDiag45,
+        symmetryDiag135,
+        symmetryRadial,
+      }),
+    [
+      canvasWidth,
+      canvasHeight,
+      symmetryX,
+      symmetryY,
+      symmetryAxisX,
+      symmetryAxisY,
+      symmetryDiag45,
+      symmetryDiag135,
+      symmetryRadial,
+    ]
+  );
 
   const overlay = useMemo(() => {
     if (!footprintEnabled || !cursorPos) return null;
@@ -70,7 +110,8 @@ export function DrawOverlay({
       canvasHeight,
       symmetryX,
       symmetryY,
-      seamlessWrap
+      seamlessWrap,
+      symCfg
     );
   }, [
     footprintEnabled,
@@ -87,6 +128,7 @@ export function DrawOverlay({
     symmetryX,
     symmetryY,
     seamlessWrap,
+    symCfg,
   ]);
 
   const customGrid = useMemo(() => {
@@ -110,16 +152,43 @@ export function DrawOverlay({
     customGridOffsetY,
   ]);
 
+  const showSymmetryOverlay =
+    workspaceMode === "draw" &&
+    (symmetryX ||
+      symmetryY ||
+      symmetryDiag45 ||
+      symmetryDiag135 ||
+      symmetryRadial >= 2);
   const showGuides = workspaceMode === "draw" && guides.length > 0;
   const hasFootprint = Boolean(overlay && overlay.cells.length > 0);
   const hasCustomGrid = Boolean(
     customGrid &&
       (customGrid.verticals.length > 0 || customGrid.horizontals.length > 0)
   );
+  const showSprayRing =
+    workspaceMode === "draw" && activeTool === "spray" && cursorPos !== null;
+  const hasToolPreview = Boolean(
+    dragPreview &&
+      (dragPreview.kind === "gradient" ||
+        dragPreview.kind === "curve" ||
+        dragPreview.kind === "polygon")
+  );
 
-  if (!hasFootprint && !showGuides && !hasCustomGrid) return null;
+  if (
+    !hasFootprint &&
+    !showGuides &&
+    !hasCustomGrid &&
+    !showSymmetryOverlay &&
+    !showSprayRing &&
+    !hasToolPreview
+  ) {
+    return null;
+  }
 
   const isEraser = activeTool === "eraser";
+  const axisX = symCfg.axisX;
+  const axisY = symCfg.axisY;
+  const maxSpan = Math.max(canvasWidth, canvasHeight) * 2;
 
   return (
     <svg
@@ -174,6 +243,162 @@ export function DrawOverlay({
             />
           )
         )}
+
+      {showSymmetryOverlay && (
+        <g className="draw-symmetry-group">
+          {symmetryX && (
+            <line
+              className="draw-symmetry-axis"
+              x1={axisX}
+              y1={0}
+              x2={axisX}
+              y2={canvasHeight}
+            />
+          )}
+          {symmetryY && (
+            <line
+              className="draw-symmetry-axis"
+              x1={0}
+              y1={axisY}
+              x2={canvasWidth}
+              y2={axisY}
+            />
+          )}
+          {symmetryDiag45 && (
+            <line
+              className="draw-symmetry-axis diag"
+              x1={axisX - maxSpan}
+              y1={axisY - maxSpan}
+              x2={axisX + maxSpan}
+              y2={axisY + maxSpan}
+            />
+          )}
+          {symmetryDiag135 && (
+            <line
+              className="draw-symmetry-axis diag"
+              x1={axisX - maxSpan}
+              y1={axisY + maxSpan}
+              x2={axisX + maxSpan}
+              y2={axisY - maxSpan}
+            />
+          )}
+          {symmetryRadial >= 2 && (
+            <g className="draw-symmetry-radial">
+              {Array.from({ length: symmetryRadial }, (_, i) => {
+                const angle = (2 * Math.PI * i) / symmetryRadial;
+                return (
+                  <line
+                    key={`rad-${i}`}
+                    className="draw-symmetry-axis radial"
+                    x1={axisX}
+                    y1={axisY}
+                    x2={axisX + Math.cos(angle) * maxSpan}
+                    y2={axisY + Math.sin(angle) * maxSpan}
+                  />
+                );
+              })}
+              <circle
+                className="draw-symmetry-center"
+                cx={axisX}
+                cy={axisY}
+                r={0.5}
+              />
+            </g>
+          )}
+        </g>
+      )}
+
+      {showSprayRing && cursorPos && (
+        <circle
+          className="draw-spray-ring"
+          cx={cursorPos.x + 0.5}
+          cy={cursorPos.y + 0.5}
+          r={sprayRadius}
+        />
+      )}
+
+      {dragPreview?.kind === "gradient" && (
+        <g className="draw-tool-preview">
+          <line
+            className="draw-preview-line"
+            x1={dragPreview.x0 + 0.5}
+            y1={dragPreview.y0 + 0.5}
+            x2={dragPreview.x1 + 0.5}
+            y2={dragPreview.y1 + 0.5}
+          />
+          <circle
+            className="draw-preview-handle"
+            cx={dragPreview.x0 + 0.5}
+            cy={dragPreview.y0 + 0.5}
+            r={0.6}
+          />
+          <circle
+            className="draw-preview-handle end"
+            cx={dragPreview.x1 + 0.5}
+            cy={dragPreview.y1 + 0.5}
+            r={0.6}
+          />
+        </g>
+      )}
+
+      {dragPreview?.kind === "curve" && (
+        <g className="draw-tool-preview">
+          <line
+            className="draw-preview-guide"
+            x1={dragPreview.p0.x + 0.5}
+            y1={dragPreview.p0.y + 0.5}
+            x2={dragPreview.p1.x + 0.5}
+            y2={dragPreview.p1.y + 0.5}
+          />
+          <line
+            className="draw-preview-guide"
+            x1={dragPreview.p1.x + 0.5}
+            y1={dragPreview.p1.y + 0.5}
+            x2={dragPreview.p2.x + 0.5}
+            y2={dragPreview.p2.y + 0.5}
+          />
+          <circle
+            className="draw-preview-handle"
+            cx={dragPreview.p0.x + 0.5}
+            cy={dragPreview.p0.y + 0.5}
+            r={0.5}
+          />
+          <circle
+            className="draw-preview-handle end"
+            cx={dragPreview.p1.x + 0.5}
+            cy={dragPreview.p1.y + 0.5}
+            r={0.6}
+          />
+          <circle
+            className="draw-preview-handle"
+            cx={dragPreview.p2.x + 0.5}
+            cy={dragPreview.p2.y + 0.5}
+            r={0.5}
+          />
+        </g>
+      )}
+
+      {dragPreview?.kind === "polygon" && dragPreview.points.length > 0 && (
+        <g className="draw-tool-preview">
+          <polyline
+            className="draw-preview-guide"
+            points={[...dragPreview.points, dragPreview.cursor]
+              .map((p) => `${p.x + 0.5},${p.y + 0.5}`)
+              .join(" ")}
+          />
+          {dragPreview.points.map((p, idx) => (
+            <circle
+              key={`poly-v-${idx}`}
+              className={
+                idx === 0 ? "draw-preview-handle end" : "draw-preview-handle"
+              }
+              cx={p.x + 0.5}
+              cy={p.y + 0.5}
+              r={idx === 0 ? 0.6 : 0.4}
+            />
+          ))}
+        </g>
+      )}
 
       {hasFootprint &&
         overlay &&

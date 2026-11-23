@@ -1,18 +1,27 @@
 import {
+  Blend,
   Box,
   Brush,
   Circle,
+  CircleDashed,
+  Contrast,
   Eraser,
   Grid2x2,
+  Grip,
   Lasso,
   Minus,
   Move,
   PaintBucket,
   Pencil,
+  Pentagon,
   Pipette,
   Scan,
+  Shuffle,
+  Spline,
+  SprayCan,
   Square,
   Wand2,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { ToolId } from "../../store/editorStore";
@@ -36,6 +45,10 @@ export const DRAW_TOOL_GROUPS: DrawToolGroupDef[] = [
     items: [
       { id: "pencil", label: "Pencil", shortcut: "B", icon: Pencil },
       { id: "fillBrush", label: "Fill Brush", shortcut: "F", icon: Brush },
+      { id: "ditherBrush", label: "Dither Brush", shortcut: "D", icon: Grip },
+      { id: "shading", label: "Shading", shortcut: "J", icon: Contrast },
+      { id: "spray", label: "Spray", shortcut: "S", icon: SprayCan },
+      { id: "jumble", label: "Jumble", shortcut: "Shift+S", icon: Shuffle },
     ],
   },
   {
@@ -49,13 +62,18 @@ export const DRAW_TOOL_GROUPS: DrawToolGroupDef[] = [
       { id: "rect", label: "Rectangle", shortcut: "U", icon: Square },
       { id: "ellipse", label: "Ellipse", shortcut: "O", icon: Circle },
       { id: "line", label: "Line", shortcut: "L", icon: Minus },
+      { id: "curve", label: "Curve (Bezier)", shortcut: "C", icon: Spline },
+      { id: "polygon", label: "Polygon", shortcut: "P", icon: Pentagon },
       { id: "isoBox", label: "Iso Box (2:1)", shortcut: "K", icon: Box },
     ],
     dividerAfter: true,
   },
   {
     id: "fill-group",
-    items: [{ id: "fill", label: "Paint Bucket", shortcut: "G", icon: PaintBucket }],
+    items: [
+      { id: "fill", label: "Paint Bucket", shortcut: "G", icon: PaintBucket },
+      { id: "gradient", label: "Gradient", shortcut: "Shift+G", icon: Blend },
+    ],
   },
   {
     id: "eyedropper-group",
@@ -66,8 +84,10 @@ export const DRAW_TOOL_GROUPS: DrawToolGroupDef[] = [
     id: "select-group",
     items: [
       { id: "marquee", label: "Rect Marquee", shortcut: "M", icon: Scan },
+      { id: "ellipseMarquee", label: "Ellipse Marquee", icon: CircleDashed },
       { id: "lasso", label: "Lasso Select", icon: Lasso },
-      { id: "wand", label: "Magic Wand", icon: Wand2 },
+      { id: "polyLasso", label: "Poly Lasso", icon: Waypoints },
+      { id: "wand", label: "Magic Wand", shortcut: "W", icon: Wand2 },
     ],
   },
   {
@@ -88,8 +108,7 @@ export const DRAW_TOOL_BY_ID = new Map<ToolId, DrawToolDef>(
 );
 
 export const DRAW_TOOL_SHORTCUTS: Record<string, ToolId> = Object.fromEntries(
-  ALL_DRAW_TOOLS.filter((t) => Boolean(t.shortcut)).map((t) => [
-    t.shortcut!.toLowerCase(),
-    t.id,
-  ])
+  ALL_DRAW_TOOLS.filter(
+    (t) => Boolean(t.shortcut) && !t.shortcut!.includes("+")
+  ).map((t) => [t.shortcut!.toLowerCase(), t.id])
 ) as Record<string, ToolId>;

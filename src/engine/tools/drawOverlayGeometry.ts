@@ -1,5 +1,6 @@
 import { getBrushFootprint, type BrushConfig } from "./brush.ts";
 import { expandSymmetry, type Point } from "./pixelAlgos.ts";
+import { expandSymmetryV2, type SymmetryConfig } from "./symmetry.ts";
 
 export interface FootprintOutlineResult {
   cells: Point[];
@@ -40,20 +41,23 @@ export function computeBrushOverlayFootprint(
   canvasHeight: number,
   symX: boolean,
   symY: boolean,
-  seamlessWrap: boolean
+  seamlessWrap: boolean,
+  symmetryV2?: SymmetryConfig
 ): FootprintOutlineResult {
   const footprint = getBrushFootprint(cx, cy, cfg);
   const seen = new Set<string>();
   const cells: Point[] = [];
 
   for (const fp of footprint) {
-    const syms = expandSymmetry(
-      { x: fp.x, y: fp.y },
-      canvasWidth,
-      canvasHeight,
-      symX,
-      symY
-    );
+    const syms = symmetryV2
+      ? expandSymmetryV2({ x: fp.x, y: fp.y }, symmetryV2)
+      : expandSymmetry(
+          { x: fp.x, y: fp.y },
+          canvasWidth,
+          canvasHeight,
+          symX,
+          symY
+        );
     for (const rawSp of syms) {
       const sp = seamlessWrap
         ? {

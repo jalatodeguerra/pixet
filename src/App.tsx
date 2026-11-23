@@ -19,6 +19,7 @@ import { Viewport } from "./components/Viewport";
 import { pixelEngine } from "./engine/document/PixelEngine";
 import { performRedo, performUndo } from "./engine/document/historyActions";
 import {
+  captureCustomBrushFromSelectionAction,
   commitFloatingSelection,
   copySelection,
   copySelectionToNewLayer,
@@ -148,6 +149,11 @@ export function App() {
         if (ctrlKey === "y") {
           e.preventDefault();
           performRedo();
+          return;
+        }
+        if (ctrlKey === "b") {
+          e.preventDefault();
+          captureCustomBrushFromSelectionAction();
           return;
         }
         if (ctrlKey === "c") {
@@ -448,6 +454,18 @@ export function App() {
         } else {
           state.toggleViewFlipH();
         }
+        return;
+      }
+
+      if (e.shiftKey && key === "g") {
+        e.preventDefault();
+        state.setActiveTool("gradient");
+        return;
+      }
+
+      if (e.shiftKey && key === "s") {
+        e.preventDefault();
+        state.setActiveTool("jumble");
         return;
       }
 

@@ -17,6 +17,7 @@ import {
   SelectionMask,
   stampFloatingPixels,
 } from "../tools/selection.ts";
+import { captureCustomBrush } from "../tools/sprayJumble.ts";
 
 export type TransformOp = "flipH" | "flipV" | "rotateCW" | "rotateCCW";
 
@@ -545,4 +546,71 @@ export function transformSelectionOrCel(op: TransformOp): void {
   } else {
     pixelEngine.history.cancelTransaction();
   }
+}
+
+export function captureCustomBrushFromSelectionAction(): boolean {
+  const state = useEditorStore.getState();
+  const layer = state.layers.find((l) => l.id === state.activeLayerId);
+  if (!layer || layer.kind === "group") {
+    state.setStatusMessage("Select a raster layer to capture brush");
+    return false;
+  }
+
+  let sourceBuf: PixelBuffer | null = null;
+  let mask: SelectionMask | null = null;
+
+  if (pixelEngine.floating) {
+    sourceBuf = new PixelBuffer(pixelEngine.width, pixelEngine.height);
+    stampFloatingPixels(
+      sourceBuf,
+      pixelEngine.floating.pixels,
+      pixelEngine.floating.offsetX,
+      pixelEngine.floating.offsetY
+    );
+    mask = buildMaskForBuffer(
+      pixelEngine.width,
+      pixelEngine.height,
+      pixelEngine.floating.pixels,
+      pixelEngine.floating.offsetX,
+      pixelEngine.floating.offsetY
+    );
+  } else if (pixelEngine.selection && !pixelEngine.selection.isEmpty()) {
+    sourceBuf = pixelEngine.getCel(layer.id, state.currentFrame) ?? null;
+    mask = pixelEngine.selection;
+  }
+
+  if (!sourceBuf || !mask || mask.isEmpty()) {
+    state.setStatusMessage("Make a selection over pixels to capture a brush");
+    return false;
+  }
+
+  const brushName = `Custom ${state.savedCustomBrushes.length + 1}`;
+  const captured = captureCustomBrush(
+    sourceBuf,
+    {
+      contains: (x, y) => mask!.contains(x, y),
+      getBounds: () => {
+        const b = mask!.getBounds();
+        return b
+          ? { minX: b.x, minY: b.y, maxX: b.x + b.w - 1, maxY: b.y + b.h - 1 }
+          : null;
+      },
+    },
+    brushName,
+    "rgba"
+  );
+
+  if (!captured) {
+    state.setStatusMessage("Selection has no opaque pixels to capture");
+    return false;
+  }
+
+  state.setCustomBrush(captured);
+  state.addSavedCustomBrush(captured);
+  state.setBrushShape("custom");
+  state.setActiveTool("pencil");
+  state.setStatusMessage(
+    `Captured brush "${captured.name}" (${captured.width}×${captured.height})`
+  );
+  return true;
 }
