@@ -3219,5 +3219,66 @@
   white-space: nowrap;
 }
 
+/* D3 Interactive Free Transform Gizmo */
+.draw-ft-gizmo {
+  pointer-events: auto;
+}
+
+.draw-ft-box {
+  fill: rgba(76, 139, 245, 0.04);
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+  pointer-events: all;
+}
+
+.draw-ft-rot-stem {
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.draw-ft-handle,
+.draw-ft-rot-handle {
+  fill: #202020;
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  shape-rendering: crispEdges;
+  pointer-events: all;
+}
+
+.draw-ft-rot-handle {
+  fill: #4c8bf5;
+  stroke: #ffffff;
+  cursor: crosshair;
+}
+
+.draw-ft-pivot {
+  cursor: move;
+  pointer-events: all;
+}
+
+.draw-ft-pivot-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.draw-ft-pivot-ring {
+  fill: #202020;
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.draw-ft-pivot-line {
+  stroke: #ffffff;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  shape-rendering: crispEdges;
+}
+
 
 

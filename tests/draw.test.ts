@@ -46,10 +46,25 @@ import {
 } from "../src/engine/tools/sprayJumble.ts";
 import { expandSymmetry, floodFill } from "../src/engine/tools/pixelAlgos.ts";
 import {
+  borderSelectionMask,
   combineSelectionMasks,
+  computeSelectionStrokePoints,
+  contractSelectionMask,
   createRectSelection,
+  expandSelectionMask,
+  invertSelectionMask,
+  selectBufferNonTransparent,
   SelectionMask,
 } from "../src/engine/tools/selection.ts";
+import { rotSpriteRotate, scale2xEPX } from "../src/engine/tools/rotsprite.ts";
+import {
+  applyFreeTransform,
+  computePivotTransformPatch,
+  computeRotateTransformPatch,
+  computeScaleTransformPatch,
+  computeTransformGizmo,
+  type TransformState,
+} from "../src/engine/tools/transform.ts";
 
 function makeCfg(overrides: Partial<BrushConfig> = {}): BrushConfig {
   return {
@@ -1256,4 +1271,340 @@ test("selection: fromEllipse, combineSelectionMasks (add/subtract/intersect), an
   assert.ok(!wand8.contains(3, 2));
 });
 
+test("rotsprite: scale2xEPX 2x dimensions and diagonal smoothing on a 3x3 pattern", () => {
+  // 3x3 diagonal line:
+  // . X .
+  // X . .
+  // . . .
+  // At center (1,1): A=X, C=X, B=., D=. => P1=A=X (smooths diagonal corner)
+  const src = new PixelBuffer(3, 3);
+  const X: RGBA = [255, 40, 20, 255];
+  src.setPixel(1, 0, X[0], X[1], X[2], X[3]);
+  src.setPixel(0, 1, X[0], X[1], X[2], X[3]);
+
+  const up = scale2xEPX(src);
+  assert.equal(up.width, 6);
+  assert.equal(up.height, 6);
+
+  // Center pixel (1,1) maps to 2x2 block (2..3, 2..3); P1=(2,2) should become X
+  assert.deepEqual(up.getPixel(2, 2), X);
+  assert.deepEqual(up.getPixel(3, 2), [0, 0, 0, 0]);
+  assert.deepEqual(up.getPixel(2, 3), [0, 0, 0, 0]);
+  assert.deepEqual(up.getPixel(3, 3), [0, 0, 0, 0]);
+
+  // Top-left (0,0): clamped neighbors A=(0,0)=., C=(0,0)=., B=(1,0)=X, D=(0,1)=X
+  // Since B == D && B != A && D != C, P4=(1,1) becomes X!
+  assert.deepEqual(up.getPixel(0, 0), [0, 0, 0, 0]);
+  assert.deepEqual(up.getPixel(1, 1), X);
+});
+
+test("rotsprite: rotSpriteRotate 0deg identity, 90/180deg pixel conservation, and 45deg output", () => {
+  const src = new PixelBuffer(4, 3);
+  src.setPixel(0, 0, 255, 0, 0, 255);
+  src.setPixel(1, 0, 0, 255, 0, 255);
+  src.setPixel(2, 1, 0, 0, 255, 255);
+  src.setPixel(3, 2, 255, 255, 0, 128);
+
+  // 0° and 360° identity
+  const rot0 = rotSpriteRotate(src, 0);
+  assert.equal(rot0.width, 4);
+  assert.equal(rot0.height, 3);
+  assert.deepEqual(rot0.data, src.data);
+  const rot360 = rotSpriteRotate(src, 360);
+  assert.deepEqual(rot360.data, src.data);
+
+  // 90° CW: dimensions swap (3x4) and opaque pixel multiset is conserved
+  const rot90 = rotSpriteRotate(src, 90);
+  assert.equal(rot90.width, 3);
+  assert.equal(rot90.height, 4);
+  assert.deepEqual(rot90.getPixel(2, 0), [255, 0, 0, 255]); // (0,0) -> (h-1-0, 0) = (2,0)
+  assert.deepEqual(rot90.getPixel(0, 3), [255, 255, 0, 128]); // (3,2) -> (0,3)
+
+  // 180°: dimensions preserved (4x3) and double 180° equals original
+  const rot180 = rotSpriteRotate(src, 180);
+  assert.equal(rot180.width, 4);
+  assert.equal(rot180.height, 3);
+  assert.deepEqual(rot180.getPixel(3, 2), [255, 0, 0, 255]);
+  assert.deepEqual(rotSpriteRotate(rot180, 180).data, src.data);
+
+  // 45° rotation on a 6x6 sprite produces non-empty expanded rotated output
+  const block = new PixelBuffer(6, 6);
+  for (let y = 1; y <= 4; y++) {
+    for (let x = 1; x <= 4; x++) {
+      block.setPixel(x, y, 100, 180, 240, 255);
+    }
+  }
+  const rot45 = rotSpriteRotate(block, 45);
+  assert.ok(rot45.width >= 8 && rot45.height >= 8);
+  assert.ok(!rot45.isEmpty());
+});
+
+test("transform: applyFreeTransform covers identity, 2x scale, 90deg rotation, skew, and pivot", () => {
+  const src = new PixelBuffer(4, 2);
+  src.setPixel(0, 0, 255, 0, 0, 255);
+  src.setPixel(3, 0, 0, 255, 0, 255);
+  src.setPixel(0, 1, 0, 0, 255, 255);
+  src.setPixel(3, 1, 255, 255, 0, 255);
+
+  // Identity preserves pixels exactly and rounds offset
+  const id = applyFreeTransform(src, {
+    x: 5.4,
+    y: -2.2,
+    width: 4,
+    height: 2,
+    scaleX: 1,
+    scaleY: 1,
+    rotationDeg: 0,
+    skewX: 0,
+    skewY: 0,
+    pivotX: 2,
+    pivotY: 1,
+    algorithm: "nearest",
+  });
+  assert.equal(id.offsetX, 5);
+  assert.equal(id.offsetY, -2);
+  assert.deepEqual(id.buffer.data, src.data);
+
+  // 2x scale around pivot (0, 0) -> 8x4 buffer starting at offset (0, 0)
+  const scaled = applyFreeTransform(src, {
+    x: 0,
+    y: 0,
+    width: 8,
+    height: 4,
+    scaleX: 2,
+    scaleY: 2,
+    rotationDeg: 0,
+    skewX: 0,
+    skewY: 0,
+    pivotX: 0,
+    pivotY: 0,
+    algorithm: "nearest",
+  });
+  assert.equal(scaled.offsetX, 0);
+  assert.equal(scaled.offsetY, 0);
+  assert.equal(scaled.buffer.width, 8);
+  assert.equal(scaled.buffer.height, 4);
+  assert.deepEqual(scaled.buffer.getPixel(0, 0), [255, 0, 0, 255]);
+  assert.deepEqual(scaled.buffer.getPixel(1, 1), [255, 0, 0, 255]);
+  assert.deepEqual(scaled.buffer.getPixel(7, 3), [255, 255, 0, 255]);
+
+  // 90° rotation around pivot (0, 0): (x,y) -> (-y, x), so x in [-2..0], y in [0..4]
+  const rot90 = applyFreeTransform(src, {
+    x: 0,
+    y: 0,
+    width: 4,
+    height: 2,
+    scaleX: 1,
+    scaleY: 1,
+    rotationDeg: 90,
+    skewX: 0,
+    skewY: 0,
+    pivotX: 0,
+    pivotY: 0,
+    algorithm: "rotsprite",
+  });
+  assert.equal(rot90.offsetX, -2);
+  assert.equal(rot90.offsetY, 0);
+  assert.equal(rot90.buffer.width, 2);
+  assert.equal(rot90.buffer.height, 4);
+  // (0,0) rotated 90° around (0,0) lands at world (-1, 0) -> buffer (1, 0)
+  assert.deepEqual(rot90.buffer.getPixel(1, 0), [255, 0, 0, 255]);
+  // (3,1) lands at world (-2, 3) -> buffer (0, 3)
+  assert.deepEqual(rot90.buffer.getPixel(0, 3), [255, 255, 0, 255]);
+
+  // Skew X=1 around pivot (0,0) shifts bottom row by +height*1
+  const solid = new PixelBuffer(2, 2);
+  solid.setPixel(0, 0, 200, 100, 50, 255);
+  solid.setPixel(1, 0, 200, 100, 50, 255);
+  solid.setPixel(0, 1, 200, 100, 50, 255);
+  solid.setPixel(1, 1, 200, 100, 50, 255);
+  const skewed = applyFreeTransform(solid, {
+    x: 0,
+    y: 0,
+    width: 2,
+    height: 2,
+    scaleX: 1,
+    scaleY: 1,
+    rotationDeg: 0,
+    skewX: 1,
+    skewY: 0,
+    pivotX: 0,
+    pivotY: 0,
+    algorithm: "scale2x",
+  });
+  assert.equal(skewed.buffer.width, 4);
+  assert.equal(skewed.buffer.height, 2);
+  assert.deepEqual(skewed.buffer.getPixel(0, 0), [200, 100, 50, 255]);
+  assert.deepEqual(skewed.buffer.getPixel(2, 1), [200, 100, 50, 255]);
+
+  // Pivot preservation: scaling 2x around pivot (2, 1) keeps pixel near pivot stationary in world space
+  const piv = new PixelBuffer(5, 5);
+  piv.setPixel(2, 2, 10, 200, 30, 255);
+  const pivScaled = applyFreeTransform(piv, {
+    x: 0,
+    y: 0,
+    width: 5,
+    height: 5,
+    scaleX: 2,
+    scaleY: 2,
+    rotationDeg: 0,
+    skewX: 0,
+    skewY: 0,
+    pivotX: 2.5,
+    pivotY: 2.5,
+    algorithm: "nearest",
+  });
+  // Pixel at center (2,2) [center 2.5,2.5] stays at world (2,2)
+  const localX = 2 - pivScaled.offsetX;
+  const localY = 2 - pivScaled.offsetY;
+  assert.deepEqual(pivScaled.buffer.getPixel(localX, localY), [10, 200, 30, 255]);
+});
+
+test("selection: invert, expand, contract, border, selectBufferNonTransparent, and computeSelectionStrokePoints", () => {
+  const countSelected = (m: SelectionMask) =>
+    m.mask.reduce((acc, v) => acc + (v !== 0 ? 1 : 0), 0);
+
+  // 8x8 canvas with 4x4 square at [2..5, 2..5] (16 px)
+  const sq = createRectSelection(8, 8, 2, 2, 5, 5);
+  assert.equal(countSelected(sq), 16);
+
+  // invertSelectionMask -> 64 - 16 = 48
+  const inv = invertSelectionMask(sq);
+  assert.equal(countSelected(inv), 48);
+  assert.ok(inv.contains(0, 0));
+  assert.ok(!inv.contains(3, 3));
+  assert.deepEqual(invertSelectionMask(inv).mask, sq.mask);
+
+  // expandSelectionMask radius=1 (4-neighborhood disk: dx^2+dy^2 <= 1) adds 4 sides of length 4 -> 16 + 16 = 32
+  const exp1 = expandSelectionMask(sq, 1);
+  assert.equal(countSelected(exp1), 32);
+  assert.ok(exp1.contains(1, 2));
+  assert.ok(!exp1.contains(1, 1)); // diagonal corner dist^2 = 2 > 1
+
+  // contractSelectionMask radius=1 leaves inner 2x2 [3..4, 3..4] = 4 px
+  const con1 = contractSelectionMask(sq, 1);
+  assert.equal(countSelected(con1), 4);
+  assert.deepEqual(con1.getBounds(), { x: 3, y: 3, w: 2, h: 2 });
+
+  // contractSelectionMask treats canvas border as outside
+  const edgeSq = createRectSelection(4, 4, 0, 0, 2, 2); // touches top/left border
+  const edgeCon = contractSelectionMask(edgeSq, 1);
+  assert.equal(countSelected(edgeCon), 1); // only (1,1) survives
+  assert.ok(edgeCon.contains(1, 1));
+
+  // borderSelectionMask width=1 removes 4 interior pixels -> 16 - 4 = 12 ring pixels
+  const border1 = borderSelectionMask(sq, 1);
+  assert.equal(countSelected(border1), 12);
+  assert.ok(border1.contains(2, 2));
+  assert.ok(!border1.contains(3, 3));
+
+  // selectBufferNonTransparent
+  const emptyBuf = new PixelBuffer(4, 4);
+  assert.equal(selectBufferNonTransparent(emptyBuf), null);
+
+  const sprite = new PixelBuffer(4, 4);
+  sprite.setPixel(1, 1, 255, 0, 0, 10);
+  sprite.setPixel(2, 3, 0, 255, 0, 255);
+  const nonTrans = selectBufferNonTransparent(sprite);
+  assert.ok(nonTrans);
+  assert.equal(countSelected(nonTrans), 2);
+  assert.ok(nonTrans.contains(1, 1));
+  assert.ok(nonTrans.contains(2, 3));
+  assert.ok(!nonTrans.contains(0, 0));
+
+  // computeSelectionStrokePoints: inside / outside / center
+  const strokeIn = computeSelectionStrokePoints(sq, 1, "inside");
+  assert.equal(strokeIn.length, 12);
+  assert.ok(strokeIn.every((p) => sq.contains(p.x, p.y)));
+
+  const strokeOut = computeSelectionStrokePoints(sq, 1, "outside");
+  assert.equal(strokeOut.length, 16); // expanded(32) - sq(16) = 16
+  assert.ok(strokeOut.every((p) => !sq.contains(p.x, p.y)));
+
+  // center width=2 -> innerR=1 (12 px) + outerR=1 (16 px) = 28 px
+  const strokeCenter = computeSelectionStrokePoints(sq, 2, "center");
+  assert.equal(strokeCenter.length, 28);
+});
+
+test("transform gizmo: geometry, corner/edge scale with aspect lock, 15deg snap rotation, and pivot drag", () => {
+  const baseState: TransformState = {
+    x: 4,
+    y: 6,
+    width: 10,
+    height: 8,
+    scaleX: 1,
+    scaleY: 1,
+    rotationDeg: 0,
+    skewX: 0,
+    skewY: 0,
+    pivotX: 5,
+    pivotY: 4,
+    algorithm: "nearest",
+  };
+
+  const gizmo = computeTransformGizmo(10, 8, baseState, 2);
+  assert.deepEqual(gizmo.corners[0], { x: 4, y: 6 }); // TL
+  assert.deepEqual(gizmo.corners[1], { x: 14, y: 6 }); // TR
+  assert.deepEqual(gizmo.corners[2], { x: 14, y: 14 }); // BR
+  assert.deepEqual(gizmo.corners[3], { x: 4, y: 14 }); // BL
+  assert.deepEqual(gizmo.pivot, { x: 9, y: 10 });
+  assert.deepEqual(gizmo.rotStemStart, { x: 9, y: 6 });
+  assert.deepEqual(gizmo.rotHandle, { x: 9, y: 4 });
+
+  // Drag BR corner to (24, 22) -> 2x scale around TL (4, 6)
+  const scaledBr = computeScaleTransformPatch(
+    10,
+    8,
+    baseState,
+    "br",
+    { x: 24, y: 22 },
+    false
+  );
+  assert.equal(scaledBr.scaleX, 2);
+  assert.equal(scaledBr.scaleY, 2);
+  assert.equal(scaledBr.width, 20);
+  assert.equal(scaledBr.height, 16);
+
+  // Drag BR corner with Shift aspect lock when pointer moves unevenly (24, 14)
+  const locked = computeScaleTransformPatch(
+    10,
+    8,
+    baseState,
+    "br",
+    { x: 24, y: 14 },
+    true
+  );
+  assert.equal(locked.scaleX, 2);
+  assert.equal(locked.scaleY, 2);
+
+  // Rotate from top handle (9, 4) -> right side (15, 10) = +90deg with 15deg snap
+  const rotSnap = computeRotateTransformPatch(
+    10,
+    8,
+    baseState,
+    { x: 9, y: 4 },
+    { x: 15, y: 10 },
+    true
+  );
+  assert.equal(rotSnap.rotationDeg, 90);
+
+  // Rotate slightly (~14deg) with snap15 -> snaps to 15deg
+  const rad14 = (14 * Math.PI) / 180;
+  const rot15 = computeRotateTransformPatch(
+    10,
+    8,
+    baseState,
+    { x: 9, y: 4 },
+    { x: 9 + Math.sin(rad14) * 6, y: 10 - Math.cos(rad14) * 6 },
+    true
+  );
+  assert.equal(rot15.rotationDeg, 15);
+
+  // Move pivot to (4, 6) = TL corner -> x,y adjust so box stays anchored when scale=1, rot=0
+  const pivPatch = computePivotTransformPatch(10, 8, baseState, { x: 4, y: 6 });
+  assert.equal(pivPatch.pivotX, 0);
+  assert.equal(pivPatch.pivotY, 0);
+  assert.equal(pivPatch.x, 4);
+  assert.equal(pivPatch.y, 6);
+});
 

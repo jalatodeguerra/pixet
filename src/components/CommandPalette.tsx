@@ -2,13 +2,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { performRedo, performUndo } from "../engine/document/historyActions";
 import {
+  borderSelectionAction,
+  contractSelectionAction,
   copySelection,
   cutSelection,
   deselectAll,
+  expandSelectionAction,
+  fillSelectionAction,
+  invertSelectionAction,
   pasteClipboard,
   selectAllCanvas,
+  selectLayerContentAction,
+  strokeSelectionAction,
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
+import { beginFreeTransformAction } from "../engine/document/transformActions";
 import {
   addEmptyFrameAction,
   duplicateCurrentFrameAction,
@@ -206,6 +214,14 @@ export function CommandPalette() {
         run: () => pasteClipboard(),
       },
       {
+        id: "edit.freeTransform",
+        label: "Edit: Free Transform",
+        category: "Edit",
+        shortcut: "Ctrl+T",
+        keywords: ["transform", "scale", "rotate", "rotsprite", "resize"],
+        run: () => beginFreeTransformAction(),
+      },
+      {
         id: "edit.selectAll",
         label: "Edit: Select All",
         category: "Edit",
@@ -218,6 +234,65 @@ export function CommandPalette() {
         category: "Edit",
         shortcut: "Ctrl+D",
         run: () => deselectAll(),
+      },
+      {
+        id: "edit.invertSelection",
+        label: "Edit: Invert Selection",
+        category: "Edit",
+        shortcut: "Ctrl+Shift+A",
+        keywords: ["selection", "invert", "reverse"],
+        run: () => invertSelectionAction(),
+      },
+      {
+        id: "edit.selectLayerContent",
+        label: "Edit: Select Layer Content",
+        category: "Edit",
+        keywords: ["selection", "layer", "opaque", "alpha", "bounds"],
+        run: () => selectLayerContentAction(),
+      },
+      {
+        id: "edit.expandSelection",
+        label: "Edit: Expand Selection (+1px)",
+        category: "Edit",
+        keywords: ["selection", "grow", "dilate", "expand"],
+        run: () => expandSelectionAction(1),
+      },
+      {
+        id: "edit.contractSelection",
+        label: "Edit: Contract Selection (-1px)",
+        category: "Edit",
+        keywords: ["selection", "shrink", "erode", "contract"],
+        run: () => contractSelectionAction(1),
+      },
+      {
+        id: "edit.borderSelection",
+        label: "Edit: Border Selection (1px)",
+        category: "Edit",
+        keywords: ["selection", "border", "ring", "outline"],
+        run: () => borderSelectionAction(1),
+      },
+      {
+        id: "edit.strokeSelection",
+        label: "Edit: Stroke Selection (1px)",
+        category: "Edit",
+        keywords: ["selection", "stroke", "outline", "paint"],
+        run: () => strokeSelectionAction(1, "outside"),
+      },
+      {
+        id: "edit.fillSelectionFg",
+        label: "Edit: Fill Selection (FG)",
+        category: "Edit",
+        shortcut: "Alt+Backspace",
+        keywords: ["selection", "fill", "foreground", "bucket"],
+        run: () => fillSelectionAction(false),
+      },
+      {
+        id: "edit.fillSelectionBg",
+        label: "Edit: Fill Selection (BG)",
+        category: "Edit",
+        shortcut: "Ctrl+Backspace",
+        keywords: ["selection", "fill", "background", "bucket"],
+        run: () => fillSelectionAction(true),
       },
       {
         id: "edit.flipH",

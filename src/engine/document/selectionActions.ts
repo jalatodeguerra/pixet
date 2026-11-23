@@ -2,18 +2,28 @@ import {
   isLayerEffectivelyLocked,
   useEditorStore,
 } from "../../store/editorStore.ts";
-import { PixelBuffer } from "./PixelBuffer.ts";
+import { hexToRgba, PixelBuffer } from "./PixelBuffer.ts";
 import { pixelEngine } from "./PixelEngine.ts";
 import { syncHistoryAndCelState } from "./historyActions.ts";
 import { syncTimelineCels } from "./timelineActions.ts";
 import {
+  commitFreeTransformAction,
+  getFreeTransformSession,
+} from "./transformActions.ts";
+import {
+  borderSelectionMask,
   clearMaskedRegion,
+  computeSelectionStrokePoints,
+  contractSelectionMask,
   createFullSelection,
+  expandSelectionMask,
   extractMaskedRegion,
   flipBufferHorizontal,
   flipBufferVertical,
+  invertSelectionMask,
   rotateBuffer90CCW,
   rotateBuffer90CW,
+  selectBufferNonTransparent,
   SelectionMask,
   stampFloatingPixels,
 } from "../tools/selection.ts";
@@ -88,6 +98,9 @@ function applyTransform(buf: PixelBuffer, op: TransformOp): PixelBuffer {
 }
 
 export function commitFloatingSelection(): boolean {
+  if (getFreeTransformSession()) {
+    return commitFreeTransformAction();
+  }
   const fl = pixelEngine.floating;
   if (!fl) return false;
 
@@ -614,3 +627,204 @@ export function captureCustomBrushFromSelectionAction(): boolean {
   );
   return true;
 }
+
+export function invertSelectionAction(): boolean {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  const next =
+    pixelEngine.selection && !pixelEngine.selection.isEmpty()
+      ? invertSelectionMask(pixelEngine.selection)
+      : createFullSelection(pixelEngine.width, pixelEngine.height);
+  pixelEngine.setSelection(next);
+  const hasSel = Boolean(pixelEngine.selection && !pixelEngine.selection.isEmpty());
+  state.setHasSelection(hasSel);
+  state.setStatusMessage(hasSel ? "Inverted selection" : "Selection cleared");
+  return hasSel;
+}
+
+export function expandSelectionAction(px = 1): boolean {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  if (!pixelEngine.selection || pixelEngine.selection.isEmpty()) {
+    state.setStatusMessage("No active selection to expand");
+    return false;
+  }
+  const next = expandSelectionMask(pixelEngine.selection, px);
+  pixelEngine.setSelection(next);
+  state.setHasSelection(Boolean(pixelEngine.selection));
+  state.setStatusMessage(`Expanded selection by ${px}px`);
+  return true;
+}
+
+export function contractSelectionAction(px = 1): boolean {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  if (!pixelEngine.selection || pixelEngine.selection.isEmpty()) {
+    state.setStatusMessage("No active selection to contract");
+    return false;
+  }
+  const next = contractSelectionMask(pixelEngine.selection, px);
+  pixelEngine.setSelection(next);
+  const hasSel = Boolean(pixelEngine.selection && !pixelEngine.selection.isEmpty());
+  state.setHasSelection(hasSel);
+  state.setStatusMessage(
+    hasSel ? `Contracted selection by ${px}px` : "Selection contracted to empty"
+  );
+  return hasSel;
+}
+
+export function borderSelectionAction(px = 1): boolean {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  if (!pixelEngine.selection || pixelEngine.selection.isEmpty()) {
+    state.setStatusMessage("No active selection for border");
+    return false;
+  }
+  const next = borderSelectionMask(pixelEngine.selection, px);
+  pixelEngine.setSelection(next);
+  const hasSel = Boolean(pixelEngine.selection && !pixelEngine.selection.isEmpty());
+  state.setHasSelection(hasSel);
+  state.setStatusMessage(
+    hasSel ? `Converted selection to ${px}px border` : "Selection border is empty"
+  );
+  return hasSel;
+}
+
+export function selectLayerContentAction(layerId?: string): boolean {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  const targetId = layerId ?? state.activeLayerId;
+  const layer = state.layers.find((l) => l.id === targetId);
+  if (!layer || layer.kind === "group") {
+    state.setStatusMessage("Select a raster layer to select content");
+    return false;
+  }
+  const cel = pixelEngine.getCel(targetId, state.currentFrame);
+  if (!cel || cel.isEmpty()) {
+    pixelEngine.setSelection(null);
+    state.setHasSelection(false);
+    state.setStatusMessage(`Layer "${layer.name}" has no pixels on this frame`);
+    return false;
+  }
+  const mask = selectBufferNonTransparent(cel);
+  pixelEngine.setSelection(mask);
+  const hasSel = Boolean(mask && !mask.isEmpty());
+  state.setHasSelection(hasSel);
+  state.setStatusMessage(
+    hasSel ? `Selected content of "${layer.name}"` : "No opaque pixels found"
+  );
+  return hasSel;
+}
+
+export function strokeSelectionAction(
+  width = 1,
+  align: "inside" | "center" | "outside" = "outside"
+): boolean {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  if (!pixelEngine.selection || pixelEngine.selection.isEmpty()) {
+    state.setStatusMessage("Make a selection before stroking");
+    return false;
+  }
+  const layer = state.layers.find((l) => l.id === state.activeLayerId);
+  if (!layer || layer.kind === "group" || layer.kind === "tilemap") {
+    state.setStatusMessage("Select a raster layer to stroke selection");
+    return false;
+  }
+  if (isLayerEffectivelyLocked(state.layers, layer.id)) {
+    state.setStatusMessage(`Layer "${layer.name}" is locked`);
+    return false;
+  }
+
+  const pts = computeSelectionStrokePoints(pixelEngine.selection, width, align);
+  if (pts.length === 0) {
+    state.setStatusMessage("No stroke pixels generated");
+    return false;
+  }
+
+  const cel = pixelEngine.getOrCreateCel(layer.id, state.currentFrame);
+  const rgba = hexToRgba(state.primaryColor, 255);
+  pixelEngine.history.beginTransaction(
+    layer.id,
+    state.currentFrame,
+    "Stroke Selection"
+  );
+  let changed = 0;
+  for (const pt of pts) {
+    pixelEngine.history.capturePixelTile(cel, pt.x, pt.y);
+    if (
+      cel.setPixel(
+        pt.x,
+        pt.y,
+        rgba[0],
+        rgba[1],
+        rgba[2],
+        rgba[3],
+        layer.alphaLock
+      )
+    ) {
+      changed++;
+    }
+  }
+  if (changed > 0 && pixelEngine.history.commitTransaction(cel)) {
+    syncHistoryAndCelState(layer.id, state.currentFrame);
+    pixelEngine.emitChange();
+  } else {
+    pixelEngine.history.cancelTransaction();
+  }
+  state.setStatusMessage(`Stroked selection (${width}px ${align})`);
+  return true;
+}
+
+export function fillSelectionAction(useSecondary = false): boolean {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  const layer = state.layers.find((l) => l.id === state.activeLayerId);
+  if (!layer || layer.kind === "group" || layer.kind === "tilemap") {
+    state.setStatusMessage("Select a raster layer to fill");
+    return false;
+  }
+  if (isLayerEffectivelyLocked(state.layers, layer.id)) {
+    state.setStatusMessage(`Layer "${layer.name}" is locked`);
+    return false;
+  }
+
+  const mask =
+    pixelEngine.selection && !pixelEngine.selection.isEmpty()
+      ? pixelEngine.selection
+      : createFullSelection(pixelEngine.width, pixelEngine.height);
+  const bounds = mask.getBounds();
+  if (!bounds) return false;
+
+  const cel = pixelEngine.getOrCreateCel(layer.id, state.currentFrame);
+  const hex = useSecondary ? state.secondaryColor : state.primaryColor;
+  const rgba = hexToRgba(hex, 255);
+
+  pixelEngine.history.beginTransaction(
+    layer.id,
+    state.currentFrame,
+    useSecondary ? "Fill Selection (BG)" : "Fill Selection (FG)"
+  );
+  let changed = 0;
+  for (let y = bounds.y; y < bounds.y + bounds.h; y++) {
+    for (let x = bounds.x; x < bounds.x + bounds.w; x++) {
+      if (!mask.contains(x, y)) continue;
+      pixelEngine.history.capturePixelTile(cel, x, y);
+      if (cel.setPixel(x, y, rgba[0], rgba[1], rgba[2], rgba[3], layer.alphaLock)) {
+        changed++;
+      }
+    }
+  }
+
+  if (changed > 0 && pixelEngine.history.commitTransaction(cel)) {
+    syncHistoryAndCelState(layer.id, state.currentFrame);
+    pixelEngine.emitChange();
+  } else {
+    pixelEngine.history.cancelTransaction();
+  }
+  state.setStatusMessage(
+    useSecondary ? "Filled selection with BG color" : "Filled selection with FG color"
+  );
+  return true;
+}
+

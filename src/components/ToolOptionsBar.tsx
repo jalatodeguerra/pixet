@@ -1,6 +1,7 @@
 import {
   Box,
   Brush,
+  Check,
   Contrast,
   EyeOff,
   FlipHorizontal2,
@@ -25,11 +26,18 @@ import {
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
 import {
+  cancelFreeTransformAction,
+  commitFreeTransformAction,
+  getFreeTransformSourceSize,
+  updateFreeTransformAction,
+} from "../engine/document/transformActions";
+import {
   useEditorStore,
   type BrushShape,
   type DitherPattern,
   type GradientMode,
   type InkMode,
+  type TransformAlgorithm,
 } from "../store/editorStore";
 import { RigToolOptionsBar } from "./rig/RigToolOptionsBar";
 import { TileToolOptionsBar } from "./tiles/TileToolOptionsBar";
@@ -128,6 +136,8 @@ export function ToolOptionsBar() {
   const canUndo = useEditorStore((s) => s.canUndo);
   const canRedo = useEditorStore((s) => s.canRedo);
   const hasSelection = useEditorStore((s) => s.hasSelection);
+  const freeTransformActive = useEditorStore((s) => s.freeTransformActive);
+  const freeTransformState = useEditorStore((s) => s.freeTransformState);
 
   const activeLayer = layers.find((l) => l.id === activeLayerId);
   const showTileControls =
@@ -173,6 +183,151 @@ export function ToolOptionsBar() {
 
   if (workspaceMode === "tiles" && tilesMode === "map") {
     return <TileToolOptionsBar />;
+  }
+
+  if (workspaceMode === "draw" && freeTransformActive && freeTransformState) {
+    const srcSize = getFreeTransformSourceSize();
+    const srcW = srcSize?.width ?? Math.max(1, freeTransformState.width);
+    const srcH = srcSize?.height ?? Math.max(1, freeTransformState.height);
+    return (
+      <div className="tool-options-bar">
+        <div className="options-group">
+          <span
+            className="option-label"
+            style={{ fontWeight: 600, color: "var(--text-primary)" }}
+          >
+            Free Transform
+          </span>
+          <div className="option-divider" />
+
+          <label className="option-label" title="Offset X">
+            <span>X</span>
+            <input
+              type="number"
+              className="draw-axis-input"
+              step={1}
+              value={Math.round(freeTransformState.x)}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v)) updateFreeTransformAction({ x: v });
+              }}
+            />
+          </label>
+
+          <label className="option-label" title="Offset Y">
+            <span>Y</span>
+            <input
+              type="number"
+              className="draw-axis-input"
+              step={1}
+              value={Math.round(freeTransformState.y)}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v)) updateFreeTransformAction({ y: v });
+              }}
+            />
+          </label>
+
+          <label className="option-label" title="Horizontal scale factor">
+            <span>ScaleX</span>
+            <input
+              type="number"
+              className="draw-axis-input"
+              step={0.1}
+              value={Number(freeTransformState.scaleX.toFixed(2))}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && Math.abs(v) >= 0.05) {
+                  updateFreeTransformAction({
+                    scaleX: v,
+                    width: Math.max(1, Math.round(srcW * Math.abs(v))),
+                  });
+                }
+              }}
+            />
+          </label>
+
+          <label className="option-label" title="Vertical scale factor">
+            <span>ScaleY</span>
+            <input
+              type="number"
+              className="draw-axis-input"
+              step={0.1}
+              value={Number(freeTransformState.scaleY.toFixed(2))}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && Math.abs(v) >= 0.05) {
+                  updateFreeTransformAction({
+                    scaleY: v,
+                    height: Math.max(1, Math.round(srcH * Math.abs(v))),
+                  });
+                }
+              }}
+            />
+          </label>
+
+          <label className="option-label" title="Rotation angle in degrees">
+            <span>Angle°</span>
+            <input
+              type="number"
+              className="draw-axis-input"
+              step={1}
+              value={Number(freeTransformState.rotationDeg.toFixed(1))}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v)) {
+                  updateFreeTransformAction({ rotationDeg: v });
+                }
+              }}
+            />
+          </label>
+
+          <label className="option-label" title="Resampling algorithm">
+            <span>Resample</span>
+            <select
+              className="palette-select"
+              style={{ flex: "0 0 auto", width: "auto" }}
+              value={freeTransformState.algorithm}
+              onChange={(e) =>
+                updateFreeTransformAction({
+                  algorithm: e.target.value as TransformAlgorithm,
+                })
+              }
+            >
+              <option value="nearest">Nearest</option>
+              <option value="rotsprite">RotSprite</option>
+              <option value="scale2x">Scale2x</option>
+            </select>
+          </label>
+
+          <div className="option-divider" />
+
+          <button
+            type="button"
+            className="toggle-chip active"
+            onClick={() => commitFreeTransformAction()}
+            title="Apply Free Transform (Enter)"
+          >
+            <Check size={12} />
+            <span>Apply (Enter)</span>
+          </button>
+
+          <button
+            type="button"
+            className="toggle-chip"
+            onClick={() => cancelFreeTransformAction()}
+            title="Cancel Free Transform (Esc)"
+          >
+            <X size={12} />
+            <span>Cancel (Esc)</span>
+          </button>
+        </div>
+
+        <div className="mode-hint">
+          Shift+Corner locks aspect · Shift+Rotate snaps 15° · Drag crosshair to move pivot
+        </div>
+      </div>
+    );
   }
 
   return (

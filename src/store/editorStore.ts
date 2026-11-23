@@ -10,6 +10,7 @@ import type { DitherPattern } from "../engine/tools/dither";
 import type { GradientMode } from "../engine/tools/gradient";
 import type { GuideAxis, GuideLine } from "../engine/tools/guides";
 import type { InkMode } from "../engine/tools/ink";
+import type { TransformAlgorithm, TransformState } from "../engine/tools/transform";
 
 export type {
   BrushShape,
@@ -21,6 +22,8 @@ export type {
   InkMode,
   LayerMapRole,
   TileTool,
+  TransformAlgorithm,
+  TransformState,
 };
 
 export type RightClickMode = "secondaryColor" | "erase" | "eyedropper";
@@ -264,6 +267,8 @@ interface EditorState {
   paletteName: string;
   previewScale: 1 | 2 | 4;
   hasSelection: boolean;
+  freeTransformActive: boolean;
+  freeTransformState: TransformState | null;
 
   documentName: string;
   currentFilePath: string | null;
@@ -447,6 +452,8 @@ interface EditorState {
   swapColors: () => void;
   setPreviewScale: (scale: 1 | 2 | 4) => void;
   setHasSelection: (hasSelection: boolean) => void;
+  setFreeTransformActive: (active: boolean) => void;
+  setFreeTransformState: (state: TransformState | null) => void;
   setPalette: (name: string, colors: string[]) => void;
   addColorToPalette: (hex: string) => void;
   removeColorFromPalette: (hex: string) => void;
@@ -686,6 +693,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   paletteName: "Pixet Default 16",
   previewScale: 2,
   hasSelection: false,
+  freeTransformActive: false,
+  freeTransformState: null,
 
   documentName: "untitled.pixet",
   currentFilePath: null,
@@ -981,6 +990,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
   setPreviewScale: (previewScale) => set({ previewScale }),
   setHasSelection: (hasSelection) => set({ hasSelection }),
+  setFreeTransformActive: (freeTransformActive) => set({ freeTransformActive }),
+  setFreeTransformState: (freeTransformState) => set({ freeTransformState }),
   setPalette: (paletteName, colors) =>
     set({ paletteName, palette: colors.length > 0 ? colors : DEFAULT_PALETTE }),
   addColorToPalette: (hex) =>

@@ -803,6 +803,12 @@ export function useDrawPointer({
       return;
     }
 
+    if (state.freeTransformActive) {
+      pixelEngine.clearOverlay();
+      renderOverlayOnly();
+      return;
+    }
+
     pixelEngine.clearOverlay();
     if (
       state.workspaceMode === "data" ||
@@ -878,6 +884,9 @@ export function useDrawPointer({
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>): boolean => {
     const state = useEditorStore.getState();
+    if (state.freeTransformActive) {
+      return true;
+    }
     const { x: px, y: py } = getPixelCoords(e);
     const isRightButton = e.button === 2;
     const tool = state.activeTool;

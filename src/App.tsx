@@ -27,9 +27,16 @@ import {
   cutSelectionToNewLayer,
   deleteSelection,
   deselectAll,
+  fillSelectionAction,
+  invertSelectionAction,
   pasteClipboard,
   selectAllCanvas,
 } from "./engine/document/selectionActions";
+import {
+  beginFreeTransformAction,
+  cancelFreeTransformAction,
+  commitFreeTransformAction,
+} from "./engine/document/transformActions";
 import {
   openProjectAction,
   saveProjectAction,
@@ -137,6 +144,19 @@ export function App() {
 
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         const ctrlKey = e.key.toLowerCase();
+        if (ctrlKey === "t") {
+          e.preventDefault();
+          beginFreeTransformAction();
+          return;
+        }
+        if (e.key === "Backspace") {
+          const st = useEditorStore.getState();
+          if (st.hasSelection && !st.freeTransformActive) {
+            e.preventDefault();
+            fillSelectionAction(true);
+            return;
+          }
+        }
         if (ctrlKey === "z") {
           e.preventDefault();
           if (e.shiftKey) {
@@ -201,7 +221,11 @@ export function App() {
         }
         if (ctrlKey === "a") {
           e.preventDefault();
-          selectAllCanvas();
+          if (e.shiftKey) {
+            invertSelectionAction();
+          } else {
+            selectAllCanvas();
+          }
           return;
         }
         if (ctrlKey === "d") {
@@ -257,6 +281,13 @@ export function App() {
       }
 
       if (e.altKey) {
+        if (e.key === "Backspace" && !e.ctrlKey && !e.metaKey) {
+          const st = useEditorStore.getState();
+          if (st.hasSelection && !st.freeTransformActive) {
+            e.preventDefault();
+            fillSelectionAction(false);
+          }
+        }
         return;
       }
 
@@ -265,7 +296,11 @@ export function App() {
 
       if (e.key === "Escape") {
         e.preventDefault();
-        deselectAll();
+        if (state.freeTransformActive) {
+          cancelFreeTransformAction();
+        } else {
+          deselectAll();
+        }
         return;
       }
 
@@ -314,7 +349,9 @@ export function App() {
 
       if (e.key === "Enter") {
         e.preventDefault();
-        if (pixelEngine.floating) {
+        if (state.freeTransformActive) {
+          commitFreeTransformAction();
+        } else if (pixelEngine.floating) {
           commitFloatingSelection();
           state.setStatusMessage("Committed selection");
         } else {

@@ -529,3 +529,186 @@ export function rotateBuffer90CCW(buf: PixelBuffer): PixelBuffer {
   }
   return out;
 }
+
+export function invertSelectionMask(mask: SelectionMask): SelectionMask {
+  const out = new SelectionMask(mask.width, mask.height);
+  const src = mask.mask;
+  const dst = out.mask;
+  for (let i = 0; i < src.length; i++) {
+    dst[i] = src[i] === 0 ? 1 : 0;
+  }
+  return out;
+}
+
+export function expandSelectionMask(
+  mask: SelectionMask,
+  radius: number
+): SelectionMask {
+  const r = Math.max(1, Math.min(32, Math.round(radius)));
+  const r2 = r * r;
+  const { width, height } = mask;
+  const out = new SelectionMask(width, height);
+
+  // Collect circular kernel offsets
+  const offsets: Array<{ dx: number; dy: number }> = [];
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx * dx + dy * dy <= r2) {
+        offsets.push({ dx, dy });
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    for (let x = 0; x < width; x++) {
+      if (mask.mask[row + x] !== 0) {
+        out.mask[row + x] = 1;
+        continue;
+      }
+      for (let k = 0; k < offsets.length; k++) {
+        const nx = x + offsets[k].dx;
+        const ny = y + offsets[k].dy;
+        if (nx >= 0 && ny >= 0 && nx < width && ny < height) {
+          if (mask.mask[ny * width + nx] !== 0) {
+            out.mask[row + x] = 1;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export function contractSelectionMask(
+  mask: SelectionMask,
+  radius: number
+): SelectionMask {
+  const r = Math.max(1, Math.min(32, Math.round(radius)));
+  const r2 = r * r;
+  const { width, height } = mask;
+  const out = new SelectionMask(width, height);
+
+  const offsets: Array<{ dx: number; dy: number }> = [];
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx * dx + dy * dy <= r2) {
+        offsets.push({ dx, dy });
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    for (let x = 0; x < width; x++) {
+      if (mask.mask[row + x] === 0) continue;
+      let keep = true;
+      for (let k = 0; k < offsets.length; k++) {
+        const nx = x + offsets[k].dx;
+        const ny = y + offsets[k].dy;
+        // Canvas border counts as outside
+        if (
+          nx < 0 ||
+          ny < 0 ||
+          nx >= width ||
+          ny >= height ||
+          mask.mask[ny * width + nx] === 0
+        ) {
+          keep = false;
+          break;
+        }
+      }
+      if (keep) {
+        out.mask[row + x] = 1;
+      }
+    }
+  }
+  return out;
+}
+
+export function borderSelectionMask(
+  mask: SelectionMask,
+  widthPx: number
+): SelectionMask {
+  const w = Math.max(1, Math.min(32, Math.round(widthPx)));
+  const contracted = contractSelectionMask(mask, w);
+  const out = new SelectionMask(mask.width, mask.height);
+  for (let i = 0; i < mask.mask.length; i++) {
+    if (mask.mask[i] !== 0 && contracted.mask[i] === 0) {
+      out.mask[i] = 1;
+    }
+  }
+  return out;
+}
+
+export function selectBufferNonTransparent(
+  buf: PixelBuffer
+): SelectionMask | null {
+  const { width, height, data } = buf;
+  const mask = new SelectionMask(width, height);
+  let any = false;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      if (data[idx + 3] > 0) {
+        mask.mask[y * width + x] = 1;
+        any = true;
+      }
+    }
+  }
+  return any ? mask : null;
+}
+
+export function computeSelectionStrokePoints(
+  mask: SelectionMask,
+  strokeWidth: number,
+  align: "inside" | "center" | "outside"
+): Point[] {
+  const w = Math.max(1, Math.min(32, Math.round(strokeWidth)));
+  let strokeMask: SelectionMask;
+
+  if (align === "inside") {
+    strokeMask = borderSelectionMask(mask, w);
+  } else if (align === "outside") {
+    const expanded = expandSelectionMask(mask, w);
+    strokeMask = new SelectionMask(mask.width, mask.height);
+    for (let i = 0; i < mask.mask.length; i++) {
+      if (expanded.mask[i] !== 0 && mask.mask[i] === 0) {
+        strokeMask.mask[i] = 1;
+      }
+    }
+  } else {
+    // center: split thickness across inside and outside
+    const innerR = Math.ceil(w / 2);
+    const outerR = Math.floor(w / 2);
+    const innerRing = borderSelectionMask(mask, innerR);
+    if (outerR <= 0) {
+      strokeMask = innerRing;
+    } else {
+      const expanded = expandSelectionMask(mask, outerR);
+      strokeMask = new SelectionMask(mask.width, mask.height);
+      for (let i = 0; i < mask.mask.length; i++) {
+        if (
+          innerRing.mask[i] !== 0 ||
+          (expanded.mask[i] !== 0 && mask.mask[i] === 0)
+        ) {
+          strokeMask.mask[i] = 1;
+        }
+      }
+    }
+  }
+
+  const pts: Point[] = [];
+  const { width, height } = strokeMask;
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    for (let x = 0; x < width; x++) {
+      if (strokeMask.mask[row + x] !== 0) {
+        pts.push({ x, y });
+      }
+    }
+  }
+  return pts;
+}
+

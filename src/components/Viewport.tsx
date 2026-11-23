@@ -349,12 +349,25 @@ export function Viewport() {
     }
   }, [activeLayerId, currentFrame]);
 
-  // Auto-commit floating selection when switching away from Move tool
+  // Auto-commit floating selection when switching away from Move tool (unless Free Transform is active)
   useEffect(() => {
-    if (activeTool !== "move" && pixelEngine.floating) {
+    const st = useEditorStore.getState();
+    if (
+      activeTool !== "move" &&
+      pixelEngine.floating &&
+      !st.freeTransformActive
+    ) {
       commitFloatingSelection();
     }
   }, [activeTool]);
+
+  // Auto-commit Free Transform when leaving Draw mode
+  useEffect(() => {
+    const st = useEditorStore.getState();
+    if (workspaceMode !== "draw" && st.freeTransformActive) {
+      commitFloatingSelection();
+    }
+  }, [workspaceMode]);
 
   // Clear unsaved rig pose overrides when changing frames
   useEffect(() => {

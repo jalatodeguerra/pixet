@@ -26,6 +26,7 @@ import {
   cutSelection,
   cutSelectionToNewLayer,
   pasteClipboard,
+  selectLayerContentAction,
 } from "../../engine/document/selectionActions";
 import {
   BlendMode,
@@ -50,6 +51,7 @@ function LayerThumbnail({
   canvasHeight,
   tilesetVersion,
   tileProjection,
+  onClick,
 }: {
   layerId: string;
   layerKind: string;
@@ -58,6 +60,7 @@ function LayerThumbnail({
   canvasHeight: number;
   tilesetVersion: number;
   tileProjection: "orthogonal" | "isometric";
+  onClick?: (e: React.MouseEvent<HTMLSpanElement>) => void;
 }) {
   const thumbRef = useRef<HTMLCanvasElement>(null);
   const scratchRef = useRef<HTMLCanvasElement | null>(null);
@@ -144,7 +147,11 @@ function LayerThumbnail({
   ]);
 
   return (
-    <span className="layer-thumb-wrap">
+    <span
+      className="layer-thumb-wrap"
+      title="Ctrl+Click to select layer content"
+      onClick={onClick}
+    >
       <canvas
         ref={thumbRef}
         width={22}
@@ -623,6 +630,12 @@ export function LayersPanel() {
                       canvasHeight={canvasHeight}
                       tilesetVersion={tilesetVersion}
                       tileProjection={tileProjection}
+                      onClick={(e) => {
+                        if (e.ctrlKey || e.metaKey) {
+                          e.stopPropagation();
+                          selectLayerContentAction(layer.id);
+                        }
+                      }}
                     />
                   )}
 

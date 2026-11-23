@@ -11,15 +11,23 @@ import {
 } from "lucide-react";
 import { performRedo, performUndo } from "../engine/document/historyActions";
 import {
+  borderSelectionAction,
+  contractSelectionAction,
   copySelection,
   copySelectionToNewLayer,
   cutSelection,
   cutSelectionToNewLayer,
   deselectAll,
+  expandSelectionAction,
+  fillSelectionAction,
+  invertSelectionAction,
   pasteClipboard,
   selectAllCanvas,
+  selectLayerContentAction,
+  strokeSelectionAction,
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
+import { beginFreeTransformAction } from "../engine/document/transformActions";
 import {
   addEmptyFrameAction,
   duplicateCurrentFrameAction,
@@ -159,8 +167,17 @@ export function TopBar() {
       { label: "Paste", shortcut: "Ctrl+V", action: () => { pasteClipboard(); setOpenMenu(null); } },
       { label: "Cut to New Layer", shortcut: "Ctrl+Shift+X", action: () => { cutSelectionToNewLayer(); setOpenMenu(null); } },
       { label: "Copy to New Layer", shortcut: "Ctrl+J", action: () => { copySelectionToNewLayer(); setOpenMenu(null); } },
+      { label: "Free Transform", shortcut: "Ctrl+T", action: () => { beginFreeTransformAction(); setOpenMenu(null); } },
       { label: "Select All", shortcut: "Ctrl+A", action: () => { selectAllCanvas(); setOpenMenu(null); } },
       { label: "Deselect", shortcut: "Ctrl+D", action: () => { deselectAll(); setOpenMenu(null); } },
+      { label: "Invert Selection", shortcut: "Ctrl+Shift+A", action: () => { invertSelectionAction(); setOpenMenu(null); } },
+      { label: "Select Layer Content", action: () => { selectLayerContentAction(); setOpenMenu(null); } },
+      { label: "Expand Selection (+1px)", action: () => { expandSelectionAction(1); setOpenMenu(null); } },
+      { label: "Contract Selection (-1px)", action: () => { contractSelectionAction(1); setOpenMenu(null); } },
+      { label: "Border Selection (1px)", action: () => { borderSelectionAction(1); setOpenMenu(null); } },
+      { label: "Stroke Selection (1px)", action: () => { strokeSelectionAction(1, "outside"); setOpenMenu(null); } },
+      { label: "Fill Selection (FG)", shortcut: "Alt+Backspace", action: () => { fillSelectionAction(false); setOpenMenu(null); } },
+      { label: "Fill Selection (BG)", shortcut: "Ctrl+Backspace", action: () => { fillSelectionAction(true); setOpenMenu(null); } },
       { label: "Flip Horizontal", action: () => { transformSelectionOrCel("flipH"); setOpenMenu(null); } },
       { label: "Flip Vertical", action: () => { transformSelectionOrCel("flipV"); setOpenMenu(null); } },
       { label: "Rotate 90° CW", action: () => { transformSelectionOrCel("rotateCW"); setOpenMenu(null); } },

@@ -1,10 +1,24 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import {
+  getFreeTransformSourceSize,
+  updateFreeTransformAction,
+} from "../../engine/document/transformActions";
 import {
   buildFootprintOutlinePath,
   computeBrushOverlayFootprint,
   type FootprintOutlineResult,
 } from "../../engine/tools/drawOverlayGeometry";
 import { buildCustomGridLines } from "../../engine/tools/guides";
+import {
+  computePivotTransformPatch,
+  computeRotateTransformPatch,
+  computeScaleTransformPatch,
+  computeTransformGizmo,
+  type TransformHandleId,
+  type TransformPoint,
+  type TransformState,
+} from "../../engine/tools/transform";
+import { mapFlippedPoint } from "../../engine/tools/viewChecks";
 import { useEditorStore } from "../../store/editorStore";
 import {
   getSymmetryConfigFromState,
@@ -15,6 +29,55 @@ export {
   buildFootprintOutlinePath,
   computeBrushOverlayFootprint,
   type FootprintOutlineResult,
+};
+
+type GizmoDragMode =
+  | {
+      kind: "move";
+      startState: TransformState;
+      startPt: TransformPoint;
+    }
+  | {
+      kind: "scale";
+      handle: TransformHandleId;
+      startState: TransformState;
+      srcW: number;
+      srcH: number;
+    }
+  | {
+      kind: "rotate";
+      startState: TransformState;
+      srcW: number;
+      srcH: number;
+      startPt: TransformPoint;
+    }
+  | {
+      kind: "pivot";
+      startState: TransformState;
+      srcW: number;
+      srcH: number;
+    };
+
+const HANDLE_IDS: TransformHandleId[] = [
+  "tl",
+  "tr",
+  "br",
+  "bl",
+  "t",
+  "r",
+  "b",
+  "l",
+];
+
+const HANDLE_CURSORS: Record<TransformHandleId, string> = {
+  tl: "nwse-resize",
+  br: "nwse-resize",
+  tr: "nesw-resize",
+  bl: "nesw-resize",
+  t: "ns-resize",
+  b: "ns-resize",
+  l: "ew-resize",
+  r: "ew-resize",
 };
 
 export function DrawOverlay({
@@ -30,6 +93,9 @@ export function DrawOverlay({
   const cursorPos = useEditorStore((s) => s.cursorPos);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
+  const zoom = useEditorStore((s) => s.zoom);
+  const viewFlipH = useEditorStore((s) => s.viewFlipH);
+  const viewFlipV = useEditorStore((s) => s.viewFlipV);
   const brushSize = useEditorStore((s) => s.brushSize);
   const brushShape = useEditorStore((s) => s.brushShape);
   const brushOpacity = useEditorStore((s) => s.brushOpacity);
@@ -51,6 +117,11 @@ export function DrawOverlay({
   const customGridH = useEditorStore((s) => s.customGridH);
   const customGridOffsetX = useEditorStore((s) => s.customGridOffsetX);
   const customGridOffsetY = useEditorStore((s) => s.customGridOffsetY);
+  const freeTransformActive = useEditorStore((s) => s.freeTransformActive);
+  const freeTransformState = useEditorStore((s) => s.freeTransformState);
+
+  const svgRef = useRef<SVGSVGElement>(null);
+  const gizmoDragRef = useRef<GizmoDragMode | null>(null);
 
   const isTilesMap = workspaceMode === "tiles" && tilesMode === "map";
   const isFootprintTool =
@@ -63,6 +134,7 @@ export function DrawOverlay({
     workspaceMode !== "rig" &&
     workspaceMode !== "data" &&
     !isTilesMap &&
+    !freeTransformActive &&
     isFootprintTool &&
     !isStrokeActive &&
     cursorPos !== null;
@@ -152,6 +224,28 @@ export function DrawOverlay({
     customGridOffsetY,
   ]);
 
+  const ftSrcSize = freeTransformActive ? getFreeTransformSourceSize() : null;
+  const ftGizmo = useMemo(() => {
+    if (!freeTransformActive || !freeTransformState || workspaceMode !== "draw") {
+      return null;
+    }
+    const srcW = ftSrcSize?.width ?? freeTransformState.width;
+    const srcH = ftSrcSize?.height ?? freeTransformState.height;
+    const stemDist = Math.max(1.2, 16 / Math.max(1, zoom));
+    return {
+      srcW,
+      srcH,
+      ...computeTransformGizmo(srcW, srcH, freeTransformState, stemDist),
+    };
+  }, [
+    freeTransformActive,
+    freeTransformState,
+    workspaceMode,
+    ftSrcSize?.width,
+    ftSrcSize?.height,
+    zoom,
+  ]);
+
   const showSymmetryOverlay =
     workspaceMode === "draw" &&
     (symmetryX ||
@@ -166,7 +260,10 @@ export function DrawOverlay({
       (customGrid.verticals.length > 0 || customGrid.horizontals.length > 0)
   );
   const showSprayRing =
-    workspaceMode === "draw" && activeTool === "spray" && cursorPos !== null;
+    workspaceMode === "draw" &&
+    !freeTransformActive &&
+    activeTool === "spray" &&
+    cursorPos !== null;
   const hasToolPreview = Boolean(
     dragPreview &&
       (dragPreview.kind === "gradient" ||
@@ -180,18 +277,126 @@ export function DrawOverlay({
     !hasCustomGrid &&
     !showSymmetryOverlay &&
     !showSprayRing &&
-    !hasToolPreview
+    !hasToolPreview &&
+    !ftGizmo
   ) {
     return null;
   }
+
+  const getCanvasFloatPoint = (
+    e: React.PointerEvent<Element>
+  ): TransformPoint => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const rect = svg.getBoundingClientRect();
+    const rawX = (e.clientX - rect.left) / Math.max(1, zoom);
+    const rawY = (e.clientY - rect.top) / Math.max(1, zoom);
+    if (viewFlipH || viewFlipV) {
+      const flipped = mapFlippedPoint(
+        { x: Math.floor(rawX), y: Math.floor(rawY) },
+        canvasWidth,
+        canvasHeight,
+        viewFlipH,
+        viewFlipV
+      );
+      const fracX = rawX - Math.floor(rawX);
+      const fracY = rawY - Math.floor(rawY);
+      return {
+        x: viewFlipH ? flipped.x + (1 - fracX) : rawX,
+        y: viewFlipV ? flipped.y + (1 - fracY) : rawY,
+      };
+    }
+    return { x: rawX, y: rawY };
+  };
+
+  const beginGizmoDrag = (
+    e: React.PointerEvent<SVGElement>,
+    mode: GizmoDragMode
+  ) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    gizmoDragRef.current = mode;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleGizmoPointerMove = (e: React.PointerEvent<SVGElement>) => {
+    const drag = gizmoDragRef.current;
+    if (!drag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pt = getCanvasFloatPoint(e);
+
+    if (drag.kind === "move") {
+      const dx = Math.round(pt.x - drag.startPt.x);
+      const dy = Math.round(pt.y - drag.startPt.y);
+      updateFreeTransformAction({
+        x: drag.startState.x + dx,
+        y: drag.startState.y + dy,
+      });
+      return;
+    }
+
+    if (drag.kind === "scale") {
+      const patch = computeScaleTransformPatch(
+        drag.srcW,
+        drag.srcH,
+        drag.startState,
+        drag.handle,
+        pt,
+        e.shiftKey,
+        e.altKey
+      );
+      updateFreeTransformAction(patch);
+      return;
+    }
+
+    if (drag.kind === "rotate") {
+      const patch = computeRotateTransformPatch(
+        drag.srcW,
+        drag.srcH,
+        drag.startState,
+        drag.startPt,
+        pt,
+        e.shiftKey
+      );
+      updateFreeTransformAction(patch);
+      return;
+    }
+
+    if (drag.kind === "pivot") {
+      const patch = computePivotTransformPatch(
+        drag.srcW,
+        drag.srcH,
+        drag.startState,
+        pt
+      );
+      updateFreeTransformAction(patch);
+    }
+  };
+
+  const endGizmoDrag = (e: React.PointerEvent<SVGElement>) => {
+    if (!gizmoDragRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    gizmoDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
 
   const isEraser = activeTool === "eraser";
   const axisX = symCfg.axisX;
   const axisY = symCfg.axisY;
   const maxSpan = Math.max(canvasWidth, canvasHeight) * 2;
+  const handleUnit = 6 / Math.max(1, zoom);
+  const halfHandle = handleUnit / 2;
+  const pivotArm = 4 / Math.max(1, zoom);
+  const pivotRadius = 3 / Math.max(1, zoom);
 
   return (
     <svg
+      ref={svgRef}
       className="draw-overlay-svg"
       viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
       preserveAspectRatio="none"
@@ -419,6 +624,118 @@ export function DrawOverlay({
           }
           d={overlay.outlinePath}
         />
+      )}
+
+      {ftGizmo && freeTransformState && (
+        <g className="draw-ft-gizmo">
+          <polygon
+            className="draw-ft-box"
+            points={ftGizmo.corners.map((p) => `${p.x},${p.y}`).join(" ")}
+            onPointerDown={(e) =>
+              beginGizmoDrag(e, {
+                kind: "move",
+                startState: freeTransformState,
+                startPt: getCanvasFloatPoint(e),
+              })
+            }
+            onPointerMove={handleGizmoPointerMove}
+            onPointerUp={endGizmoDrag}
+            onPointerCancel={endGizmoDrag}
+          />
+          <line
+            className="draw-ft-rot-stem"
+            x1={ftGizmo.rotStemStart.x}
+            y1={ftGizmo.rotStemStart.y}
+            x2={ftGizmo.rotHandle.x}
+            y2={ftGizmo.rotHandle.y}
+          />
+          <rect
+            className="draw-ft-rot-handle"
+            x={ftGizmo.rotHandle.x - halfHandle}
+            y={ftGizmo.rotHandle.y - halfHandle}
+            width={handleUnit}
+            height={handleUnit}
+            onPointerDown={(e) =>
+              beginGizmoDrag(e, {
+                kind: "rotate",
+                startState: freeTransformState,
+                srcW: ftGizmo.srcW,
+                srcH: ftGizmo.srcH,
+                startPt: getCanvasFloatPoint(e),
+              })
+            }
+            onPointerMove={handleGizmoPointerMove}
+            onPointerUp={endGizmoDrag}
+            onPointerCancel={endGizmoDrag}
+          />
+          {[...ftGizmo.corners, ...ftGizmo.midpoints].map((pt, idx) => {
+            const handleId = HANDLE_IDS[idx];
+            return (
+              <rect
+                key={`ft-h-${handleId}`}
+                className="draw-ft-handle"
+                style={{ cursor: HANDLE_CURSORS[handleId] }}
+                x={pt.x - halfHandle}
+                y={pt.y - halfHandle}
+                width={handleUnit}
+                height={handleUnit}
+                onPointerDown={(e) =>
+                  beginGizmoDrag(e, {
+                    kind: "scale",
+                    handle: handleId,
+                    startState: freeTransformState,
+                    srcW: ftGizmo.srcW,
+                    srcH: ftGizmo.srcH,
+                  })
+                }
+                onPointerMove={handleGizmoPointerMove}
+                onPointerUp={endGizmoDrag}
+                onPointerCancel={endGizmoDrag}
+              />
+            );
+          })}
+          <g
+            className="draw-ft-pivot"
+            onPointerDown={(e) =>
+              beginGizmoDrag(e, {
+                kind: "pivot",
+                startState: freeTransformState,
+                srcW: ftGizmo.srcW,
+                srcH: ftGizmo.srcH,
+              })
+            }
+            onPointerMove={handleGizmoPointerMove}
+            onPointerUp={endGizmoDrag}
+            onPointerCancel={endGizmoDrag}
+          >
+            <circle
+              className="draw-ft-pivot-hit"
+              cx={ftGizmo.pivot.x}
+              cy={ftGizmo.pivot.y}
+              r={pivotArm * 1.4}
+            />
+            <circle
+              className="draw-ft-pivot-ring"
+              cx={ftGizmo.pivot.x}
+              cy={ftGizmo.pivot.y}
+              r={pivotRadius}
+            />
+            <line
+              className="draw-ft-pivot-line"
+              x1={ftGizmo.pivot.x - pivotArm}
+              y1={ftGizmo.pivot.y}
+              x2={ftGizmo.pivot.x + pivotArm}
+              y2={ftGizmo.pivot.y}
+            />
+            <line
+              className="draw-ft-pivot-line"
+              x1={ftGizmo.pivot.x}
+              y1={ftGizmo.pivot.y - pivotArm}
+              x2={ftGizmo.pivot.x}
+              y2={ftGizmo.pivot.y + pivotArm}
+            />
+          </g>
+        </g>
       )}
     </svg>
   );
