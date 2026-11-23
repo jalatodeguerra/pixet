@@ -3451,6 +3451,194 @@
   gap: 8px;
 }
 
+/* D5 Color & Palette Studio */
+.draw-wheel-wrap {
+  position: relative;
+  width: 148px;
+  height: 148px;
+  margin: 0 auto;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+}
 
+.draw-wheel-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 
+.draw-alpha-wrap {
+  position: relative;
+  width: 100%;
+  height: 12px;
+  border: 1px solid var(--border-subtle);
+  cursor: ew-resize;
+  user-select: none;
+  overflow: hidden;
+  touch-action: none;
+}
 
+.draw-color-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.draw-color-readout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.draw-color-alpha-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.draw-numeric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.draw-numeric-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 5px;
+}
+
+.draw-numeric-cell span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.draw-numeric-cell input {
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.draw-color-strip-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.draw-color-strip-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.draw-harmony-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.draw-harmony-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.draw-harmony-tag {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.draw-recent-strip {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+}
+
+.draw-mini-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0;
+}
+
+.draw-recent-strip .draw-mini-swatch {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.draw-mini-swatch:hover,
+.draw-mini-swatch.active {
+  border-color: #ffffff;
+}
+
+.draw-palette-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.draw-ramp-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.draw-ramp-endpoints {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.draw-ramp-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.draw-ramp-endpoint input[type="color"] {
+  width: 24px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-root);
+  cursor: pointer;
+}
+
+.draw-ramp-preview {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+}
+
+.draw-ramp-preview-cell {
+  flex: 1;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.draw-swatch-drop {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}

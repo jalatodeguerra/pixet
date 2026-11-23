@@ -91,6 +91,13 @@ import {
 } from "../src/engine/document/filterActions.ts";
 import { performRedo, performUndo } from "../src/engine/document/historyActions.ts";
 import { useEditorStore } from "../src/store/editorStore.ts";
+import {
+  computeColorHarmonies,
+  extractPaletteMedianCut,
+  generateHueShiftedRamp,
+  snapRgbaToPalette,
+  sortPaletteColors,
+} from "../src/engine/tools/paletteOps.ts";
 
 function makeCfg(overrides: Partial<BrushConfig> = {}): BrushConfig {
   return {
@@ -2051,6 +2058,244 @@ test("D4-UI: TileHistory multi-cel atomic undo/redo and filterActions scope/auto
   useEditorStore.getState().setFilterModalOpen(false);
   assert.equal(useEditorStore.getState().filterModalOpen, false);
 });
+
+test("D5 paletteOps: computeColorHarmonies produces exact lowercase harmony angles", () => {
+  const redHarmonies = computeColorHarmonies("#FF0000");
+  assert.deepEqual(redHarmonies, {
+    complementary: ["#00ffff"],
+    analogous: ["#ff0080", "#ff8000"],
+    triadic: ["#00ff00", "#0000ff"],
+    splitComplementary: ["#00ff80", "#0080ff"],
+  });
+
+  // Cyan (h=180) wraps around 360 cleanly: 180-30=150 (#00ff80), 180+30=210 (#0080ff)
+  const cyanHarmonies = computeColorHarmonies("#00ffff");
+  assert.deepEqual(cyanHarmonies, {
+    complementary: ["#ff0000"],
+    analogous: ["#00ff80", "#0080ff"],
+    triadic: ["#ff00ff", "#ffff00"],
+    splitComplementary: ["#ff0080", "#ff8000"],
+  });
+
+  // Achromatic color preserves saturation/value
+  const grayHarmonies = computeColorHarmonies("#808080");
+  assert.deepEqual(grayHarmonies, {
+    complementary: ["#808080"],
+    analogous: ["#808080", "#808080"],
+    triadic: ["#808080", "#808080"],
+    splitComplementary: ["#808080", "#808080"],
+  });
+});
+
+test("D5 paletteOps: sortPaletteColors sorts by hue, luminance, and saturation without mutating input", () => {
+  const input = ["#0000ff", "#ffffff", "#ff0000", "#00ff00", "#000000", "#804040"];
+  const snapshot = [...input];
+
+  const byHue = sortPaletteColors(input, "hue");
+  assert.deepEqual(input, snapshot);
+  // Chromatic colors by hue: #804040 (0, sat 0.5), #ff0000 (0, sat 1), #00ff00 (120), #0000ff (240),
+  // followed by achromatic colors sorted by luminance: #000000, #ffffff.
+  assert.deepEqual(byHue, [
+    "#804040",
+    "#ff0000",
+    "#00ff00",
+    "#0000ff",
+    "#000000",
+    "#ffffff",
+  ]);
+
+  const byLum = sortPaletteColors(input, "luminance");
+  assert.deepEqual(input, snapshot);
+  // Rec. 709 luminance order: black (0) < blue (18.4) < red (54.2) < #804040 (77.6) < green (182.4) < white (255)
+  assert.deepEqual(byLum, [
+    "#000000",
+    "#0000ff",
+    "#ff0000",
+    "#804040",
+    "#00ff00",
+    "#ffffff",
+  ]);
+
+  const bySat = sortPaletteColors(input, "saturation");
+  assert.deepEqual(input, snapshot);
+  // Saturation: 0 (#000000, #ffffff), 0.5 (#804040), 1 (#0000ff, #ff0000, #00ff00)
+  assert.deepEqual(bySat.slice(0, 3), ["#000000", "#ffffff", "#804040"]);
+  assert.equal(new Set(bySat.slice(3)).size, 3);
+});
+
+test("D5 paletteOps: extractPaletteMedianCut handles empty, exact unique <= N, and quantized > N", () => {
+  const empty = new PixelBuffer(4, 4);
+  assert.deepEqual(extractPaletteMedianCut([empty], 8), []);
+
+  // Buffer with 3 opaque colors + 1 transparent pixel with non-zero RGB
+  const exactBuf = new PixelBuffer(2, 2);
+  exactBuf.setPixel(0, 0, 255, 0, 0, 255);
+  exactBuf.setPixel(1, 0, 0, 255, 0, 255);
+  exactBuf.setPixel(0, 1, 0, 0, 255, 255);
+  exactBuf.setPixel(1, 1, 200, 200, 200, 0); // transparent, must be ignored
+
+  // Unique count (3) <= maxColors (8) -> exact unique colors sorted by Rec. 709 luminance
+  assert.deepEqual(extractPaletteMedianCut([exactBuf], 8), [
+    "#0000ff",
+    "#ff0000",
+    "#00ff00",
+  ]);
+
+  // Multi-buffer quantized case: 16 distinct colors -> clamped/quantized to <= 4
+  const multiA = new PixelBuffer(4, 2);
+  const multiB = new PixelBuffer(4, 2);
+  for (let i = 0; i < 8; i++) {
+    multiA.setPixel(i % 4, Math.floor(i / 4), i * 32, 0, 0, 255);
+    multiB.setPixel(i % 4, Math.floor(i / 4), 0, i * 32, 255 - i * 32, 255);
+  }
+  const quantized4 = extractPaletteMedianCut([multiA, multiB], 4);
+  assert.ok(quantized4.length >= 2 && quantized4.length <= 4);
+  for (const hex of quantized4) {
+    assert.match(hex, /^#[0-9a-f]{6}$/);
+  }
+
+  // maxColors < 2 clamps to 2
+  const clampedMin = extractPaletteMedianCut([exactBuf], 1);
+  assert.ok(clampedMin.length >= 1 && clampedMin.length <= 2);
+});
+
+test("D5 paletteOps: generateHueShiftedRamp preserves endpoints, clamps steps, and stays monotonic in luminance", () => {
+  const ramp = generateHueShiftedRamp("#1a1030", "#f8e8a0", 5, -20);
+  assert.equal(ramp.length, 5);
+  assert.equal(ramp[0], "#1a1030");
+  assert.equal(ramp[4], "#f8e8a0");
+
+  const lum = (hex: string) => {
+    const clean = hex.slice(1);
+    const r = parseInt(clean.slice(0, 2), 16);
+    const g = parseInt(clean.slice(2, 4), 16);
+    const b = parseInt(clean.slice(4, 6), 16);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  for (let i = 1; i < ramp.length; i++) {
+    assert.ok(
+      lum(ramp[i]) >= lum(ramp[i - 1]),
+      `expected monotonic luminance at index ${i}: ${ramp[i - 1]} -> ${ramp[i]}`
+    );
+  }
+
+  // Midpoint differs when hueShiftDeg != 0 vs 0
+  const unshifted = generateHueShiftedRamp("#203080", "#d0e0ff", 5, 0);
+  const shifted = generateHueShiftedRamp("#203080", "#d0e0ff", 5, 45);
+  assert.equal(unshifted[0], shifted[0]);
+  assert.equal(unshifted[4], shifted[4]);
+  assert.notEqual(unshifted[2], shifted[2]);
+
+  // Step clamping 2..16
+  assert.equal(generateHueShiftedRamp("#000000", "#ffffff", 1).length, 2);
+  assert.equal(generateHueShiftedRamp("#000000", "#ffffff", 99).length, 16);
+});
+
+test("D5 paletteOps: snapRgbaToPalette matches exact/nearest colors, preserves alpha, and handles empty palette", () => {
+  const palette: RGBA[] = [
+    [0, 0, 0, 255],
+    [255, 0, 0, 255],
+    [0, 255, 0, 255],
+    [255, 255, 255, 255],
+  ];
+
+  // Exact match
+  assert.deepEqual(snapRgbaToPalette([255, 0, 0, 255], palette), [255, 0, 0, 255]);
+
+  // Nearest match + alpha preserved
+  assert.deepEqual(snapRgbaToPalette([230, 20, 15, 128], palette), [255, 0, 0, 128]);
+  assert.deepEqual(snapRgbaToPalette([10, 240, 25, 200], palette), [0, 255, 0, 200]);
+
+  // Transparent pixel returned unchanged (new tuple)
+  const transparent: RGBA = [123, 45, 67, 0];
+  const snappedTransparent = snapRgbaToPalette(transparent, palette);
+  assert.deepEqual(snappedTransparent, [123, 45, 67, 0]);
+  assert.notEqual(snappedTransparent, transparent);
+
+  // Empty palette safe (returns copy of input)
+  const opaque: RGBA = [12, 34, 56, 255];
+  const snappedEmpty = snapRgbaToPalette(opaque, []);
+  assert.deepEqual(snappedEmpty, [12, 34, 56, 255]);
+  assert.notEqual(snappedEmpty, opaque);
+});
+
+test("D5-UI: editorStore color & palette actions (alpha, paletteLock, recentColors, pickerMode, palette CRUD)", () => {
+  const store = useEditorStore.getState();
+
+  // primaryAlpha clamps 0..255
+  assert.equal(store.primaryAlpha, 255);
+  store.setPrimaryAlpha(128);
+  assert.equal(useEditorStore.getState().primaryAlpha, 128);
+  store.setPrimaryAlpha(-20);
+  assert.equal(useEditorStore.getState().primaryAlpha, 0);
+  store.setPrimaryAlpha(999);
+  assert.equal(useEditorStore.getState().primaryAlpha, 255);
+
+  // paletteLock toggle
+  const initialLock = useEditorStore.getState().paletteLock;
+  store.togglePaletteLock();
+  assert.equal(useEditorStore.getState().paletteLock, !initialLock);
+  store.togglePaletteLock();
+  assert.equal(useEditorStore.getState().paletteLock, initialLock);
+
+  // colorPickerMode
+  assert.equal(useEditorStore.getState().colorPickerMode, "square");
+  store.setColorPickerMode("wheel");
+  assert.equal(useEditorStore.getState().colorPickerMode, "wheel");
+  store.setColorPickerMode("square");
+
+  // recentColors auto-pushed on setPrimaryColor, deduplicated & capped at 16
+  for (let i = 0; i < 20; i++) {
+    const hex = `#${i.toString(16).padStart(2, "0")}0000`;
+    store.setPrimaryColor(hex);
+  }
+  const recents = useEditorStore.getState().recentColors;
+  assert.equal(recents.length, 16);
+  assert.equal(recents[0], "#130000");
+
+  // Pushing an existing color moves it to index 0 without duplicating
+  store.pushRecentColor("#0a0000");
+  const afterPush = useEditorStore.getState().recentColors;
+  assert.equal(afterPush.length, 16);
+  assert.equal(afterPush[0], "#0a0000");
+
+  // Palette CRUD: set, reorder, replace, duplicate, remove, append
+  store.setPalette("Test", ["#111111", "#222222", "#333333"]);
+  store.reorderPalette(0, 2);
+  assert.deepEqual(useEditorStore.getState().palette, [
+    "#222222",
+    "#333333",
+    "#111111",
+  ]);
+  store.replacePaletteColor(1, "#ABCDEF");
+  assert.deepEqual(useEditorStore.getState().palette, [
+    "#222222",
+    "#abcdef",
+    "#111111",
+  ]);
+  store.duplicatePaletteColor(0);
+  assert.deepEqual(useEditorStore.getState().palette, [
+    "#222222",
+    "#222222",
+    "#abcdef",
+    "#111111",
+  ]);
+  store.removePaletteColor(1);
+  assert.deepEqual(useEditorStore.getState().palette, [
+    "#222222",
+    "#abcdef",
+    "#111111",
+  ]);
+  store.appendPaletteColors(["#222222", "#444444", "#ABCDEF", "#555555"]);
+  assert.deepEqual(useEditorStore.getState().palette, [
+    "#222222",
+    "#abcdef",
+    "#111111",
+    "#444444",
+    "#555555",
+  ]);
+});
+
 
 
 

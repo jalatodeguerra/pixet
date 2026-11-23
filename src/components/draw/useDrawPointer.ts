@@ -48,6 +48,7 @@ import {
   applyJumbleFootprint,
   generateSprayPoints,
 } from "../../engine/tools/sprayJumble";
+import { snapRgbaToPalette } from "../../engine/tools/paletteOps";
 import { expandSymmetryV2, type SymmetryConfig } from "../../engine/tools/symmetry";
 import {
   isLayerEffectivelyLocked,
@@ -268,6 +269,7 @@ export interface StampBrushOptions {
   inkMode?: InkMode;
   inkCtx?: InkContext;
   visitedPixels?: Set<string>;
+  paletteRgba?: readonly RGBA[];
 }
 
 function resolveSymmetry(celWidth: number, celHeight: number, opts: StampBrushOptions): SymmetryConfig {
@@ -318,13 +320,17 @@ export function stampBrushPoint(
         continue;
       }
 
-      const baseSrc: RGBA = fp.rgba ? fp.rgba : opts.rgba;
+      const rawBaseSrc: RGBA = fp.rgba ? fp.rgba : opts.rgba;
+      const baseSrc: RGBA =
+        opts.paletteRgba && opts.paletteRgba.length > 0
+          ? snapRgbaToPalette(rawBaseSrc, opts.paletteRgba)
+          : rawBaseSrc;
       const effectiveOpacity = Math.max(
         0,
         Math.min(100, Math.round(fp.alpha * 100))
       );
       const dst = cel.getPixel(sp.x, sp.y);
-      const next = applyInkPixel(dst, baseSrc, sp.x, sp.y, mode, {
+      const nextRaw = applyInkPixel(dst, baseSrc, sp.x, sp.y, mode, {
         ...opts.inkCtx,
         opacity: effectiveOpacity,
       });
@@ -332,7 +338,12 @@ export function stampBrushPoint(
       if (trackVisited) {
         opts.visitedPixels!.add(key);
       }
-      if (!next) continue;
+      if (!nextRaw) continue;
+
+      const next =
+        opts.paletteRgba && opts.paletteRgba.length > 0 && nextRaw[3] > 0
+          ? snapRgbaToPalette(nextRaw, opts.paletteRgba)
+          : nextRaw;
 
       pixelEngine.history.capturePixelTile(cel, sp.x, sp.y);
       cel.setPixel(
@@ -559,6 +570,9 @@ export function useDrawPointer({
 
     const state = useEditorStore.getState();
     const symCfg = getSymmetryConfigFromState(state);
+    const paletteRgba = state.paletteLock
+      ? state.palette.map((h) => hexToRgba(h, 255))
+      : undefined;
     const cel = pixelEngine.getOrCreateCel(curve.layerId, curve.frameIndex);
     pixelEngine.history.beginTransaction(
       curve.layerId,
@@ -585,6 +599,7 @@ export function useDrawPointer({
         seamlessWrap: state.seamlessWrap,
         inkMode: "simple",
         inkCtx: {},
+        paletteRgba,
       });
     }
     if (pixelEngine.history.commitTransaction(cel)) {
@@ -610,6 +625,9 @@ export function useDrawPointer({
 
     const state = useEditorStore.getState();
     const symCfg = getSymmetryConfigFromState(state);
+    const paletteRgba = state.paletteLock
+      ? state.palette.map((h) => hexToRgba(h, 255))
+      : undefined;
     const cel = pixelEngine.getOrCreateCel(poly.layerId, poly.frameIndex);
     pixelEngine.history.beginTransaction(
       poly.layerId,
@@ -633,6 +651,7 @@ export function useDrawPointer({
         seamlessWrap: state.seamlessWrap,
         inkMode: "simple",
         inkCtx: {},
+        paletteRgba,
       });
     }
     if (pixelEngine.history.commitTransaction(cel)) {
@@ -733,7 +752,8 @@ export function useDrawPointer({
     symCfg: SymmetryConfig,
     seamlessWrap: boolean,
     inkMode: InkMode,
-    inkCtx: InkContext
+    inkCtx: InkContext,
+    paletteRgba?: readonly RGBA[]
   ) => {
     const sprayPts = generateSprayPoints(cx, cy, radius, density, seed);
     const singleCfg: BrushConfig = {
@@ -753,6 +773,7 @@ export function useDrawPointer({
         seamlessWrap,
         inkMode,
         inkCtx,
+        paletteRgba,
       });
     }
   };
@@ -1157,8 +1178,23 @@ export function useDrawPointer({
     const isEraser = tool === "eraser" || rmbErase;
     const chosenHex = rmbSecondary ? state.secondaryColor : state.primaryColor;
     const secondaryHex = rmbSecondary ? state.primaryColor : state.secondaryColor;
-    const rgba: RGBA = isEraser ? [0, 0, 0, 0] : hexToRgba(chosenHex, 255);
-    const secondaryRgba: RGBA = hexToRgba(secondaryHex, 255);
+    const fgAlpha = rmbSecondary ? 255 : state.primaryAlpha;
+    const paletteRgba = state.paletteLock
+      ? state.palette.map((h) => hexToRgba(h, 255))
+      : undefined;
+    const rawRgba: RGBA = isEraser ? [0, 0, 0, 0] : hexToRgba(chosenHex, fgAlpha);
+    const rawSecondaryRgba: RGBA = hexToRgba(
+      secondaryHex,
+      rmbSecondary ? state.primaryAlpha : 255
+    );
+    const rgba: RGBA =
+      !isEraser && paletteRgba && paletteRgba.length > 0
+        ? snapRgbaToPalette(rawRgba, paletteRgba)
+        : rawRgba;
+    const secondaryRgba: RGBA =
+      paletteRgba && paletteRgba.length > 0
+        ? snapRgbaToPalette(rawSecondaryRgba, paletteRgba)
+        : rawSecondaryRgba;
     const brushCfg: BrushConfig = {
       shape: state.brushShape,
       size: state.brushSize,
@@ -1486,7 +1522,8 @@ export function useDrawPointer({
         symCfg,
         state.seamlessWrap,
         state.inkMode,
-        inkCtx
+        inkCtx,
+        paletteRgba
       );
       strokeRef.current = {
         kind: "spray",
@@ -1627,6 +1664,7 @@ export function useDrawPointer({
             inkMode: effectiveInkMode,
             inkCtx,
             visitedPixels,
+            paletteRgba,
           });
         }
       } else if (usePixelPerfect) {
@@ -1657,6 +1695,7 @@ export function useDrawPointer({
           inkMode: effectiveInkMode,
           inkCtx,
           visitedPixels,
+          paletteRgba,
         });
       }
 
@@ -2019,6 +2058,9 @@ export function useDrawPointer({
       const last = stroke.lastPt;
       if (last.x === px && last.y === py) return true;
       const cel = pixelEngine.getOrCreateCel(stroke.layerId, stroke.frameIndex);
+      const paletteRgba = state.paletteLock
+        ? state.palette.map((h) => hexToRgba(h, 255))
+        : undefined;
       const segment = sampleStrokePoints(last.x, last.y, px, py, 2);
       for (let i = 1; i < segment.length; i++) {
         const pt = segment[i];
@@ -2034,7 +2076,8 @@ export function useDrawPointer({
           symCfg,
           state.seamlessWrap,
           stroke.inkMode,
-          stroke.inkCtx
+          stroke.inkCtx,
+          paletteRgba
         );
       }
       stroke.lastPt = { x: px, y: py };
@@ -2071,6 +2114,9 @@ export function useDrawPointer({
       if (last.x === px && last.y === py) return true;
 
       const cel = pixelEngine.getOrCreateCel(stroke.layerId, stroke.frameIndex);
+      const paletteRgba = state.paletteLock
+        ? state.palette.map((h) => hexToRgba(h, 255))
+        : undefined;
 
       if (stroke.usePixelPerfect) {
         const segment = plotBresenhamLine(last.x, last.y, px, py);
@@ -2141,6 +2187,7 @@ export function useDrawPointer({
             inkMode: stroke.inkMode,
             inkCtx: stroke.inkCtx,
             visitedPixels: stroke.visitedPixels,
+            paletteRgba,
           });
         }
         stroke.lastPt = { x: px, y: py };
@@ -2326,9 +2373,10 @@ export function useDrawPointer({
       const endPt = e.shiftKey
         ? constrainAngle(stroke.startX, stroke.startY, snapped.x, snapped.y)
         : snapped;
-      const paletteSnap = state.gradientPaletteSnap
-        ? state.palette.map((hex) => hexToRgba(hex, 255))
-        : undefined;
+      const paletteSnap =
+        state.gradientPaletteSnap || state.paletteLock
+          ? state.palette.map((hex) => hexToRgba(hex, 255))
+          : undefined;
       pixelEngine.history.beginTransaction(
         stroke.layerId,
         stroke.frameIndex,
@@ -2412,6 +2460,10 @@ export function useDrawPointer({
       return true;
     }
 
+    const paletteRgba = state.paletteLock
+      ? state.palette.map((h) => hexToRgba(h, 255))
+      : undefined;
+
     if (stroke.kind === "fillBrush") {
       pixelEngine.clearOverlay();
       pixelEngine.history.beginTransaction(
@@ -2441,6 +2493,7 @@ export function useDrawPointer({
           inkMode: stroke.inkMode,
           inkCtx: stroke.inkCtx,
           visitedPixels: visited,
+          paletteRgba,
         });
       }
       if (pixelEngine.history.commitTransaction(cel)) {
@@ -2499,6 +2552,7 @@ export function useDrawPointer({
           seamlessWrap: state.seamlessWrap,
           inkMode: "simple",
           inkCtx: {},
+          paletteRgba,
         });
       }
       if (pixelEngine.history.commitTransaction(cel)) {

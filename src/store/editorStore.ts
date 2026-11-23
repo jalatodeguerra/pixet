@@ -263,6 +263,10 @@ interface EditorState {
 
   primaryColor: string;
   secondaryColor: string;
+  primaryAlpha: number;
+  paletteLock: boolean;
+  recentColors: string[];
+  colorPickerMode: "square" | "wheel";
   palette: string[];
   paletteName: string;
   previewScale: 1 | 2 | 4;
@@ -451,6 +455,10 @@ interface EditorState {
 
   setPrimaryColor: (hex: string) => void;
   setSecondaryColor: (hex: string) => void;
+  setPrimaryAlpha: (alpha: number) => void;
+  togglePaletteLock: () => void;
+  pushRecentColor: (hex: string) => void;
+  setColorPickerMode: (mode: "square" | "wheel") => void;
   swapColors: () => void;
   setPreviewScale: (scale: 1 | 2 | 4) => void;
   setHasSelection: (hasSelection: boolean) => void;
@@ -459,6 +467,11 @@ interface EditorState {
   setPalette: (name: string, colors: string[]) => void;
   addColorToPalette: (hex: string) => void;
   removeColorFromPalette: (hex: string) => void;
+  reorderPalette: (fromIdx: number, toIdx: number) => void;
+  replacePaletteColor: (index: number, hex: string) => void;
+  removePaletteColor: (index: number) => void;
+  duplicatePaletteColor: (index: number) => void;
+  appendPaletteColors: (colors: string[]) => void;
 
   selectLayer: (id: string) => void;
   selectLayerRange: (targetId: string) => void;
@@ -603,6 +616,58 @@ function getPlaybackBounds(
   return { start: 0, end: maxIdx };
 }
 
+const RECENT_COLORS_STORAGE_KEY = "pixet:recentColors";
+const MAX_RECENT_COLORS = 16;
+
+function normalizeHex6(hex: string): string | null {
+  const trimmed = hex.trim().toLowerCase();
+  const prefixed = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  return /^#[0-9a-f]{6}$/.test(prefixed) ? prefixed : null;
+}
+
+function loadInitialRecentColors(): string[] {
+  try {
+    if (typeof localStorage === "undefined") return [];
+    const raw = localStorage.getItem(RECENT_COLORS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: string[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "string") continue;
+      const norm = normalizeHex6(item);
+      if (norm && !out.includes(norm)) {
+        out.push(norm);
+        if (out.length >= MAX_RECENT_COLORS) break;
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentColors(colors: string[]): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(RECENT_COLORS_STORAGE_KEY, JSON.stringify(colors));
+  } catch {
+    // ignore storage quota/access errors
+  }
+}
+
+function addRecentColorList(prev: string[], hex: string): string[] {
+  const norm = normalizeHex6(hex);
+  if (!norm) return prev;
+  if (prev[0] === norm) return prev;
+  const next = [norm, ...prev.filter((c) => c !== norm)].slice(
+    0,
+    MAX_RECENT_COLORS
+  );
+  persistRecentColors(next);
+  return next;
+}
+
 export const useEditorStore = create<EditorState>((set, get) => ({
   workspaceMode: "draw",
   activeTool: "pencil",
@@ -692,6 +757,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   primaryColor: "#5b8cff",
   secondaryColor: "#0f0f17",
+  primaryAlpha: 255,
+  paletteLock: false,
+  recentColors: loadInitialRecentColors(),
+  colorPickerMode: "square",
   palette: DEFAULT_PALETTE,
   paletteName: "Pixet Default 16",
   previewScale: 2,
@@ -986,8 +1055,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ),
     })),
 
-  setPrimaryColor: (primaryColor) => set({ primaryColor }),
+  setPrimaryColor: (primaryColor) =>
+    set((s) => ({
+      primaryColor,
+      recentColors: addRecentColorList(s.recentColors, primaryColor),
+    })),
   setSecondaryColor: (secondaryColor) => set({ secondaryColor }),
+  setPrimaryAlpha: (alpha) =>
+    set({
+      primaryAlpha: Number.isFinite(alpha)
+        ? Math.max(0, Math.min(255, Math.round(alpha)))
+        : 255,
+    }),
+  togglePaletteLock: () => set((s) => ({ paletteLock: !s.paletteLock })),
+  pushRecentColor: (hex) =>
+    set((s) => ({
+      recentColors: addRecentColorList(s.recentColors, hex),
+    })),
+  setColorPickerMode: (colorPickerMode) => set({ colorPickerMode }),
   swapColors: () =>
     set((s) => ({
       primaryColor: s.secondaryColor,
@@ -1012,6 +1097,61 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         palette: s.palette.filter((c) => c.toLowerCase() !== normalized),
       };
+    }),
+  reorderPalette: (fromIdx, toIdx) =>
+    set((s) => {
+      if (
+        fromIdx === toIdx ||
+        fromIdx < 0 ||
+        toIdx < 0 ||
+        fromIdx >= s.palette.length ||
+        toIdx >= s.palette.length
+      ) {
+        return s;
+      }
+      const next = s.palette.slice();
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return { palette: next };
+    }),
+  replacePaletteColor: (index, hex) =>
+    set((s) => {
+      if (index < 0 || index >= s.palette.length) return s;
+      const norm = normalizeHex6(hex) ?? hex.toLowerCase();
+      if (s.palette[index]?.toLowerCase() === norm) return s;
+      const next = s.palette.slice();
+      next[index] = norm;
+      return { palette: next };
+    }),
+  removePaletteColor: (index) =>
+    set((s) => {
+      if (s.palette.length <= 1 || index < 0 || index >= s.palette.length) {
+        return s;
+      }
+      const next = s.palette.slice();
+      next.splice(index, 1);
+      return { palette: next };
+    }),
+  duplicatePaletteColor: (index) =>
+    set((s) => {
+      if (index < 0 || index >= s.palette.length) return s;
+      const next = s.palette.slice();
+      next.splice(index + 1, 0, s.palette[index]);
+      return { palette: next };
+    }),
+  appendPaletteColors: (colors) =>
+    set((s) => {
+      const existing = new Set(s.palette.map((c) => c.toLowerCase()));
+      const additions: string[] = [];
+      for (const raw of colors) {
+        const norm = normalizeHex6(raw) ?? raw.toLowerCase();
+        if (!existing.has(norm)) {
+          existing.add(norm);
+          additions.push(norm);
+        }
+      }
+      if (additions.length === 0) return s;
+      return { palette: [...s.palette, ...additions] };
     }),
 
   selectLayer: (activeLayerId) =>
