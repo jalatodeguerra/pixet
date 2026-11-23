@@ -37,7 +37,8 @@ import {
   isSupportedImageFile,
   pickImageFileForImport,
 } from "./engine/io/imageImport";
-import { ToolId, useEditorStore } from "./store/editorStore";
+import { useEditorStore } from "./store/editorStore";
+import { DRAW_TOOL_SHORTCUTS } from "./components/draw/drawTools";
 import {
   RIG_TOOL_BY_ID,
   RIG_TOOL_SHORTCUTS,
@@ -55,21 +56,6 @@ import {
   flipBrushV,
   rotateBrushCW,
 } from "./engine/tiles/mapTools";
-
-const TOOL_SHORTCUTS: Record<string, ToolId> = {
-  b: "pencil",
-  f: "fillBrush",
-  e: "eraser",
-  l: "line",
-  u: "rect",
-  o: "ellipse",
-  g: "fill",
-  i: "eyedropper",
-  m: "marquee",
-  v: "move",
-  t: "tileStamp",
-  k: "isoBox",
-};
 
 export function App() {
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
@@ -445,7 +431,7 @@ export function App() {
         return;
       }
 
-      const mappedTool = TOOL_SHORTCUTS[key];
+      const mappedTool = DRAW_TOOL_SHORTCUTS[key];
       if (mappedTool) {
         state.setActiveTool(mappedTool);
       }

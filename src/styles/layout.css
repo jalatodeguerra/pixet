@@ -2709,3 +2709,34 @@
   flex-wrap: wrap;
   gap: 6px 10px;
 }
+
+/* D0 Draw Brush Footprint Overlay */
+.draw-overlay-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 5;
+}
+
+.draw-footprint-cell {
+  fill: rgba(76, 139, 245, 0.14);
+}
+
+.draw-footprint-cell.eraser {
+  fill: rgba(255, 255, 255, 0.1);
+}
+
+.draw-footprint-outline {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  shape-rendering: crispEdges;
+}
+
+.draw-footprint-outline.eraser {
+  stroke: rgba(232, 232, 232, 0.85);
+}

@@ -5,8 +5,12 @@ import type { CellFlags } from "../engine/tiles/cell";
 import type { TileTool } from "../components/tiles/tileTools";
 import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
 import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
+import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
+import type { InkMode } from "../engine/tools/ink";
 
-export type { LayerMapRole, TileTool };
+export type { BrushShape, CustomBrushData, InkMode, LayerMapRole, TileTool };
+
+export type RightClickMode = "secondaryColor" | "erase" | "eyedropper";
 
 export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
 export type TileMode = "map" | "tile";
@@ -124,6 +128,12 @@ interface EditorState {
   workspaceMode: WorkspaceMode;
   activeTool: ToolId;
   brushSize: number;
+  brushShape: BrushShape;
+  brushOpacity: number;
+  brushSpacing: number;
+  inkMode: InkMode;
+  rightClickMode: RightClickMode;
+  customBrush: CustomBrushData | null;
   pixelPerfect: boolean;
   shapeFilled: boolean;
   fillContiguous: boolean;
@@ -262,6 +272,12 @@ interface EditorState {
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setActiveTool: (tool: ToolId) => void;
   setBrushSize: (size: number) => void;
+  setBrushShape: (shape: BrushShape) => void;
+  setBrushOpacity: (opacity: number) => void;
+  setBrushSpacing: (spacing: number) => void;
+  setInkMode: (mode: InkMode) => void;
+  setRightClickMode: (mode: RightClickMode) => void;
+  setCustomBrush: (brush: CustomBrushData | null) => void;
   togglePixelPerfect: () => void;
   toggleShapeFilled: () => void;
   toggleFillContiguous: () => void;
@@ -472,6 +488,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   workspaceMode: "draw",
   activeTool: "pencil",
   brushSize: 1,
+  brushShape: "circle",
+  brushOpacity: 100,
+  brushSpacing: 1,
+  inkMode: "simple",
+  rightClickMode: "secondaryColor",
+  customBrush: null,
   pixelPerfect: true,
   shapeFilled: false,
   fillContiguous: true,
@@ -649,7 +671,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
   setActiveTool: (activeTool) => set({ activeTool }),
   setBrushSize: (size) =>
-    set({ brushSize: Math.max(1, Math.min(16, Math.round(size))) }),
+    set({ brushSize: Math.max(1, Math.min(64, Math.round(size))) }),
+  setBrushShape: (brushShape) => set({ brushShape }),
+  setBrushOpacity: (opacity) =>
+    set({ brushOpacity: Math.max(1, Math.min(100, Math.round(opacity))) }),
+  setBrushSpacing: (spacing) =>
+    set({ brushSpacing: Math.max(1, Math.min(16, Math.round(spacing))) }),
+  setInkMode: (inkMode) => set({ inkMode }),
+  setRightClickMode: (rightClickMode) => set({ rightClickMode }),
+  setCustomBrush: (customBrush) => set({ customBrush }),
   togglePixelPerfect: () => set((s) => ({ pixelPerfect: !s.pixelPerfect })),
   toggleShapeFilled: () => set((s) => ({ shapeFilled: !s.shapeFilled })),
   toggleFillContiguous: () =>

@@ -1,21 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Box,
-  Brush,
-  Circle,
-  Eraser,
-  Grid2x2,
-  Lasso,
-  Minus,
-  Move,
-  PaintBucket,
-  Pencil,
-  Pipette,
-  Scan,
-  Square,
-  Wand2,
-} from "lucide-react";
 import { ToolId, useEditorStore } from "../store/editorStore";
+import { DRAW_TOOL_GROUPS } from "./draw/drawTools";
 import {
   RIG_TOOL_BY_ID,
   RIG_TOOL_GROUPS,
@@ -23,70 +8,6 @@ import {
   rigToolTitle,
 } from "./rig/rigTools";
 import { TILE_TOOL_BY_ID, TILE_TOOL_GROUPS } from "./tiles/tileTools";
-
-interface ToolDef {
-  id: ToolId;
-  label: string;
-  shortcut?: string;
-  icon: typeof Pencil;
-}
-
-interface ToolGroupDef {
-  id: string;
-  items: ToolDef[];
-  dividerAfter?: boolean;
-}
-
-const TOOL_GROUPS: ToolGroupDef[] = [
-  {
-    id: "brush-group",
-    items: [
-      { id: "pencil", label: "Pencil", shortcut: "B", icon: Pencil },
-      { id: "fillBrush", label: "Fill Brush", shortcut: "F", icon: Brush },
-    ],
-  },
-  {
-    id: "eraser-group",
-    items: [{ id: "eraser", label: "Eraser", shortcut: "E", icon: Eraser }],
-    dividerAfter: true,
-  },
-  {
-    id: "shape-group",
-    items: [
-      { id: "rect", label: "Rectangle", shortcut: "U", icon: Square },
-      { id: "ellipse", label: "Ellipse", shortcut: "O", icon: Circle },
-      { id: "line", label: "Line", shortcut: "L", icon: Minus },
-      { id: "isoBox", label: "Iso Box (2:1)", shortcut: "K", icon: Box },
-    ],
-    dividerAfter: true,
-  },
-  {
-    id: "fill-group",
-    items: [{ id: "fill", label: "Paint Bucket", shortcut: "G", icon: PaintBucket }],
-  },
-  {
-    id: "eyedropper-group",
-    items: [{ id: "eyedropper", label: "Eyedropper", shortcut: "I", icon: Pipette }],
-    dividerAfter: true,
-  },
-  {
-    id: "select-group",
-    items: [
-      { id: "marquee", label: "Rect Marquee", shortcut: "M", icon: Scan },
-      { id: "lasso", label: "Lasso Select", icon: Lasso },
-      { id: "wand", label: "Magic Wand", icon: Wand2 },
-    ],
-  },
-  {
-    id: "move-group",
-    items: [{ id: "move", label: "Move", shortcut: "V", icon: Move }],
-    dividerAfter: true,
-  },
-  {
-    id: "tile-group",
-    items: [{ id: "tileStamp", label: "Tile Stamp", shortcut: "T", icon: Grid2x2 }],
-  },
-];
 
 export function ToolRail() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
@@ -197,7 +118,7 @@ function DrawingToolRail() {
 
   // Sync group active icon when tool changes via keyboard shortcut or store
   useEffect(() => {
-    for (const g of TOOL_GROUPS) {
+    for (const g of DRAW_TOOL_GROUPS) {
       if (g.items.length > 1 && g.items.some((t) => t.id === activeTool)) {
         setGroupSelection((prev) =>
           prev[g.id] === activeTool ? prev : { ...prev, [g.id]: activeTool }
@@ -240,7 +161,7 @@ function DrawingToolRail() {
 
   return (
     <aside ref={railRef} className="tool-rail" aria-label="Drawing Tools">
-      {TOOL_GROUPS.map((group) => {
+      {DRAW_TOOL_GROUPS.map((group) => {
         const hasFlyout = group.items.length > 1;
         const selectedToolId = groupSelection[group.id] ?? group.items[0].id;
         const displayedTool =

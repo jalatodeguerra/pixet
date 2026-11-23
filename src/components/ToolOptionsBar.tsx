@@ -18,7 +18,11 @@ import {
   deselectAll,
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
-import { useEditorStore } from "../store/editorStore";
+import {
+  useEditorStore,
+  type BrushShape,
+  type InkMode,
+} from "../store/editorStore";
 import { RigToolOptionsBar } from "./rig/RigToolOptionsBar";
 import { TileToolOptionsBar } from "./tiles/TileToolOptionsBar";
 
@@ -28,6 +32,13 @@ export function ToolOptionsBar() {
   const activeTool = useEditorStore((s) => s.activeTool);
   const brushSize = useEditorStore((s) => s.brushSize);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
+  const brushShape = useEditorStore((s) => s.brushShape);
+  const setBrushShape = useEditorStore((s) => s.setBrushShape);
+  const brushOpacity = useEditorStore((s) => s.brushOpacity);
+  const setBrushOpacity = useEditorStore((s) => s.setBrushOpacity);
+  const inkMode = useEditorStore((s) => s.inkMode);
+  const setInkMode = useEditorStore((s) => s.setInkMode);
+  const customBrush = useEditorStore((s) => s.customBrush);
   const pixelPerfect = useEditorStore((s) => s.pixelPerfect);
   const togglePixelPerfect = useEditorStore((s) => s.togglePixelPerfect);
   const shapeFilled = useEditorStore((s) => s.shapeFilled);
@@ -57,6 +68,13 @@ export function ToolOptionsBar() {
   const activeLayer = layers.find((l) => l.id === activeLayerId);
   const showTileControls =
     workspaceMode === "tiles" || activeLayer?.kind === "tilemap";
+
+  const showBrushShape =
+    activeTool === "pencil" ||
+    activeTool === "eraser" ||
+    activeTool === "fillBrush";
+  const showInkControls =
+    activeTool === "pencil" || activeTool === "fillBrush";
 
   const showShapeFillToggle =
     activeTool === "rect" || activeTool === "ellipse";
@@ -116,12 +134,68 @@ export function ToolOptionsBar() {
             type="range"
             className="compact-range"
             min={1}
-            max={16}
+            max={64}
             value={brushSize}
             onChange={(e) => setBrushSize(Number(e.target.value))}
           />
           <span className="mono-value">{brushSize}px</span>
         </label>
+
+        {showBrushShape && (
+          <label className="option-label">
+            <span>Shape</span>
+            <select
+              className="palette-select"
+              style={{ flex: "0 0 auto", width: "auto" }}
+              value={brushShape}
+              onChange={(e) => setBrushShape(e.target.value as BrushShape)}
+              title="Brush footprint shape"
+            >
+              <option value="circle">Circle</option>
+              <option value="square">Square</option>
+              <option value="diamond">Diamond</option>
+              <option value="diagonalL">Diag \</option>
+              <option value="diagonalR">Diag /</option>
+              {customBrush && <option value="custom">Custom</option>}
+            </select>
+          </label>
+        )}
+
+        {showInkControls && (
+          <>
+            <label className="option-label">
+              <span>Opacity</span>
+              <input
+                type="range"
+                className="compact-range"
+                style={{ width: 64 }}
+                min={1}
+                max={100}
+                value={brushOpacity}
+                onChange={(e) => setBrushOpacity(Number(e.target.value))}
+              />
+              <span className="mono-value">{brushOpacity}%</span>
+            </label>
+
+            <label className="option-label">
+              <span>Ink</span>
+              <select
+                className="palette-select"
+                style={{ flex: "0 0 auto", width: "auto" }}
+                value={inkMode}
+                onChange={(e) => setInkMode(e.target.value as InkMode)}
+                title="Ink blending mode"
+              >
+                <option value="simple">Simple</option>
+                <option value="alphaBlend">Alpha</option>
+                <option value="shadingRamp">Shading</option>
+                <option value="replaceColor">Replace</option>
+                <option value="lockAlpha">Lock α</option>
+                <option value="dither">Dither</option>
+              </select>
+            </label>
+          </>
+        )}
 
         <button
           type="button"
