@@ -656,6 +656,7 @@ export function App() {
               <RightSidebar />
             </>
           )}
+          <div id="floating-panels-root" className="floating-panels-root" />
         </div>
 
         {!panelsCollapsed && (

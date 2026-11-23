@@ -217,6 +217,7 @@ export function SlotsPanel() {
 
   return (
     <RigPanelSection
+      id="rig-slots"
       title="Slots & Attachments"
       icon={<Layers size={12} />}
       actions={

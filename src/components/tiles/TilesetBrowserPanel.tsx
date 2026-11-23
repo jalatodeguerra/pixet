@@ -26,6 +26,7 @@ import {
 } from "../../engine/tiles/tileAuthoring";
 import { Tileset } from "../../engine/tiles/Tileset";
 import { useEditorStore } from "../../store/editorStore";
+import { DockablePanelSection } from "../DockablePanelSection";
 
 // 3x3 cell index -> peering bit index (-1 = center)
 const GRID_TO_PEERING_BIT = [7, 0, 1, 6, -1, 2, 5, 4, 3] as const;
@@ -388,113 +389,103 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
       })
     : tileIds;
 
-  return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          onClick={() => setCollapsed((v) => !v)}
-        >
-          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-          <span>Tileset ({tileCount})</span>
-        </button>
-        <div className="panel-header-actions">
-          <select
-            className="palette-select"
-            style={{ width: 62, padding: "1px 4px", fontSize: 10 }}
-            aria-label="Tile Size Preset"
-            value={`${tileW}x${tileH}`}
-            onChange={(e) => {
-              const [w, h] = e.target.value.split("x").map(Number);
-              if (w && h) handleResizeTileset(w, h);
-            }}
-          >
-            <option value="8x8">8×8</option>
-            <option value="16x16">16×16</option>
-            <option value="16x24">16×24</option>
-            <option value="32x32">32×32</option>
-            {!["8x8", "16x16", "16x24", "32x32"].includes(`${tileW}x${tileH}`) && (
-              <option value={`${tileW}x${tileH}`}>{tileW}×{tileH}</option>
-            )}
-          </select>
-          <button
-            type="button"
-            className="mini-btn"
-            style={{ padding: "1px 5px", fontSize: 10 }}
-            title="Cycle Browser Zoom (1x–4x)"
-            onClick={() =>
-              setTilesetBrowserZoom(
-                tilesetBrowserZoom >= 4 ? 1 : tilesetBrowserZoom + 1
-              )
-            }
-          >
-            {tilesetBrowserZoom}×
-          </button>
-          <button
-            type="button"
-            className={`icon-action-btn ${tilesetBrowserDocked ? "active" : ""}`}
-            style={{ width: 22, height: 22 }}
-            title={
-              tilesetBrowserDocked
-                ? "Dock Tileset in Sidebar"
-                : "Dock Tileset at Bottom"
-            }
-            onClick={toggleTilesetBrowserDocked}
-          >
-            {tilesetBrowserDocked ? (
-              <PanelRight size={12} />
-            ) : (
-              <PanelBottom size={12} />
-            )}
-          </button>
-          <button
-            type="button"
-            className="icon-action-btn"
-            style={{ width: 22, height: 22 }}
-            title="New Tilemap Layer"
-            onClick={() => {
-              addTilemapLayer();
-              setTileTool("stamp");
-              setStatusMessage("Created Tilemap layer · Stamp tiles with T");
-            }}
-          >
-            <Grid2x2 size={12} />
-          </button>
-          <button
-            type="button"
-            className="icon-action-btn"
-            style={{ width: 22, height: 22 }}
-            title="Add Empty Tile"
-            onClick={handleAddTile}
-          >
-            <Plus size={13} />
-          </button>
-          <button
-            type="button"
-            className="icon-action-btn"
-            style={{ width: 22, height: 22 }}
-            title="Duplicate Selected Tile"
-            disabled={activeTileId <= 0}
-            onClick={handleDuplicateTile}
-          >
-            <Copy size={12} />
-          </button>
-          <button
-            type="button"
-            className="icon-action-btn"
-            style={{ width: 22, height: 22 }}
-            title="Delete Selected Tile"
-            disabled={activeTileId <= 0 || tileCount <= 1}
-            onClick={handleDeleteTile}
-          >
-            <Trash2 size={12} />
-          </button>
-        </div>
-      </div>
+  const headerActions = (
+    <>
+      <select
+        className="palette-select"
+        style={{ width: 62, padding: "1px 4px", fontSize: 10 }}
+        aria-label="Tile Size Preset"
+        value={`${tileW}x${tileH}`}
+        onChange={(e) => {
+          const [w, h] = e.target.value.split("x").map(Number);
+          if (w && h) handleResizeTileset(w, h);
+        }}
+      >
+        <option value="8x8">8×8</option>
+        <option value="16x16">16×16</option>
+        <option value="16x24">16×24</option>
+        <option value="32x32">32×32</option>
+        {!["8x8", "16x16", "16x24", "32x32"].includes(`${tileW}x${tileH}`) && (
+          <option value={`${tileW}x${tileH}`}>{tileW}×{tileH}</option>
+        )}
+      </select>
+      <button
+        type="button"
+        className="mini-btn"
+        style={{ padding: "1px 5px", fontSize: 10 }}
+        title="Cycle Browser Zoom (1x–4x)"
+        onClick={() =>
+          setTilesetBrowserZoom(
+            tilesetBrowserZoom >= 4 ? 1 : tilesetBrowserZoom + 1
+          )
+        }
+      >
+        {tilesetBrowserZoom}×
+      </button>
+      <button
+        type="button"
+        className={`icon-action-btn ${tilesetBrowserDocked ? "active" : ""}`}
+        style={{ width: 22, height: 22 }}
+        title={
+          tilesetBrowserDocked
+            ? "Dock Tileset in Sidebar"
+            : "Dock Tileset at Bottom"
+        }
+        onClick={toggleTilesetBrowserDocked}
+      >
+        {tilesetBrowserDocked ? (
+          <PanelRight size={12} />
+        ) : (
+          <PanelBottom size={12} />
+        )}
+      </button>
+      <button
+        type="button"
+        className="icon-action-btn"
+        style={{ width: 22, height: 22 }}
+        title="New Tilemap Layer"
+        onClick={() => {
+          addTilemapLayer();
+          setTileTool("stamp");
+          setStatusMessage("Created Tilemap layer · Stamp tiles with T");
+        }}
+      >
+        <Grid2x2 size={12} />
+      </button>
+      <button
+        type="button"
+        className="icon-action-btn"
+        style={{ width: 22, height: 22 }}
+        title="Add Empty Tile"
+        onClick={handleAddTile}
+      >
+        <Plus size={13} />
+      </button>
+      <button
+        type="button"
+        className="icon-action-btn"
+        style={{ width: 22, height: 22 }}
+        title="Duplicate Selected Tile"
+        disabled={activeTileId <= 0}
+        onClick={handleDuplicateTile}
+      >
+        <Copy size={12} />
+      </button>
+      <button
+        type="button"
+        className="icon-action-btn"
+        style={{ width: 22, height: 22 }}
+        title="Delete Selected Tile"
+        disabled={activeTileId <= 0 || tileCount <= 1}
+        onClick={handleDeleteTile}
+      >
+        <Trash2 size={12} />
+      </button>
+    </>
+  );
 
-      {!collapsed && (
-        <div className="panel-body">
+  const browserBody = (
+    <>
           <div className="tiles-tabs-row">
             {tilesets.map((set, idx) => (
               <button
@@ -662,8 +653,35 @@ export function TilesetBrowserPanel({ docked = false }: { docked?: boolean }) {
               );
             })}
           </div>
-        </div>
-      )}
+    </>
+  );
+
+  if (!docked) {
+    return (
+      <DockablePanelSection
+        id="tiles-browser"
+        title={`Tileset (${tileCount})`}
+        actions={headerActions}
+      >
+        {browserBody}
+      </DockablePanelSection>
+    );
+  }
+
+  return (
+    <section className="panel-section">
+      <div className="panel-header">
+        <button
+          type="button"
+          className="panel-collapse-btn"
+          onClick={() => setCollapsed((v) => !v)}
+        >
+          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+          <span>Tileset ({tileCount})</span>
+        </button>
+        <div className="panel-header-actions">{headerActions}</div>
+      </div>
+      {!collapsed && <div className="panel-body">{browserBody}</div>}
     </section>
   );
 }

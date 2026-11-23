@@ -1,3 +1,4 @@
+import { PANEL_WORKSPACE_MAP, type PanelId } from "../engine/ui/panelLayout";
 import { useEditorStore } from "../store/editorStore";
 import { GameDataPanel } from "./GameDataPanel";
 import { BrushPanel } from "./draw/BrushPanel";
@@ -14,10 +15,21 @@ export function RightSidebar() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const tilesMode = useEditorStore((s) => s.tilesMode);
   const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
+  const detachedPanels = useEditorStore((s) => s.detachedPanels);
 
   const hideDefaultSidebar =
     workspaceMode === "rig" ||
     (workspaceMode === "tiles" && tilesMode === "map");
+
+  const hasPinnedIn = (ws: "rig" | "tiles" | "data") =>
+    Object.entries(detachedPanels).some(
+      ([id, rect]) =>
+        Boolean(rect?.pinned) && PANEL_WORKSPACE_MAP[id as PanelId] === ws
+    );
+
+  const showRigSidebar = workspaceMode === "rig";
+  const showTilesSidebar = workspaceMode === "tiles" && tilesMode === "map";
+  const showDataPanel = workspaceMode === "data";
 
   return (
     <aside
@@ -32,7 +44,11 @@ export function RightSidebar() {
           tilesMode === "tile" &&
           !tilesetBrowserDocked && <TilesetBrowserPanel />}
 
-        {workspaceMode === "data" && <GameDataPanel />}
+        {(showDataPanel || hasPinnedIn("data")) && (
+          <div className={showDataPanel ? "sidebar-section-stack" : "is-hidden"}>
+            <GameDataPanel />
+          </div>
+        )}
 
         <ColorPalettePanel />
         {workspaceMode === "draw" && <BrushPanel />}
@@ -41,11 +57,19 @@ export function RightSidebar() {
         <LayersPanel />
       </div>
 
-      {/* Focused Rig Inspector in Rig Mode */}
-      {workspaceMode === "rig" && <RigSidebar />}
+      {/* Focused Rig Inspector in Rig Mode (or hidden when pinned panels exist) */}
+      {(showRigSidebar || hasPinnedIn("rig")) && (
+        <div className={showRigSidebar ? "sidebar-section-stack" : "is-hidden"}>
+          <RigSidebar />
+        </div>
+      )}
 
-      {/* Focused Tiles Inspector in Tiles Map Mode */}
-      {workspaceMode === "tiles" && tilesMode === "map" && <TilesSidebar />}
+      {/* Focused Tiles Inspector in Tiles Map Mode (or hidden when pinned panels exist) */}
+      {(showTilesSidebar || hasPinnedIn("tiles")) && (
+        <div className={showTilesSidebar ? "sidebar-section-stack" : "is-hidden"}>
+          <TilesSidebar />
+        </div>
+      )}
     </aside>
   );
 }

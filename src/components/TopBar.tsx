@@ -123,6 +123,8 @@ export function TopBar() {
   const setRotate3dModalOpen = useEditorStore((s) => s.setRotate3dModalOpen);
   const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
   const setCanvasSizeModalOpen = useEditorStore((s) => s.setCanvasSizeModalOpen);
+  const dockAllPanels = useEditorStore((s) => s.dockAllPanels);
+  const resetPanelLayout = useEditorStore((s) => s.resetPanelLayout);
   const setFilterModalOpen = useEditorStore((s) => s.setFilterModalOpen);
   const setKeybindingsModalOpen = useEditorStore((s) => s.setKeybindingsModalOpen);
 
@@ -205,6 +207,8 @@ export function TopBar() {
       { label: "Toggle Custom Grid", action: () => { toggleShowCustomGrid(); setOpenMenu(null); } },
       { label: "Clear Guides", action: () => { clearGuides(); setOpenMenu(null); } },
       { label: "Toggle Side Panels", shortcut: "Tab", action: () => { togglePanelsCollapsed(); setOpenMenu(null); } },
+      { label: "Dock All Panels", action: () => { dockAllPanels(); setOpenMenu(null); } },
+      { label: "Reset Panel Layout", action: () => { resetPanelLayout(); setOpenMenu(null); } },
       { label: "Toggle Timeline", action: () => { toggleTimelineCollapsed(); setOpenMenu(null); } },
       { label: "Toggle Floating Preview", action: () => { toggleFloatingPreview(); setOpenMenu(null); } },
       { label: "Zoom In", shortcut: "+", action: () => { setZoom(zoom + 2); setOpenMenu(null); } },

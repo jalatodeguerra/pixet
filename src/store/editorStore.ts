@@ -6,6 +6,19 @@ import type { CellFlags } from "../engine/tiles/cell";
 import type { TileTool } from "../components/tiles/tileTools";
 import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
 import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
+import {
+  bringPanelToFrontState,
+  createDefaultPanelLayout,
+  deserializePanelLayout,
+  detachPanelState,
+  dockAllPanelsState,
+  dockPanelState,
+  type FloatingPanelRect,
+  type PanelId,
+  type PanelLayoutState,
+  reorderDockedPanelState,
+  serializePanelLayout,
+} from "../engine/ui/panelLayout";
 import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
 import type { DitherPattern } from "../engine/tools/dither";
 import type { GradientMode } from "../engine/tools/gradient";
@@ -29,6 +42,7 @@ export type {
   BrushShape,
   CustomBrushData,
   DitherPattern,
+  FloatingPanelRect,
   GradientMode,
   GuideAxis,
   GuideLine,
@@ -36,11 +50,38 @@ export type {
   KeybindingMap,
   KeybindingPreset,
   LayerMapRole,
+  PanelId,
   TagDirection,
   TileTool,
   TransformAlgorithm,
   TransformState,
 };
+
+const PANEL_LAYOUT_STORAGE_KEY = "pixet.panelLayout.v1";
+
+function loadPanelLayout(): PanelLayoutState {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return createDefaultPanelLayout();
+  }
+  try {
+    return deserializePanelLayout(window.localStorage.getItem(PANEL_LAYOUT_STORAGE_KEY));
+  } catch {
+    return createDefaultPanelLayout();
+  }
+}
+
+function savePanelLayout(state: PanelLayoutState): void {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(PANEL_LAYOUT_STORAGE_KEY, serializePanelLayout(state));
+  } catch {
+    // Ignore quota/private-mode errors
+  }
+}
+
+const initialPanelLayout = loadPanelLayout();
 
 export type RightClickMode = "secondaryColor" | "erase" | "eyedropper";
 export type CanvasBackdrop =
@@ -380,6 +421,8 @@ interface EditorState {
   panelsCollapsed: boolean;
   showFloatingPreview: boolean;
   statusMessage: string | null;
+  detachedPanels: Partial<Record<PanelId, FloatingPanelRect>>;
+  dockedPanelOrder: Record<WorkspaceMode, PanelId[]>;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setActiveTool: (tool: ToolId) => void;
@@ -629,6 +672,21 @@ interface EditorState {
   ) => void;
   setPaletteLutEnabled: (v: boolean) => void;
   setPaletteLutPresetName: (name: string) => void;
+  detachPanel: (
+    id: PanelId,
+    initial?: Partial<Pick<FloatingPanelRect, "x" | "y" | "width">>
+  ) => void;
+  dockPanel: (id: PanelId, targetIndex?: number) => void;
+  dockAllPanels: () => void;
+  updateFloatingPanelRect: (
+    id: PanelId,
+    patch: Partial<FloatingPanelRect>
+  ) => void;
+  toggleFloatingPanelCollapsed: (id: PanelId) => void;
+  toggleFloatingPanelPinned: (id: PanelId) => void;
+  bringFloatingPanelToFront: (id: PanelId) => void;
+  reorderDockedPanel: (mode: WorkspaceMode, id: PanelId, toIndex: number) => void;
+  resetPanelLayout: () => void;
   loadProjectState: (payload: {
     documentName: string;
     filePath: string | null;
@@ -985,6 +1043,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   panelsCollapsed: false,
   showFloatingPreview: true,
   statusMessage: null,
+  detachedPanels: initialPanelLayout.detachedPanels,
+  dockedPanelOrder: initialPanelLayout.dockedPanelOrder,
 
   setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
   setActiveTool: (activeTool) => set({ activeTool }),
@@ -2113,6 +2173,116 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setPaletteLutEnabled: (paletteLutEnabled) => set({ paletteLutEnabled }),
   setPaletteLutPresetName: (paletteLutPresetName) =>
     set({ paletteLutPresetName }),
+  detachPanel: (id, initial) =>
+    set((s) => {
+      const next = detachPanelState(
+        {
+          detachedPanels: s.detachedPanels,
+          dockedPanelOrder: s.dockedPanelOrder,
+        },
+        id,
+        initial
+      );
+      savePanelLayout(next);
+      return next;
+    }),
+  dockPanel: (id, targetIndex) =>
+    set((s) => {
+      const next = dockPanelState(
+        {
+          detachedPanels: s.detachedPanels,
+          dockedPanelOrder: s.dockedPanelOrder,
+        },
+        id,
+        targetIndex
+      );
+      savePanelLayout(next);
+      return next;
+    }),
+  dockAllPanels: () =>
+    set((s) => {
+      const next = dockAllPanelsState({
+        detachedPanels: s.detachedPanels,
+        dockedPanelOrder: s.dockedPanelOrder,
+      });
+      savePanelLayout(next);
+      return next;
+    }),
+  updateFloatingPanelRect: (id, patch) =>
+    set((s) => {
+      const cur = s.detachedPanels[id];
+      if (!cur) return s;
+      const next: PanelLayoutState = {
+        detachedPanels: {
+          ...s.detachedPanels,
+          [id]: { ...cur, ...patch },
+        },
+        dockedPanelOrder: s.dockedPanelOrder,
+      };
+      savePanelLayout(next);
+      return { detachedPanels: next.detachedPanels };
+    }),
+  toggleFloatingPanelCollapsed: (id) =>
+    set((s) => {
+      const cur = s.detachedPanels[id];
+      if (!cur) return s;
+      const next: PanelLayoutState = {
+        detachedPanels: {
+          ...s.detachedPanels,
+          [id]: { ...cur, collapsed: !cur.collapsed },
+        },
+        dockedPanelOrder: s.dockedPanelOrder,
+      };
+      savePanelLayout(next);
+      return { detachedPanels: next.detachedPanels };
+    }),
+  toggleFloatingPanelPinned: (id) =>
+    set((s) => {
+      const cur = s.detachedPanels[id];
+      if (!cur) return s;
+      const next: PanelLayoutState = {
+        detachedPanels: {
+          ...s.detachedPanels,
+          [id]: { ...cur, pinned: !cur.pinned },
+        },
+        dockedPanelOrder: s.dockedPanelOrder,
+      };
+      savePanelLayout(next);
+      return { detachedPanels: next.detachedPanels };
+    }),
+  bringFloatingPanelToFront: (id) =>
+    set((s) => {
+      const next = bringPanelToFrontState(
+        {
+          detachedPanels: s.detachedPanels,
+          dockedPanelOrder: s.dockedPanelOrder,
+        },
+        id
+      );
+      if (next.detachedPanels === s.detachedPanels) return s;
+      savePanelLayout(next);
+      return { detachedPanels: next.detachedPanels };
+    }),
+  reorderDockedPanel: (mode, id, toIndex) =>
+    set((s) => {
+      const next = reorderDockedPanelState(
+        {
+          detachedPanels: s.detachedPanels,
+          dockedPanelOrder: s.dockedPanelOrder,
+        },
+        mode,
+        id,
+        toIndex
+      );
+      savePanelLayout(next);
+      return { dockedPanelOrder: next.dockedPanelOrder };
+    }),
+  resetPanelLayout: () =>
+    set(() => {
+      const next = createDefaultPanelLayout();
+      savePanelLayout(next);
+      return next;
+    }),
   loadProjectState: (payload) =>
     set({
       documentName: payload.documentName,

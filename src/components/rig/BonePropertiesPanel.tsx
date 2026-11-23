@@ -134,6 +134,7 @@ export function BonePropertiesPanel() {
 
   return (
     <RigPanelSection
+      id="rig-bone-props"
       title="Bone Properties"
       icon={<SlidersHorizontal size={12} />}
     >

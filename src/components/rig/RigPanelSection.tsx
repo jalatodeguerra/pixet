@@ -1,42 +1,36 @@
-import { useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import type { ReactNode } from "react";
+import type { PanelId } from "../../engine/ui/panelLayout";
+import { DockablePanelSection } from "../DockablePanelSection";
 
 /**
- * Collapsible right-sidebar section used by every rig panel. It reuses the
- * shared layout.css panel classes so the rig workspace matches the rest of
- * the editor exactly.
+ * Collapsible right-sidebar section used by every rig panel.
+ * Delegates to DockablePanelSection so rig sections can be reordered,
+ * detached, dragged, pinned, and re-docked like every other panel.
  */
 export function RigPanelSection({
+  id,
   title,
   icon,
   actions,
   children,
   defaultOpen = true,
 }: {
+  id: PanelId;
   title: string;
   icon?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-
   return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          {icon}
-          <span>{title}</span>
-        </button>
-        {actions && <div className="panel-header-actions">{actions}</div>}
-      </div>
-      {open && <div className="panel-body">{children}</div>}
-    </section>
+    <DockablePanelSection
+      id={id}
+      title={title}
+      icon={icon}
+      actions={actions}
+      defaultOpen={defaultOpen}
+    >
+      {children}
+    </DockablePanelSection>
   );
 }

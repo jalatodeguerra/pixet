@@ -1,13 +1,11 @@
-import { useState } from "react";
 import {
-  ChevronDown,
-  ChevronRight,
   FlipHorizontal2,
   FlipVertical2,
   Plus,
   RotateCw,
   Trash2,
 } from "lucide-react";
+import { DockablePanelSection } from "../DockablePanelSection";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import { packCell, rotateCellCW, unpackCell } from "../../engine/tiles/cell";
 import {
@@ -27,7 +25,6 @@ export function TilePropertiesPanel() {
   const toggleAnimateTilesPreview = useEditorStore(
     (s) => s.toggleAnimateTilesPreview
   );
-  const [collapsed, setCollapsed] = useState(false);
 
   void tilesetVersion;
   const ts =
@@ -52,24 +49,16 @@ export function TilePropertiesPanel() {
   };
 
   return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          onClick={() => setCollapsed((v) => !v)}
-        >
-          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-          <span>Tile Properties</span>
-        </button>
+    <DockablePanelSection
+      id="tiles-props"
+      title="Tile Properties"
+      actions={
         <span className="mono-value" style={{ fontSize: 10, color: "var(--text-muted)" }}>
           {activeTileId > 0 ? `#${activeTileId}` : "Empty"}
         </span>
-      </div>
-
-      {!collapsed && (
-        <div className="panel-body">
-          {meta && activeTileId > 0 ? (
+      }
+    >
+      {meta && activeTileId > 0 ? (
             <>
               <div className="tiles-prop-row">
                 <label className="tiles-prop-label" htmlFor="tile-name-input">
@@ -280,8 +269,6 @@ export function TilePropertiesPanel() {
               Reset
             </button>
           </div>
-        </div>
-      )}
-    </section>
+    </DockablePanelSection>
   );
 }

@@ -15,6 +15,7 @@ import {
   Swords,
   Trash2,
 } from "lucide-react";
+import { DockablePanelSection } from "./DockablePanelSection";
 import { syncHistoryAndCelState } from "../engine/document/historyActions";
 import { PixelBuffer } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
@@ -62,7 +63,6 @@ export function GameDataPanel() {
     (s) => s.setPaletteLutPresetName
   );
 
-  const [collapsed, setCollapsed] = useState(false);
   const [shaderCollapsed, setShaderCollapsed] = useState(false);
   const [eventName, setEventName] = useState("");
   const [eventPayload, setEventPayload] = useState("");
@@ -172,19 +172,12 @@ export function GameDataPanel() {
   ];
 
   return (
-    <>
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          onClick={() => setCollapsed((v) => !v)}
-        >
-          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-          <Crosshair size={12} />
-          <span>Game Data (F{currentFrame + 1})</span>
-        </button>
-        <div className="panel-header-actions">
+    <DockablePanelSection
+      id="game-data"
+      title={`Game Data (F${currentFrame + 1})`}
+      icon={<Crosshair size={12} />}
+      actions={
+        <>
           <button
             type="button"
             className="mini-btn"
@@ -202,12 +195,10 @@ export function GameDataPanel() {
           >
             <Copy size={11} />
           </button>
-        </div>
-      </div>
-
-      {!collapsed && (
-        <div className="panel-body">
-          <div className="rig-tool-row">
+        </>
+      }
+    >
+      <div className="rig-tool-row">
             {tools.map((t) => {
               const Icon = t.icon;
               return (
@@ -377,29 +368,31 @@ export function GameDataPanel() {
             <Download size={11} />
             <span>Export Data JSON</span>
           </button>
-        </div>
-      )}
-    </section>
 
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          onClick={() => setShaderCollapsed((v) => !v)}
-        >
-          {shaderCollapsed ? (
-            <ChevronRight size={12} />
-          ) : (
-            <ChevronDown size={12} />
-          )}
-          <span>2D Lighting &amp; Palette LUT</span>
-        </button>
-      </div>
+          <div
+            style={{
+              marginTop: 8,
+              paddingTop: 6,
+              borderTop: "1px solid var(--border-subtle)",
+            }}
+          >
+            <button
+              type="button"
+              className="panel-collapse-btn"
+              style={{ marginBottom: 6 }}
+              onClick={() => setShaderCollapsed((v) => !v)}
+            >
+              {shaderCollapsed ? (
+                <ChevronRight size={12} />
+              ) : (
+                <ChevronDown size={12} />
+              )}
+              <span>2D Lighting &amp; Palette LUT</span>
+            </button>
 
-      {!shaderCollapsed && (
-        <div className="panel-body">
-          <div className="rig-tool-row">
+            {!shaderCollapsed && (
+              <div>
+                <div className="rig-tool-row">
             <button
               type="button"
               className="mini-btn"
@@ -573,9 +566,9 @@ export function GameDataPanel() {
               />
             ))}
           </div>
-        </div>
-      )}
-    </section>
-    </>
+              </div>
+            )}
+          </div>
+    </DockablePanelSection>
   );
 }

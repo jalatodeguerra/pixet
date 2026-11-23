@@ -50,6 +50,7 @@ function BoundLayersPanel() {
 
   return (
     <RigPanelSection
+      id="rig-bound-layers"
       title="Bound Layers"
       icon={<Layers size={12} />}
       actions={

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ChevronDown, ChevronRight, Play, Plus, Sparkles } from "lucide-react";
+import { Play, Plus, Sparkles } from "lucide-react";
+import { DockablePanelSection } from "../DockablePanelSection";
 import { syncHistoryAndCelState } from "../../engine/document/historyActions";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import type { AutoTileMode } from "../../engine/tiles/autoTile";
@@ -37,8 +37,6 @@ export function TerrainPanel() {
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const currentFrame = useEditorStore((s) => s.currentFrame);
   const tileSelection = useEditorStore((s) => s.tileSelection);
-
-  const [collapsed, setCollapsed] = useState(false);
 
   void tilesetVersion;
   const sets = pixelEngine.terrainSets;
@@ -183,32 +181,22 @@ export function TerrainPanel() {
   };
 
   return (
-    <section className="panel-section">
-      <div className="panel-header">
+    <DockablePanelSection
+      id="tiles-terrain"
+      title="Terrains & Auto-Tile"
+      actions={
         <button
           type="button"
-          className="panel-collapse-btn"
-          onClick={() => setCollapsed((v) => !v)}
+          className="icon-action-btn"
+          style={{ width: 22, height: 22 }}
+          title="New Terrain Set"
+          onClick={handleAddTerrainSet}
         >
-          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-          <span>Terrains &amp; Auto-Tile</span>
+          <Plus size={12} />
         </button>
-        <div className="panel-header-actions">
-          <button
-            type="button"
-            className="icon-action-btn"
-            style={{ width: 22, height: 22 }}
-            title="New Terrain Set"
-            onClick={handleAddTerrainSet}
-          >
-            <Plus size={12} />
-          </button>
-        </div>
-      </div>
-
-      {!collapsed && (
-        <div className="panel-body">
-          <div className="tileset-controls-row">
+      }
+    >
+      <div className="tileset-controls-row">
             <button
               type="button"
               className={`toggle-chip ${autoTileEnabled ? "active" : ""}`}
@@ -393,8 +381,6 @@ export function TerrainPanel() {
               <span>Run</span>
             </button>
           </div>
-        </div>
-      )}
-    </section>
+    </DockablePanelSection>
   );
 }

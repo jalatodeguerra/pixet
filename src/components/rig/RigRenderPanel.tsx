@@ -115,6 +115,7 @@ export function RigRenderPanel() {
 
   return (
     <RigPanelSection
+      id="rig-render"
       title="Render"
       icon={<SlidersHorizontal size={12} />}
     >

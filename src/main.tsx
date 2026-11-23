@@ -4,6 +4,7 @@ import { App } from "./App";
 import "./styles/theme.css";
 import "./styles/layout.css";
 import "./styles/tiles.css";
+import "./styles/panels.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

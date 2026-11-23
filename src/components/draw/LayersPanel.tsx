@@ -45,6 +45,8 @@ import {
   useEditorStore,
 } from "../../store/editorStore";
 
+import { DockablePanelSection } from "../DockablePanelSection";
+
 const LAYER_COLOR_TAGS: ReadonlyArray<{ label: string; color: string }> = [
   { label: "Red", color: "#d95763" },
   { label: "Orange", color: "#df7126" },
@@ -224,7 +226,6 @@ export function LayersPanel() {
   const setLayerMapRole = useEditorStore((s) => s.setLayerMapRole);
   const openContextMenu = useEditorStore((s) => s.openContextMenu);
 
-  const [layersOpen, setLayersOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -288,20 +289,12 @@ export function LayersPanel() {
   };
 
   return (
-    <section
-      className="panel-section"
-      style={layersOpen ? { flex: 1, borderBottom: "none" } : undefined}
-    >
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          onClick={() => setLayersOpen((v) => !v)}
-        >
-          {layersOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <span>Layers</span>
-        </button>
-        <div className="panel-header-actions">
+    <DockablePanelSection
+      id="layers"
+      title="Layers"
+      style={{ flex: 1, borderBottom: "none" }}
+      actions={
+        <>
           <button
             type="button"
             className="icon-action-btn"
@@ -370,12 +363,10 @@ export function LayersPanel() {
           >
             <Trash2 size={12} />
           </button>
-        </div>
-      </div>
-
-      {layersOpen && (
-        <div className="panel-body">
-          {activeLayer && (
+        </>
+      }
+    >
+      {activeLayer && (
             <div className="layers-controls">
               <select
                 className="blend-select"
@@ -952,8 +943,6 @@ export function LayersPanel() {
               );
             })}
           </div>
-        </div>
-      )}
-    </section>
+    </DockablePanelSection>
   );
 }

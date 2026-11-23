@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftRight,
-  ChevronDown,
-  ChevronRight,
   Lock,
   Pipette,
   Plus,
@@ -11,6 +9,7 @@ import {
   Upload,
 } from "lucide-react";
 import { ColorPicker } from "../ColorPicker";
+import { DockablePanelSection } from "../DockablePanelSection";
 import { hexToRgba, rgbaToHex } from "../../engine/document/PixelBuffer";
 import { applyBufferFilterAction } from "../../engine/document/filterActions";
 import { pixelEngine } from "../../engine/document/PixelEngine";
@@ -63,7 +62,6 @@ export function ColorPalettePanel() {
   const openContextMenu = useEditorStore((s) => s.openContextMenu);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
-  const [colorOpen, setColorOpen] = useState(true);
   const [hexInput, setHexInput] = useState(primaryColor);
   const [readoutMode, setReadoutMode] = useState<ReadoutMode>("hsv");
   const [rampOpen, setRampOpen] = useState(false);
@@ -218,17 +216,11 @@ export function ColorPalettePanel() {
   };
 
   return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          onClick={() => setColorOpen((v) => !v)}
-        >
-          {colorOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <span>Color &amp; Palette</span>
-        </button>
-        <div className="panel-header-actions">
+    <DockablePanelSection
+      id="color-palette"
+      title="Color & Palette"
+      actions={
+        <>
           <button
             type="button"
             className="toggle-chip"
@@ -252,11 +244,10 @@ export function ColorPalettePanel() {
           >
             {palette.length}
           </span>
-        </div>
-      </div>
-      {colorOpen && (
-        <div className="panel-body">
-          <div className="color-top-row">
+        </>
+      }
+    >
+      <div className="color-top-row">
             <div className="fg-bg-stack">
               <div
                 className="swatch-bg"
@@ -703,8 +694,6 @@ export function ColorPalettePanel() {
               );
             })}
           </div>
-        </div>
-      )}
-    </section>
+    </DockablePanelSection>
   );
 }

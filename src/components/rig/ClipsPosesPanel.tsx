@@ -119,6 +119,7 @@ export function ClipsPosesPanel() {
 
   return (
     <RigPanelSection
+      id="rig-clips-poses"
       title="Clips & Poses"
       icon={<Film size={12} />}
       actions={

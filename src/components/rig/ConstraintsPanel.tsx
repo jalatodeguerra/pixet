@@ -150,6 +150,7 @@ export function ConstraintsPanel() {
 
   return (
     <RigPanelSection
+      id="rig-constraints"
       title="Constraints"
       icon={<Link2 size={12} />}
       actions={

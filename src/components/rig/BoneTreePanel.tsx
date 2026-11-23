@@ -370,6 +370,7 @@ export function BoneTreePanel() {
 
   return (
     <RigPanelSection
+      id="rig-bone-tree"
       title="Bone Tree"
       icon={<BoneIcon size={12} />}
       actions={

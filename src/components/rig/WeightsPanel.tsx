@@ -69,6 +69,7 @@ export function WeightsPanel() {
 
   return (
     <RigPanelSection
+      id="rig-weights"
       title="Weights"
       icon={<Paintbrush size={12} />}
       actions={
