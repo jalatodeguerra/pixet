@@ -337,6 +337,13 @@ export function CommandPalette() {
         keywords: ["rotate", "counterclockwise", "90"],
         run: () => transformSelectionOrCel("rotateCCW"),
       },
+      {
+        id: "edit.keybindings",
+        label: "Edit: Keybindings...",
+        category: "Edit",
+        keywords: ["keybindings", "shortcuts", "hotkeys", "aseprite", "preset"],
+        run: () => st().setKeybindingsModalOpen(true),
+      },
     ];
 
     const fileCmds: ActionCommandEntry[] = [

@@ -1,3 +1,5 @@
+import { clampDirtyRect, type DirtyRect } from "./dirtyRect.ts";
+
 const VERTEX_SHADER_SRC = `#version 300 es
 in vec2 a_pos;
 out vec2 v_uv;
@@ -152,6 +154,8 @@ export class WebGL2Renderer {
   private onionData: Uint8ClampedArray | null = null;
   private texWidth = 0;
   private texHeight = 0;
+  private frameTexWidth = 0;
+  private frameTexHeight = 0;
   private scratchCanvas: HTMLCanvasElement | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -243,6 +247,8 @@ export class WebGL2Renderer {
   uploadFrame(width: number, height: number, rgba: Uint8ClampedArray): void {
     this.texWidth = width;
     this.texHeight = height;
+    this.frameTexWidth = width;
+    this.frameTexHeight = height;
     if (this.gl && this.frameTex) {
       const gl = this.gl;
       gl.activeTexture(gl.TEXTURE0);
@@ -261,6 +267,58 @@ export class WebGL2Renderer {
     } else {
       this.frameData = rgba;
     }
+  }
+
+  uploadMainRegion(
+    rgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    rect: DirtyRect
+  ): void {
+    const clamped = clampDirtyRect(rect, width, height);
+    if (!clamped) return;
+
+    const canvasArea = width * height;
+    const dirtyArea = clamped.width * clamped.height;
+    if (
+      !this.gl ||
+      !this.frameTex ||
+      this.frameTexWidth !== width ||
+      this.frameTexHeight !== height ||
+      canvasArea <= 0 ||
+      dirtyArea >= canvasArea * 0.5
+    ) {
+      this.uploadFrame(width, height, rgba);
+      return;
+    }
+
+    const gl = this.gl;
+    this.texWidth = width;
+    this.texHeight = height;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.frameTex);
+
+    const sub = new Uint8ClampedArray(clamped.width * clamped.height * 4);
+    const rowBytes = clamped.width * 4;
+    for (let row = 0; row < clamped.height; row++) {
+      const srcOffset = ((clamped.y + row) * width + clamped.x) * 4;
+      sub.set(
+        rgba.subarray(srcOffset, srcOffset + rowBytes),
+        row * rowBytes
+      );
+    }
+
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      clamped.x,
+      clamped.y,
+      clamped.width,
+      clamped.height,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      sub
+    );
   }
 
   uploadOverlay(width: number, height: number, rgba: Uint8ClampedArray): void {

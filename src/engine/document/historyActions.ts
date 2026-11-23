@@ -1,6 +1,7 @@
 import { pixelEngine } from "./PixelEngine.ts";
 import { commitFloatingSelection } from "./selectionActions.ts";
 import { useEditorStore } from "../../store/editorStore.ts";
+import type { UndoHistoryEntry } from "../history/UndoCoordinator.ts";
 import { rigHistory, syncRigHistoryFlags } from "../rig/rigActions.ts";
 
 export function syncHistoryAndCelState(
@@ -113,4 +114,41 @@ export function performRedo(): void {
   store.setCurrentFrame(res.frameIndex);
   syncHistoryAndCelState(res.layerId, res.frameIndex);
   store.setStatusMessage(`Redo: ${res.label}`);
+}
+
+export function getHistorySnapshot(): {
+  entries: UndoHistoryEntry[];
+  currentIndex: number;
+} {
+  return {
+    entries: pixelEngine.undoCoordinator.getHistoryEntries(),
+    currentIndex: pixelEngine.undoCoordinator.getCurrentIndex(),
+  };
+}
+
+export function jumpToHistoryIndexAction(targetIndex: number): void {
+  commitFloatingSelection();
+  const entries = pixelEngine.undoCoordinator.getHistoryEntries();
+  const clamped = Math.max(
+    -1,
+    Math.min(entries.length - 1, Math.round(targetIndex))
+  );
+  let cur = pixelEngine.undoCoordinator.getCurrentIndex();
+  if (cur === clamped) return;
+
+  let guard = Math.abs(clamped - cur) + 2;
+  while (cur > clamped && guard-- > 0) {
+    if (!pixelEngine.undoCoordinator.canUndo) break;
+    performUndo();
+    const next = pixelEngine.undoCoordinator.getCurrentIndex();
+    if (next === cur) break;
+    cur = next;
+  }
+  while (cur < clamped && guard-- > 0) {
+    if (!pixelEngine.undoCoordinator.canRedo) break;
+    performRedo();
+    const next = pixelEngine.undoCoordinator.getCurrentIndex();
+    if (next === cur) break;
+    cur = next;
+  }
 }

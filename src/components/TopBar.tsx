@@ -124,6 +124,7 @@ export function TopBar() {
   const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
   const setCanvasSizeModalOpen = useEditorStore((s) => s.setCanvasSizeModalOpen);
   const setFilterModalOpen = useEditorStore((s) => s.setFilterModalOpen);
+  const setKeybindingsModalOpen = useEditorStore((s) => s.setKeybindingsModalOpen);
 
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
   const menuStripRef = useRef<HTMLDivElement>(null);
@@ -191,6 +192,7 @@ export function TopBar() {
       { label: "Rotate 90° CW", action: () => { transformSelectionOrCel("rotateCW"); setOpenMenu(null); } },
       { label: "Rotate 90° CCW", action: () => { transformSelectionOrCel("rotateCCW"); setOpenMenu(null); } },
       { label: "Swap FG / BG Colors", shortcut: "X", action: () => { swapColors(); setOpenMenu(null); } },
+      { label: "Keybindings...", action: () => { setOpenMenu(null); setKeybindingsModalOpen(true); } },
     ],
     View: [
       { label: "Command Palette...", shortcut: "Ctrl+K", action: () => { setOpenMenu(null); setCommandPaletteOpen(true); } },

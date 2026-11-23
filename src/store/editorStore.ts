@@ -13,6 +13,13 @@ import type { GuideAxis, GuideLine } from "../engine/tools/guides";
 import type { InkMode } from "../engine/tools/ink";
 import type { TransformAlgorithm, TransformState } from "../engine/tools/transform";
 import {
+  getPresetKeybindings,
+  normalizeChordString,
+  PIXET_DEFAULT_KEYBINDINGS,
+  type KeybindingMap,
+  type KeybindingPreset,
+} from "../engine/config/keybindings.ts";
+import {
   computeNextPlaybackFrame,
   type TagDirection,
 } from "../engine/tools/animationHelpers.ts";
@@ -26,6 +33,8 @@ export type {
   GuideAxis,
   GuideLine,
   InkMode,
+  KeybindingMap,
+  KeybindingPreset,
   LayerMapRole,
   TagDirection,
   TileTool,
@@ -227,6 +236,8 @@ interface EditorState {
   customGridOffsetY: number;
   referenceImage: ReferenceImageState | null;
   commandPaletteOpen: boolean;
+  keybindings: KeybindingMap;
+  keybindingsModalOpen: boolean;
   activeTileId: number;
   tileWidth: number;
   tileHeight: number;
@@ -422,6 +433,10 @@ interface EditorState {
   setReferenceImage: (img: ReferenceImageState | null) => void;
   updateReferenceImage: (patch: Partial<ReferenceImageState>) => void;
   setCommandPaletteOpen: (open: boolean) => void;
+  setKeybinding: (actionId: string, chord: string) => void;
+  applyKeybindingPreset: (preset: KeybindingPreset) => void;
+  importKeybindingsJson: (json: string) => boolean;
+  setKeybindingsModalOpen: (open: boolean) => void;
   setActiveTileId: (id: number) => void;
   setTileSize: (w: number, h: number) => void;
   bumpTilesetVersion: () => void;
@@ -702,6 +717,39 @@ function addRecentColorList(prev: string[], hex: string): string[] {
   return next;
 }
 
+const KEYBINDINGS_STORAGE_KEY = "pixet:keybindings";
+
+function loadInitialKeybindings(): KeybindingMap {
+  const base: KeybindingMap = { ...PIXET_DEFAULT_KEYBINDINGS };
+  try {
+    if (typeof localStorage === "undefined") return base;
+    const raw = localStorage.getItem(KEYBINDINGS_STORAGE_KEY);
+    if (!raw) return base;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return base;
+    }
+    for (const [actionId, chord] of Object.entries(
+      parsed as Record<string, unknown>
+    )) {
+      if (typeof chord !== "string") continue;
+      base[actionId] = chord === "" ? "" : normalizeChordString(chord);
+    }
+    return base;
+  } catch {
+    return base;
+  }
+}
+
+function persistKeybindings(map: KeybindingMap): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(KEYBINDINGS_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // ignore storage quota/access errors
+  }
+}
+
 export const useEditorStore = create<EditorState>((set, get) => ({
   workspaceMode: "draw",
   activeTool: "pencil",
@@ -752,6 +800,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   customGridOffsetY: 0,
   referenceImage: null,
   commandPaletteOpen: false,
+  keybindings: loadInitialKeybindings(),
+  keybindingsModalOpen: false,
   activeTileId: 1,
   tileWidth: 16,
   tileHeight: 16,
@@ -1041,6 +1091,40 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         : s
     ),
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
+  setKeybinding: (actionId, chord) =>
+    set((s) => {
+      const normalized = chord.trim() === "" ? "" : normalizeChordString(chord);
+      const next = { ...s.keybindings, [actionId]: normalized };
+      persistKeybindings(next);
+      return { keybindings: next };
+    }),
+  applyKeybindingPreset: (preset) => {
+    const next = getPresetKeybindings(preset);
+    persistKeybindings(next);
+    set({ keybindings: next });
+  },
+  importKeybindingsJson: (json) => {
+    try {
+      const parsed: unknown = JSON.parse(json);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return false;
+      }
+      const next: KeybindingMap = { ...PIXET_DEFAULT_KEYBINDINGS };
+      for (const [actionId, chord] of Object.entries(
+        parsed as Record<string, unknown>
+      )) {
+        if (typeof chord !== "string") continue;
+        next[actionId] = chord.trim() === "" ? "" : normalizeChordString(chord);
+      }
+      persistKeybindings(next);
+      set({ keybindings: next });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  setKeybindingsModalOpen: (keybindingsModalOpen) =>
+    set({ keybindingsModalOpen }),
   setActiveTileId: (activeTileId) => set({ activeTileId: Math.max(0, activeTileId) }),
   setTileSize: (tileWidth, tileHeight) => set({ tileWidth, tileHeight }),
   bumpTilesetVersion: () => set((s) => ({ tilesetVersion: s.tilesetVersion + 1 })),

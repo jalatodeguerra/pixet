@@ -145,8 +145,24 @@ function LayerThumbnail({
       tctx.drawImage(scratch, dx, dy, dw, dh);
     };
 
+    let timerId: number | null = null;
+    const scheduleDraw = () => {
+      if (timerId !== null) return;
+      timerId = window.setTimeout(() => {
+        timerId = null;
+        drawThumb();
+      }, 80);
+    };
+
     drawThumb();
-    return pixelEngine.subscribe(drawThumb);
+    const unsub = pixelEngine.subscribe(scheduleDraw);
+    return () => {
+      unsub();
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+    };
   }, [
     layerId,
     layerKind,

@@ -125,7 +125,7 @@ export class TileHistory {
   private activeTx: ActiveTransaction | null = null;
   private activeMultiTx: ActiveMultiCelTransaction | null = null;
   private readonly maxEntries: number;
-  onCommit?: () => void;
+  onCommit?: (label: string) => void;
 
   constructor(maxEntries = 100) {
     this.maxEntries = maxEntries;
@@ -227,7 +227,7 @@ export class TileHistory {
     }
 
     this.redoStack.length = 0;
-    this.onCommit?.();
+    this.onCommit?.(tx.label);
     return true;
   }
 
@@ -324,7 +324,7 @@ export class TileHistory {
     }
 
     this.redoStack.length = 0;
-    this.onCommit?.();
+    this.onCommit?.(tx.label);
     return true;
   }
 

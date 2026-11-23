@@ -249,7 +249,55 @@ export function Viewport() {
               silhouette: state.viewSilhouette,
             })
           : rawComposite;
-      renderer.uploadFrame(pixelEngine.width, pixelEngine.height, composite);
+      let combinedDirty: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } | null = null;
+      for (const layer of state.layers) {
+        if (layer.kind !== "raster") continue;
+        const cel = pixelEngine.getCel(layer.id, state.currentFrame);
+        if (!cel) continue;
+        const d = cel.consumeDirtyRect();
+        if (!d) continue;
+        const converted = { x: d.x, y: d.y, width: d.w, height: d.h };
+        if (!combinedDirty) {
+          combinedDirty = converted;
+        } else {
+          const minX = Math.min(combinedDirty.x, converted.x);
+          const minY = Math.min(combinedDirty.y, converted.y);
+          const maxX = Math.max(
+            combinedDirty.x + combinedDirty.width,
+            converted.x + converted.width
+          );
+          const maxY = Math.max(
+            combinedDirty.y + combinedDirty.height,
+            converted.y + converted.height
+          );
+          combinedDirty = {
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY,
+          };
+        }
+      }
+      if (
+        combinedDirty &&
+        state.workspaceMode === "draw" &&
+        !state.light2dEnabled &&
+        !state.paletteLutEnabled
+      ) {
+        renderer.uploadMainRegion(
+          composite,
+          pixelEngine.width,
+          pixelEngine.height,
+          combinedDirty
+        );
+      } else {
+        renderer.uploadFrame(pixelEngine.width, pixelEngine.height, composite);
+      }
       if (
         state.workspaceMode === "rig" &&
         (state.rigShowInfluence || state.rigTool === "weightPaint") &&

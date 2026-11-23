@@ -109,7 +109,7 @@ export class TilemapHistory {
   private activeTx: ActiveCellTransaction | null = null;
   private readonly maxCellEntries: number;
   private readonly maxTilesetEntries: number;
-  onCommit?: (kind: "cells" | "tileset") => void;
+  onCommit?: (kind: "cells" | "tileset", label?: string) => void;
 
   constructor(maxCellEntries = 100, maxTilesetEntries = 50) {
     this.maxCellEntries = maxCellEntries;
@@ -169,7 +169,7 @@ export class TilemapHistory {
       frameIndex: tx.frameIndex,
       deltas: changed,
     });
-    this.onCommit?.("cells");
+    this.onCommit?.("cells", tx.label);
     return true;
   }
 
@@ -188,7 +188,7 @@ export class TilemapHistory {
       before,
       after,
     });
-    this.onCommit?.("tileset");
+    this.onCommit?.("tileset", label);
   }
 
   private pushEntry(entry: TilemapHistoryEntry): void {

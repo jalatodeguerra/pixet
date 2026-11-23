@@ -5,6 +5,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportModal } from "./components/ExportModal";
 import { FilterModal } from "./components/draw/FilterModal";
+import { KeybindingsModal } from "./components/draw/KeybindingsModal";
 import { RigExportModal } from "./components/rig/RigExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { NewSpriteModal } from "./components/NewSpriteModal";
@@ -17,6 +18,10 @@ import { ToolOptionsBar } from "./components/ToolOptionsBar";
 import { ToolRail } from "./components/ToolRail";
 import { TopBar } from "./components/TopBar";
 import { Viewport } from "./components/Viewport";
+import {
+  formatEventToChord,
+  resolveActionForChord,
+} from "./engine/config/keybindings";
 import { pixelEngine } from "./engine/document/PixelEngine";
 import { performRedo, performUndo } from "./engine/document/historyActions";
 import { mergeDownLayerAction } from "./engine/document/layerActions";
@@ -48,8 +53,8 @@ import {
   isSupportedImageFile,
   pickImageFileForImport,
 } from "./engine/io/imageImport";
-import { useEditorStore } from "./store/editorStore";
-import { DRAW_TOOL_SHORTCUTS } from "./components/draw/drawTools";
+import { useEditorStore, type ToolId } from "./store/editorStore";
+import { DRAW_TOOL_BY_ID } from "./components/draw/drawTools";
 import {
   RIG_TOOL_BY_ID,
   RIG_TOOL_SHORTCUTS,
@@ -130,12 +135,63 @@ export function App() {
         target.tagName === "TEXTAREA" ||
         target.tagName === "SELECT");
 
+    const runKeybindingAction = (actionId: string): boolean => {
+      const st = useEditorStore.getState();
+      if (actionId === "view.commandPalette") {
+        st.setCommandPaletteOpen(!st.commandPaletteOpen);
+        return true;
+      }
+      if (actionId === "edit.freeTransform") {
+        beginFreeTransformAction();
+        return true;
+      }
+      if (actionId === "edit.captureBrush") {
+        captureCustomBrushFromSelectionAction();
+        return true;
+      }
+      if (actionId === "layer.mergeDown") {
+        mergeDownLayerAction();
+        return true;
+      }
+      if (actionId === "view.flipH") {
+        if (st.workspaceMode === "draw") {
+          st.toggleViewFlipH();
+          return true;
+        }
+        return false;
+      }
+      if (actionId === "view.flipV") {
+        if (st.workspaceMode === "draw") {
+          st.toggleViewFlipV();
+          return true;
+        }
+        return false;
+      }
+      if (actionId.startsWith("tool.")) {
+        const toolId = actionId.slice(5) as ToolId;
+        if (DRAW_TOOL_BY_ID.has(toolId)) {
+          st.setActiveTool(toolId);
+          return true;
+        }
+      }
+      return false;
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
-        const st = useEditorStore.getState();
-        if (st.commandPaletteOpen || !isEditable(e.target)) {
+      const stNow = useEditorStore.getState();
+      if (stNow.keybindingsModalOpen) {
+        return;
+      }
+
+      const chord = formatEventToChord(e);
+      const boundAction = chord
+        ? resolveActionForChord(chord, stNow.keybindings)
+        : null;
+
+      if (boundAction === "view.commandPalette") {
+        if (stNow.commandPaletteOpen || !isEditable(e.target)) {
           e.preventDefault();
-          st.setCommandPaletteOpen(!st.commandPaletteOpen);
+          stNow.setCommandPaletteOpen(!stNow.commandPaletteOpen);
           return;
         }
       }
@@ -144,13 +200,26 @@ export function App() {
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-        const ctrlKey = e.key.toLowerCase();
-        if (ctrlKey === "t") {
+      if (
+        boundAction &&
+        (e.ctrlKey || e.metaKey || e.altKey) &&
+        (boundAction === "edit.freeTransform" ||
+          boundAction === "edit.captureBrush" ||
+          boundAction === "layer.mergeDown" ||
+          boundAction === "view.flipH" ||
+          boundAction === "view.flipV" ||
+          (stNow.workspaceMode !== "rig" &&
+            !(stNow.workspaceMode === "tiles" && stNow.tilesMode === "map") &&
+            boundAction.startsWith("tool.")))
+      ) {
+        if (runKeybindingAction(boundAction)) {
           e.preventDefault();
-          beginFreeTransformAction();
           return;
         }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const ctrlKey = e.key.toLowerCase();
         if (e.key === "Backspace") {
           const st = useEditorStore.getState();
           if (st.hasSelection && !st.freeTransformActive) {
@@ -171,11 +240,6 @@ export function App() {
         if (ctrlKey === "y") {
           e.preventDefault();
           performRedo();
-          return;
-        }
-        if (ctrlKey === "b") {
-          e.preventDefault();
-          captureCustomBrushFromSelectionAction();
           return;
         }
         if (ctrlKey === "c") {
@@ -203,11 +267,6 @@ export function App() {
         if (ctrlKey === "j") {
           e.preventDefault();
           copySelectionToNewLayer();
-          return;
-        }
-        if (ctrlKey === "m") {
-          e.preventDefault();
-          mergeDownLayerAction();
           return;
         }
         if (ctrlKey === "v") {
@@ -491,31 +550,8 @@ export function App() {
         return;
       }
 
-      if (key === "h" && state.workspaceMode === "draw") {
+      if (boundAction && runKeybindingAction(boundAction)) {
         e.preventDefault();
-        if (e.shiftKey) {
-          state.toggleViewFlipV();
-        } else {
-          state.toggleViewFlipH();
-        }
-        return;
-      }
-
-      if (e.shiftKey && key === "g") {
-        e.preventDefault();
-        state.setActiveTool("gradient");
-        return;
-      }
-
-      if (e.shiftKey && key === "s") {
-        e.preventDefault();
-        state.setActiveTool("jumble");
-        return;
-      }
-
-      const mappedTool = DRAW_TOOL_SHORTCUTS[key];
-      if (mappedTool) {
-        state.setActiveTool(mappedTool);
       }
     };
 
@@ -654,6 +690,7 @@ export function App() {
       <FilterModal />
       <ImportTilesetModal />
       <CommandPalette />
+      <KeybindingsModal />
       <ContextMenu />
       {isDragOver && (
         <div className="dropzone-overlay">

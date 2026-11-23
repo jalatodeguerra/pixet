@@ -2,6 +2,7 @@ import { useEditorStore } from "../store/editorStore";
 import { GameDataPanel } from "./GameDataPanel";
 import { BrushPanel } from "./draw/BrushPanel";
 import { ColorPalettePanel } from "./draw/ColorPalettePanel";
+import { HistoryPanel } from "./draw/HistoryPanel";
 import { LayersPanel } from "./draw/LayersPanel";
 import { ReferencePanel } from "./draw/ReferencePanel";
 import { RigSidebar } from "./rig/RigSidebar";
@@ -36,6 +37,7 @@ export function RightSidebar() {
         <ColorPalettePanel />
         {workspaceMode === "draw" && <BrushPanel />}
         {workspaceMode === "draw" && <ReferencePanel />}
+        {workspaceMode === "draw" && <HistoryPanel />}
         <LayersPanel />
       </div>
 

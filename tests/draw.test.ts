@@ -119,6 +119,24 @@ import {
   bulkSetFrameDurationAction,
   reverseFramesAction,
 } from "../src/engine/document/timelineActions.ts";
+import {
+  ASEPRITE_KEYBINDINGS,
+  findKeybindingConflicts,
+  formatEventToChord,
+  KEYBINDING_ACTIONS,
+  PIXET_DEFAULT_KEYBINDINGS,
+  resolveActionForChord,
+} from "../src/engine/config/keybindings.ts";
+import {
+  clampDirtyRect,
+  expandDirtyRectPoint,
+  unionDirtyRect,
+} from "../src/engine/renderer/dirtyRect.ts";
+import { UndoCoordinator } from "../src/engine/history/UndoCoordinator.ts";
+import {
+  getHistorySnapshot,
+  jumpToHistoryIndexAction,
+} from "../src/engine/document/historyActions.ts";
 
 function makeCfg(overrides: Partial<BrushConfig> = {}): BrushConfig {
   return {
@@ -2948,6 +2966,162 @@ test("D7 timelineActions: reverseFramesAction & bulkDeleteSelectedCelsAction (si
   assert.equal(pixelEngine.getCel("l1", 0)?.isEmpty(), true);
   assert.equal(pixelEngine.getCel("l1", 2)?.isEmpty(), true);
   assert.equal(pixelEngine.getCel("l2", 1)?.isEmpty(), true);
+});
+
+test("D8 keybindings: formatEventToChord, conflict detection, resolution, and presets", () => {
+  // Chord normalization
+  assert.equal(formatEventToChord({ key: "b" }), "b");
+  assert.equal(formatEventToChord({ key: "G", shiftKey: true }), "shift+g");
+  assert.equal(
+    formatEventToChord({ key: "Z", ctrlKey: true, shiftKey: true }),
+    "ctrl+shift+z"
+  );
+  assert.equal(
+    formatEventToChord({ key: "k", metaKey: true, altKey: true }),
+    "ctrl+alt+k"
+  );
+  assert.equal(formatEventToChord({ key: " " }), "space");
+  // Pure modifier keys produce empty chord
+  assert.equal(formatEventToChord({ key: "Shift", shiftKey: true }), "");
+  assert.equal(formatEventToChord({ key: "Control", ctrlKey: true }), "");
+
+  // Every action ID exists in both presets and neither preset has conflicts
+  for (const act of KEYBINDING_ACTIONS) {
+    assert.ok(act.id in PIXET_DEFAULT_KEYBINDINGS, `missing in pixet: ${act.id}`);
+    assert.ok(act.id in ASEPRITE_KEYBINDINGS, `missing in aseprite: ${act.id}`);
+  }
+  assert.deepEqual(findKeybindingConflicts(PIXET_DEFAULT_KEYBINDINGS), []);
+  assert.deepEqual(findKeybindingConflicts(ASEPRITE_KEYBINDINGS), []);
+
+  // Conflict detection finds duplicates and ignores unbound ("")
+  const withConflict = {
+    ...PIXET_DEFAULT_KEYBINDINGS,
+    "tool.ellipseMarquee": "b",
+    "tool.lasso": "",
+    "tool.polyLasso": "",
+  };
+  const conflicts = findKeybindingConflicts(withConflict);
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].chord, "b");
+  assert.deepEqual(conflicts[0].actionIds.sort(), ["tool.ellipseMarquee", "tool.pencil"]);
+
+  // Resolution
+  assert.equal(resolveActionForChord("b", PIXET_DEFAULT_KEYBINDINGS), "tool.pencil");
+  assert.equal(resolveActionForChord("SHIFT+G", PIXET_DEFAULT_KEYBINDINGS), "tool.gradient");
+  assert.equal(resolveActionForChord("q", ASEPRITE_KEYBINDINGS), "tool.lasso");
+  assert.equal(resolveActionForChord("shift+m", ASEPRITE_KEYBINDINGS), "tool.ellipseMarquee");
+  assert.equal(resolveActionForChord("", PIXET_DEFAULT_KEYBINDINGS), null);
+});
+
+test("D8 dirtyRect: unionDirtyRect, clampDirtyRect, and expandDirtyRectPoint", () => {
+  const first = unionDirtyRect(null, { x: 4, y: 5, width: 3, height: 2 });
+  assert.deepEqual(first, { x: 4, y: 5, width: 3, height: 2 });
+
+  const merged = unionDirtyRect(first, { x: 2, y: 6, width: 8, height: 4 });
+  assert.deepEqual(merged, { x: 2, y: 5, width: 8, height: 5 });
+
+  assert.deepEqual(
+    clampDirtyRect({ x: -3, y: 2, width: 10, height: 12 }, 8, 8),
+    { x: 0, y: 2, width: 7, height: 6 }
+  );
+  assert.equal(clampDirtyRect({ x: 10, y: 0, width: 4, height: 4 }, 8, 8), null);
+  assert.equal(clampDirtyRect({ x: 0, y: 0, width: 0, height: 4 }, 8, 8), null);
+
+  let ptRect = expandDirtyRectPoint(null, 5, 5, 1);
+  assert.deepEqual(ptRect, { x: 4, y: 4, width: 3, height: 3 });
+  ptRect = expandDirtyRectPoint(ptRect, 8, 6, 0);
+  assert.deepEqual(ptRect, { x: 4, y: 4, width: 5, height: 3 });
+});
+
+test("D8 history: UndoCoordinator.getHistoryEntries & jumpToHistoryIndexAction forward/backward", () => {
+  // Unit check on UndoCoordinator chronological entries
+  const coord = new UndoCoordinator(50);
+  coord.record("pixels", "Stroke 1");
+  coord.record("pixels", "Stroke 2");
+  coord.record("cells", "Stamp Tile");
+  assert.equal(coord.getCurrentIndex(), 2);
+  assert.deepEqual(coord.getHistoryEntries(), [
+    { index: 0, label: "Stroke 1", kind: "pixels" },
+    { index: 1, label: "Stroke 2", kind: "pixels" },
+    { index: 2, label: "Stamp Tile", kind: "cells" },
+  ]);
+  assert.equal(coord.popUndo(), "cells");
+  assert.equal(coord.getCurrentIndex(), 1);
+  // Chronological order still keeps all 3 entries (redo item stays in chronological slot 2)
+  assert.deepEqual(coord.getHistoryEntries(), [
+    { index: 0, label: "Stroke 1", kind: "pixels" },
+    { index: 1, label: "Stroke 2", kind: "pixels" },
+    { index: 2, label: "Stamp Tile", kind: "cells" },
+  ]);
+
+  // Integration check with PixelEngine + jumpToHistoryIndexAction
+  pixelEngine.resetForDocument(8, 8);
+  useEditorStore.setState({
+    workspaceMode: "draw",
+    layers: [
+      {
+        id: "l1",
+        name: "Layer 1",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        cels: { 0: true },
+      },
+    ],
+    frames: [{ id: "f0", index: 0, durationMs: 100 }],
+    currentFrame: 0,
+    activeLayerId: "l1",
+    selectedLayerIds: ["l1"],
+  });
+
+  const cel = pixelEngine.getOrCreateCel("l1", 0);
+  pixelEngine.history.beginTransaction("l1", 0, "Dot Red");
+  pixelEngine.history.capturePixelTile(cel, 1, 1);
+  cel.setPixel(1, 1, 255, 0, 0, 255);
+  assert.equal(pixelEngine.history.commitTransaction(cel), true);
+
+  pixelEngine.history.beginTransaction("l1", 0, "Dot Green");
+  pixelEngine.history.capturePixelTile(cel, 2, 2);
+  cel.setPixel(2, 2, 0, 255, 0, 255);
+  assert.equal(pixelEngine.history.commitTransaction(cel), true);
+
+  pixelEngine.history.beginTransaction("l1", 0, "Dot Blue");
+  pixelEngine.history.capturePixelTile(cel, 3, 3);
+  cel.setPixel(3, 3, 0, 0, 255, 255);
+  assert.equal(pixelEngine.history.commitTransaction(cel), true);
+
+  let snap = getHistorySnapshot();
+  assert.equal(snap.currentIndex, 2);
+  assert.deepEqual(
+    snap.entries.map((e) => e.label),
+    ["Dot Red", "Dot Green", "Dot Blue"]
+  );
+
+  // Jump backward to index 0 (only Dot Red applied)
+  jumpToHistoryIndexAction(0);
+  snap = getHistorySnapshot();
+  assert.equal(snap.currentIndex, 0);
+  assert.deepEqual(cel.getPixel(1, 1), [255, 0, 0, 255]);
+  assert.deepEqual(cel.getPixel(2, 2), [0, 0, 0, 0]);
+  assert.deepEqual(cel.getPixel(3, 3), [0, 0, 0, 0]);
+
+  // Jump backward to -1 (Initial State)
+  jumpToHistoryIndexAction(-1);
+  snap = getHistorySnapshot();
+  assert.equal(snap.currentIndex, -1);
+  assert.deepEqual(cel.getPixel(1, 1), [0, 0, 0, 0]);
+
+  // Jump forward directly to index 2 (all three dots restored)
+  jumpToHistoryIndexAction(2);
+  snap = getHistorySnapshot();
+  assert.equal(snap.currentIndex, 2);
+  assert.deepEqual(cel.getPixel(1, 1), [255, 0, 0, 255]);
+  assert.deepEqual(cel.getPixel(2, 2), [0, 255, 0, 255]);
+  assert.deepEqual(cel.getPixel(3, 3), [0, 0, 255, 255]);
 });
 
 

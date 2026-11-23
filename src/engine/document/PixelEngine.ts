@@ -193,8 +193,10 @@ export class PixelEngine {
     this.overlayBuffer = new PixelBuffer(width, height);
     this.onionBuffer = new Uint8ClampedArray(byteLen);
     this.onionScratch = new Uint8ClampedArray(byteLen);
-    this.history.onCommit = () => this.undoCoordinator.record("pixels");
-    this.tilemapHistory.onCommit = (kind) => this.undoCoordinator.record(kind);
+    this.history.onCommit = (label) =>
+      this.undoCoordinator.record("pixels", label);
+    this.tilemapHistory.onCommit = (kind, label) =>
+      this.undoCoordinator.record(kind, label);
     this.tileset.seedStarterTiles();
   }
 
