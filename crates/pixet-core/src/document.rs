@@ -26,6 +26,17 @@ pub enum BlendMode {
     Screen,
     Overlay,
     Add,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +93,10 @@ pub struct Layer {
     pub alpha_lock: bool,
     pub blend_mode: BlendMode,
     pub parent_id: Option<String>,
+    #[serde(default)]
+    pub clipped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_tag: Option<String>,
     pub cels: Vec<Cel>,
     #[serde(default)]
     pub tilemaps: BTreeMap<u32, TilemapGrid>,
@@ -160,6 +175,8 @@ impl Document {
             alpha_lock: false,
             blend_mode: BlendMode::Normal,
             parent_id: None,
+            clipped: false,
+            color_tag: None,
             cels: vec![Cel {
                 id: format!("{id}-cel-1"),
                 frame_index: 0,
@@ -274,6 +291,8 @@ mod tests {
             alpha_lock: false,
             blend_mode: BlendMode::Normal,
             parent_id: None,
+            clipped: false,
+            color_tag: None,
             cels: Vec::new(),
             tilemaps,
             map_role: None,

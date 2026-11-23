@@ -1160,6 +1160,8 @@ mod tests {
                 alpha_lock: false,
                 blend_mode: crate::document::BlendMode::Normal,
                 parent_id: None,
+                clipped: false,
+                color_tag: None,
                 cels: Vec::new(),
                 tilemaps,
                 map_role: None,

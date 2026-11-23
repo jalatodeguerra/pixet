@@ -191,7 +191,8 @@ export function renderIsometricTilemapToBuffer(
   dstH: number,
   opacity: number,
   blendMode: BlendModeName,
-  elapsedMs?: number
+  elapsedMs?: number,
+  clipBaseAlpha?: Uint8Array | null
 ): void {
   const baseTs =
     tilesetOrRegistry instanceof TilesetRegistry
@@ -221,7 +222,8 @@ export function renderIsometricTilemapToBuffer(
         offsetY,
         resolved.flags,
         opacity,
-        blendMode
+        blendMode,
+        clipBaseAlpha
       );
     }
   }

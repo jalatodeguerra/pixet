@@ -30,6 +30,12 @@ import {
 import { beginFreeTransformAction } from "../engine/document/transformActions";
 import { autoCropSpriteAction } from "../engine/document/filterActions";
 import {
+  clearActiveCelAction,
+  flattenImageAction,
+  mergeDownLayerAction,
+  mergeVisibleLayersAction,
+} from "../engine/document/layerActions";
+import {
   addEmptyFrameAction,
   duplicateCurrentFrameAction,
 } from "../engine/document/timelineActions";
@@ -205,6 +211,21 @@ export function TopBar() {
     ],
     Sprite: [
       { label: "New Layer", action: () => { addLayer(); setOpenMenu(null); } },
+      { label: "Merge Down", shortcut: "Ctrl+M", action: () => { mergeDownLayerAction(); setOpenMenu(null); } },
+      { label: "Merge Visible", action: () => { mergeVisibleLayersAction(); setOpenMenu(null); } },
+      { label: "Flatten Image", action: () => { flattenImageAction(); setOpenMenu(null); } },
+      { label: "Clear Cel", action: () => { clearActiveCelAction(); setOpenMenu(null); } },
+      {
+        label: "Toggle Clipping Mask",
+        action: () => {
+          const st = useEditorStore.getState();
+          const active = st.layers.find((l) => l.id === st.activeLayerId);
+          if (active && active.kind === "raster") {
+            st.toggleLayerClipped(active.id);
+          }
+          setOpenMenu(null);
+        },
+      },
       { label: "New Frame", action: () => { addEmptyFrameAction(); setOpenMenu(null); } },
       { label: "Duplicate Frame", action: () => { duplicateCurrentFrameAction(); setOpenMenu(null); } },
       { label: "Filters & Adjustments...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "outline"); } },

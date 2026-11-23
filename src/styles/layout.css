@@ -3642,3 +3642,38 @@
   outline: 1px solid var(--accent);
   border-color: var(--accent);
 }
+
+/* D6 Layer Search & Clipping Mask Badge */
+.draw-layer-search-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0px;
+}
+
+.draw-layer-search-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.draw-layer-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.draw-layer-clip-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+  line-height: 1;
+}
+

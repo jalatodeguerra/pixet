@@ -64,6 +64,24 @@ interface RustTilesetMeta {
   tile_count: number;
 }
 
+type RustBlendMode =
+  | "normal"
+  | "multiply"
+  | "screen"
+  | "overlay"
+  | "add"
+  | "darken"
+  | "lighten"
+  | "color_dodge"
+  | "color_burn"
+  | "hard_light"
+  | "soft_light"
+  | "difference"
+  | "hue"
+  | "saturation"
+  | "color"
+  | "luminosity";
+
 interface RustLayer {
   id: string;
   name: string;
@@ -72,8 +90,10 @@ interface RustLayer {
   locked: boolean;
   opacity: number;
   alpha_lock: boolean;
-  blend_mode: "normal" | "multiply" | "screen" | "overlay" | "add";
+  blend_mode: RustBlendMode;
   parent_id: string | null;
+  clipped?: boolean;
+  color_tag?: string | null;
   cels: RustCel[];
   tilemaps?: Record<string, RustTilemapGrid>;
   map_role?: string | null;
@@ -136,9 +156,7 @@ function base64ToBytes(b64: string): Uint8ClampedArray {
   return out;
 }
 
-function toRustBlend(
-  mode: BlendMode
-): "normal" | "multiply" | "screen" | "overlay" | "add" {
+function toRustBlend(mode: BlendMode): RustBlendMode {
   switch (mode) {
     case "Multiply":
       return "multiply";
@@ -148,15 +166,35 @@ function toRustBlend(
       return "overlay";
     case "Add":
       return "add";
+    case "Darken":
+      return "darken";
+    case "Lighten":
+      return "lighten";
+    case "ColorDodge":
+      return "color_dodge";
+    case "ColorBurn":
+      return "color_burn";
+    case "HardLight":
+      return "hard_light";
+    case "SoftLight":
+      return "soft_light";
+    case "Difference":
+      return "difference";
+    case "Hue":
+      return "hue";
+    case "Saturation":
+      return "saturation";
+    case "Color":
+      return "color";
+    case "Luminosity":
+      return "luminosity";
     case "Normal":
     default:
       return "normal";
   }
 }
 
-function fromRustBlend(
-  mode: RustLayer["blend_mode"]
-): BlendMode {
+function fromRustBlend(mode: RustLayer["blend_mode"] | string | undefined): BlendMode {
   switch (mode) {
     case "multiply":
       return "Multiply";
@@ -166,6 +204,28 @@ function fromRustBlend(
       return "Overlay";
     case "add":
       return "Add";
+    case "darken":
+      return "Darken";
+    case "lighten":
+      return "Lighten";
+    case "color_dodge":
+      return "ColorDodge";
+    case "color_burn":
+      return "ColorBurn";
+    case "hard_light":
+      return "HardLight";
+    case "soft_light":
+      return "SoftLight";
+    case "difference":
+      return "Difference";
+    case "hue":
+      return "Hue";
+    case "saturation":
+      return "Saturation";
+    case "color":
+      return "Color";
+    case "luminosity":
+      return "Luminosity";
     case "normal":
     default:
       return "Normal";
@@ -235,6 +295,8 @@ export function serializeProjectTransfer(): ProjectTransfer {
       alpha_lock: layer.alphaLock,
       blend_mode: toRustBlend(layer.blendMode),
       parent_id: layer.parentId,
+      clipped: Boolean(layer.clipped),
+      color_tag: layer.colorTag ?? undefined,
       cels: rustCels,
       tilemaps,
       map_role:
@@ -393,6 +455,8 @@ export function hydrateProjectTransfer(
     alphaLock: l.alpha_lock,
     blendMode: fromRustBlend(l.blend_mode),
     parentId: l.parent_id,
+    clipped: Boolean(l.clipped),
+    colorTag: l.color_tag ?? null,
     mapRole: (l.map_role as LayerMapRole | undefined) ?? undefined,
     expanded: true,
     cels: {},

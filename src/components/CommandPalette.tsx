@@ -29,6 +29,13 @@ import {
   addEmptyFrameAction,
   duplicateCurrentFrameAction,
 } from "../engine/document/timelineActions";
+import {
+  clearActiveCelAction,
+  duplicateLayerAllFramesAction,
+  flattenImageAction,
+  mergeDownLayerAction,
+  mergeVisibleLayersAction,
+} from "../engine/document/layerActions";
 import { openProjectAction, saveProjectAction } from "../engine/io/projectBridge";
 import {
   fuzzyMatchCommands,
@@ -374,6 +381,55 @@ export function CommandPalette() {
         category: "Sprite",
         keywords: ["layer", "add"],
         run: () => st().addLayer(),
+      },
+      {
+        id: "sprite.mergeDown",
+        label: "Sprite: Merge Down",
+        category: "Sprite",
+        shortcut: "Ctrl+M",
+        keywords: ["layer", "merge", "down"],
+        run: () => mergeDownLayerAction(),
+      },
+      {
+        id: "sprite.mergeVisible",
+        label: "Sprite: Merge Visible",
+        category: "Sprite",
+        keywords: ["layer", "merge", "visible"],
+        run: () => mergeVisibleLayersAction(),
+      },
+      {
+        id: "sprite.flattenImage",
+        label: "Sprite: Flatten Image",
+        category: "Sprite",
+        keywords: ["layer", "flatten", "background", "merge"],
+        run: () => flattenImageAction(),
+      },
+      {
+        id: "sprite.clearCel",
+        label: "Sprite: Clear Cel",
+        category: "Sprite",
+        keywords: ["layer", "cel", "clear", "erase"],
+        run: () => clearActiveCelAction(),
+      },
+      {
+        id: "sprite.toggleClippingMask",
+        label: "Sprite: Toggle Clipping Mask",
+        category: "Sprite",
+        keywords: ["layer", "clip", "clipping", "mask"],
+        run: () => {
+          const s = st();
+          const active = s.layers.find((l) => l.id === s.activeLayerId);
+          if (active && active.kind === "raster") {
+            s.toggleLayerClipped(active.id);
+          }
+        },
+      },
+      {
+        id: "sprite.duplicateLayerAllFrames",
+        label: "Sprite: Duplicate Layer Across All Frames",
+        category: "Sprite",
+        keywords: ["layer", "duplicate", "frames", "clone"],
+        run: () => duplicateLayerAllFramesAction(),
       },
       {
         id: "sprite.newFrame",

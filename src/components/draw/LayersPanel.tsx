@@ -13,11 +13,21 @@ import {
   GripVertical,
   Lock,
   Plus,
+  Search,
   Trash2,
   Unlock,
+  X,
 } from "lucide-react";
+import { ALL_BLEND_MODES } from "../../engine/document/blendModes";
 import { PixelBuffer } from "../../engine/document/PixelBuffer";
 import { pixelEngine } from "../../engine/document/PixelEngine";
+import {
+  clearActiveCelAction,
+  duplicateLayerAllFramesAction,
+  flattenImageAction,
+  mergeDownLayerAction,
+  mergeVisibleLayersAction,
+} from "../../engine/document/layerActions";
 import { renderIsometricTilemapToBuffer } from "../../engine/tiles/isometric";
 import { renderTilemapToBuffer } from "../../engine/tiles/TilemapEngine";
 import {
@@ -35,12 +45,13 @@ import {
   useEditorStore,
 } from "../../store/editorStore";
 
-const BLEND_MODES: BlendMode[] = [
-  "Normal",
-  "Multiply",
-  "Screen",
-  "Overlay",
-  "Add",
+const LAYER_COLOR_TAGS: ReadonlyArray<{ label: string; color: string }> = [
+  { label: "Red", color: "#d95763" },
+  { label: "Orange", color: "#df7126" },
+  { label: "Yellow", color: "#fbf236" },
+  { label: "Green", color: "#37946e" },
+  { label: "Blue", color: "#4c8bf5" },
+  { label: "Purple", color: "#76428a" },
 ];
 
 function LayerThumbnail({
@@ -172,6 +183,7 @@ export function LayersPanel() {
   const layers = useEditorStore((s) => s.layers);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const selectedLayerIds = useEditorStore((s) => s.selectedLayerIds);
+  const soloVisibilitySnapshot = useEditorStore((s) => s.soloVisibilitySnapshot);
   const selectLayer = useEditorStore((s) => s.selectLayer);
   const selectLayerRange = useEditorStore((s) => s.selectLayerRange);
   const toggleSelectLayer = useEditorStore((s) => s.toggleSelectLayer);
@@ -180,6 +192,9 @@ export function LayersPanel() {
   const toggleLayerVisible = useEditorStore((s) => s.toggleLayerVisible);
   const toggleLayerLocked = useEditorStore((s) => s.toggleLayerLocked);
   const toggleLayerAlphaLock = useEditorStore((s) => s.toggleLayerAlphaLock);
+  const toggleLayerClipped = useEditorStore((s) => s.toggleLayerClipped);
+  const setLayerColorTag = useEditorStore((s) => s.setLayerColorTag);
+  const soloLayer = useEditorStore((s) => s.soloLayer);
   const setLayerOpacity = useEditorStore((s) => s.setLayerOpacity);
   const setLayerBlendMode = useEditorStore((s) => s.setLayerBlendMode);
   const addLayer = useEditorStore((s) => s.addLayer);
@@ -187,7 +202,6 @@ export function LayersPanel() {
   const addTilemapLayer = useEditorStore((s) => s.addTilemapLayer);
   const deleteActiveLayer = useEditorStore((s) => s.deleteActiveLayer);
   const renameLayer = useEditorStore((s) => s.renameLayer);
-  const duplicateActiveLayer = useEditorStore((s) => s.duplicateActiveLayer);
   const moveLayer = useEditorStore((s) => s.moveLayer);
   const toggleGroupExpanded = useEditorStore((s) => s.toggleGroupExpanded);
   const setLayerParent = useEditorStore((s) => s.setLayerParent);
@@ -195,6 +209,7 @@ export function LayersPanel() {
   const openContextMenu = useEditorStore((s) => s.openContextMenu);
 
   const [layersOpen, setLayersOpen] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
@@ -203,15 +218,50 @@ export function LayersPanel() {
     pos: "before" | "after" | "inside";
   } | null>(null);
 
+  const bulkPaintRef = useRef<{
+    kind: "visible" | "locked";
+    targetValue: boolean;
+  } | null>(null);
+  const suppressNextClickRef = useRef<"visible" | "locked" | null>(null);
+
+  useEffect(() => {
+    const endBulkPaint = () => {
+      bulkPaintRef.current = null;
+      window.setTimeout(() => {
+        suppressNextClickRef.current = null;
+      }, 0);
+    };
+    window.addEventListener("pointerup", endBulkPaint);
+    window.addEventListener("pointercancel", endBulkPaint);
+    return () => {
+      window.removeEventListener("pointerup", endBulkPaint);
+      window.removeEventListener("pointercancel", endBulkPaint);
+    };
+  }, []);
+
+  const applyBulkToggle = (
+    layerId: string,
+    kind: "visible" | "locked",
+    targetValue: boolean
+  ) => {
+    const cur = useEditorStore.getState().layers.find((l) => l.id === layerId);
+    if (!cur) return;
+    if (kind === "visible" && cur.visible !== targetValue) {
+      toggleLayerVisible(layerId);
+    } else if (kind === "locked" && cur.locked !== targetValue) {
+      toggleLayerLocked(layerId);
+    }
+  };
+
   const activeLayer =
     layers.find((l) => l.id === activeLayerId) ?? layers[0];
   const activeLayerIdx = layers.findIndex((l) => l.id === activeLayerId);
 
+  const normalizedQuery =
+    layers.length > 6 ? searchQuery.trim().toLowerCase() : "";
+
   const handleDuplicateLayer = () => {
-    const res = duplicateActiveLayer();
-    if (res) {
-      pixelEngine.duplicateLayerCels(res.sourceId, res.newId);
-    }
+    duplicateLayerAllFramesAction();
   };
 
   const commitRename = () => {
@@ -319,7 +369,7 @@ export function LayersPanel() {
                   setLayerBlendMode(activeLayer.id, e.target.value as BlendMode)
                 }
               >
-                {BLEND_MODES.map((mode) => (
+                {ALL_BLEND_MODES.map((mode) => (
                   <option key={mode} value={mode}>
                     {mode}
                   </option>
@@ -347,14 +397,50 @@ export function LayersPanel() {
               </label>
 
               {activeLayer.kind === "raster" && (
+                <>
+                  <button
+                    type="button"
+                    className={`toggle-chip ${activeLayer.clipped ? "active" : ""}`}
+                    style={{ padding: "2px 6px" }}
+                    title="Clip to layer below (Clipping Mask)"
+                    onClick={() => toggleLayerClipped(activeLayer.id)}
+                  >
+                    Clip
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-chip ${activeLayer.alphaLock ? "active" : ""}`}
+                    style={{ padding: "2px 6px" }}
+                    title="Lock Layer Alpha (only paint on existing non-transparent pixels)"
+                    onClick={() => toggleLayerAlphaLock(activeLayer.id)}
+                  >
+                    α
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {layers.length > 6 && (
+            <div className="draw-layer-search-row">
+              <Search size={12} className="draw-layer-search-icon" />
+              <input
+                type="text"
+                className="draw-layer-search-input"
+                placeholder="Filter layers..."
+                aria-label="Filter layers"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
                 <button
                   type="button"
-                  className={`toggle-chip ${activeLayer.alphaLock ? "active" : ""}`}
-                  style={{ padding: "2px 6px" }}
-                  title="Lock Layer Alpha (only paint on existing non-transparent pixels)"
-                  onClick={() => toggleLayerAlphaLock(activeLayer.id)}
+                  className="icon-action-btn"
+                  style={{ width: 18, height: 18 }}
+                  title="Clear layer filter"
+                  onClick={() => setSearchQuery("")}
                 >
-                  α
+                  <X size={11} />
                 </button>
               )}
             </div>
@@ -365,9 +451,18 @@ export function LayersPanel() {
               if (isLayerHiddenByCollapsedGroup(layers, layer)) {
                 return null;
               }
+              if (
+                normalizedQuery &&
+                !layer.name.toLowerCase().includes(normalizedQuery)
+              ) {
+                return null;
+              }
               const active = layer.id === activeLayerId;
               const isSelected = selectedLayerIds.includes(layer.id);
               const depth = getLayerDepth(layers, layer);
+              const isClipped = Boolean(layer.clipped);
+              const isSoloed =
+                soloVisibilitySnapshot !== null && layer.visible;
               const isEditing = editingLayerId === layer.id;
               const dropPos =
                 layerDropTarget?.id === layer.id &&
@@ -376,13 +471,21 @@ export function LayersPanel() {
                   : null;
               const dropClass = dropPos ? `drag-over-${dropPos}` : "";
               const isDraggingThis = draggedLayerId === layer.id;
+              const canMergeDown =
+                layer.kind === "raster" &&
+                layers.slice(index + 1).some((l) => l.kind === "raster");
 
               return (
                 <div
                   key={layer.id}
                   draggable={!isEditing}
                   className={`layer-row ${isSelected ? "selected" : ""} ${active ? "active" : ""} ${isDraggingThis ? "dragging" : ""} ${dropClass}`}
-                  style={{ paddingLeft: 5 + depth * 14 }}
+                  style={{
+                    paddingLeft: 5 + depth * 14 + (isClipped ? 10 : 0),
+                    borderLeft: layer.colorTag
+                      ? `3px solid ${layer.colorTag}`
+                      : undefined,
+                  }}
                   onClick={(e) => {
                     if (e.shiftKey) {
                       selectLayerRange(layer.id);
@@ -443,6 +546,20 @@ export function LayersPanel() {
                             { kind: "separator" as const },
                             {
                               kind: "item" as const,
+                              label: layer.clipped
+                                ? "Toggle Clipping Mask (On)"
+                                : "Toggle Clipping Mask",
+                              action: () => toggleLayerClipped(layer.id),
+                            },
+                            {
+                              kind: "item" as const,
+                              label: layer.alphaLock
+                                ? "Unlock Alpha"
+                                : "Lock Alpha",
+                              action: () => toggleLayerAlphaLock(layer.id),
+                            },
+                            {
+                              kind: "item" as const,
                               label: "Role: Albedo",
                               action: () => setLayerMapRole(layer.id, "albedo"),
                             },
@@ -457,17 +574,62 @@ export function LayersPanel() {
                               action: () =>
                                 setLayerMapRole(layer.id, "emission"),
                             },
-                            {
-                              kind: "item" as const,
-                              label: layer.alphaLock
-                                ? "Unlock Alpha"
-                                : "Lock Alpha",
-                              action: () => toggleLayerAlphaLock(layer.id),
-                            },
                           ]
                         : []),
                       { kind: "separator" },
-                      { kind: "item", label: "Duplicate Layer", action: () => handleDuplicateLayer() },
+                      {
+                        kind: "item",
+                        label: "Merge Down",
+                        shortcut: "Ctrl+M",
+                        disabled: !canMergeDown,
+                        action: () => {
+                          selectLayer(layer.id);
+                          mergeDownLayerAction();
+                        },
+                      },
+                      {
+                        kind: "item",
+                        label: "Merge Visible",
+                        action: () => {
+                          mergeVisibleLayersAction();
+                        },
+                      },
+                      {
+                        kind: "item",
+                        label: "Flatten Image",
+                        action: () => {
+                          flattenImageAction();
+                        },
+                      },
+                      {
+                        kind: "item",
+                        label: "Clear Cel",
+                        disabled: layer.kind !== "raster",
+                        action: () => {
+                          selectLayer(layer.id);
+                          clearActiveCelAction();
+                        },
+                      },
+                      {
+                        kind: "item",
+                        label: "Duplicate Across All Frames",
+                        disabled: layer.kind !== "raster",
+                        action: () => {
+                          duplicateLayerAllFramesAction(layer.id);
+                        },
+                      },
+                      { kind: "separator" },
+                      {
+                        kind: "item",
+                        label: "Tag: None",
+                        action: () => setLayerColorTag(layer.id, null),
+                      },
+                      ...LAYER_COLOR_TAGS.map((tag) => ({
+                        kind: "item" as const,
+                        label: `Tag: ${tag.label}${layer.colorTag === tag.color ? " ✓" : ""}`,
+                        action: () => setLayerColorTag(layer.id, tag.color),
+                      })),
+                      { kind: "separator" },
                       {
                         kind: "item",
                         label: "Rename Layer",
@@ -584,16 +746,57 @@ export function LayersPanel() {
                   <GripVertical size={11} className="layer-drag-handle" />
                   <button
                     type="button"
-                    className="icon-action-btn"
+                    className={`icon-action-btn ${isSoloed ? "active" : ""}`}
                     style={{ width: 20, height: 20 }}
-                    title={layer.visible ? "Hide Layer" : "Show Layer"}
+                    title={
+                      layer.visible
+                        ? "Hide Layer (Alt+Click to Solo)"
+                        : "Show Layer (Alt+Click to Solo)"
+                    }
+                    onPointerDown={(e) => {
+                      if (e.button !== 0 || e.altKey) return;
+                      e.stopPropagation();
+                      const targetValue = !layer.visible;
+                      bulkPaintRef.current = { kind: "visible", targetValue };
+                      suppressNextClickRef.current = "visible";
+                      toggleLayerVisible(layer.id);
+                    }}
+                    onPointerEnter={() => {
+                      if (
+                        bulkPaintRef.current &&
+                        bulkPaintRef.current.kind === "visible"
+                      ) {
+                        applyBulkToggle(
+                          layer.id,
+                          "visible",
+                          bulkPaintRef.current.targetValue
+                        );
+                      }
+                    }}
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (e.altKey) {
+                        soloLayer(layer.id);
+                        return;
+                      }
+                      if (suppressNextClickRef.current === "visible") {
+                        suppressNextClickRef.current = null;
+                        return;
+                      }
                       toggleLayerVisible(layer.id);
                     }}
                   >
                     {layer.visible ? <Eye size={13} /> : <EyeOff size={13} />}
                   </button>
+
+                  {isClipped && (
+                    <span
+                      className="draw-layer-clip-badge"
+                      title="Clipped to layer below"
+                    >
+                      ↳
+                    </span>
+                  )}
 
                   {layer.kind === "group" && (
                     <>
@@ -698,8 +901,32 @@ export function LayersPanel() {
                     className={`icon-action-btn ${layer.locked ? "active" : ""}`}
                     style={{ width: 20, height: 20 }}
                     title={layer.locked ? "Unlock Layer" : "Lock Layer"}
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      const targetValue = !layer.locked;
+                      bulkPaintRef.current = { kind: "locked", targetValue };
+                      suppressNextClickRef.current = "locked";
+                      toggleLayerLocked(layer.id);
+                    }}
+                    onPointerEnter={() => {
+                      if (
+                        bulkPaintRef.current &&
+                        bulkPaintRef.current.kind === "locked"
+                      ) {
+                        applyBulkToggle(
+                          layer.id,
+                          "locked",
+                          bulkPaintRef.current.targetValue
+                        );
+                      }
+                    }}
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (suppressNextClickRef.current === "locked") {
+                        suppressNextClickRef.current = null;
+                        return;
+                      }
                       toggleLayerLocked(layer.id);
                     }}
                   >

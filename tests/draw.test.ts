@@ -92,6 +92,18 @@ import {
 import { performRedo, performUndo } from "../src/engine/document/historyActions.ts";
 import { useEditorStore } from "../src/store/editorStore.ts";
 import {
+  ALL_BLEND_MODES,
+  blendRgb,
+  type BlendMode,
+} from "../src/engine/document/blendModes.ts";
+import {
+  clearActiveCelAction,
+  duplicateLayerAllFramesAction,
+  flattenImageAction,
+  mergeDownLayerAction,
+  mergeVisibleLayersAction,
+} from "../src/engine/document/layerActions.ts";
+import {
   computeColorHarmonies,
   extractPaletteMedianCut,
   generateHueShiftedRamp,
@@ -2295,6 +2307,384 @@ test("D5-UI: editorStore color & palette actions (alpha, paletteLock, recentColo
     "#555555",
   ]);
 });
+
+test("D6 blendModes: all 16 W3C blend modes match reference formulas", () => {
+  assert.equal(ALL_BLEND_MODES.length, 16);
+
+  const approx = (actual: [number, number, number], expected: [number, number, number], label: string) => {
+    for (let i = 0; i < 3; i++) {
+      assert.ok(
+        Math.abs(actual[i] - expected[i]) < 1e-5,
+        `${label} channel ${i}: expected ${expected[i]}, got ${actual[i]}`
+      );
+    }
+  };
+
+  // Separable modes on distinct midtone inputs
+  approx(blendRgb(0.4, 0.6, 0.8, 0.2, 0.8, 0.5, "Normal"), [0.2, 0.8, 0.5], "Normal");
+  approx(blendRgb(0.4, 0.6, 0.8, 0.2, 0.8, 0.5, "Multiply"), [0.08, 0.48, 0.4], "Multiply");
+  approx(
+    blendRgb(0.4, 0.6, 0.8, 0.2, 0.8, 0.5, "Screen"),
+    [1 - 0.6 * 0.8, 1 - 0.4 * 0.2, 1 - 0.2 * 0.5],
+    "Screen"
+  );
+  approx(
+    blendRgb(0.25, 0.75, 0.5, 0.6, 0.4, 0.8, "Overlay"),
+    [2 * 0.25 * 0.6, 1 - 2 * 0.25 * 0.6, 0.8],
+    "Overlay"
+  );
+  approx(blendRgb(0.4, 0.6, 0.8, 0.2, 0.8, 0.5, "Add"), [0.6, 1, 1], "Add");
+  approx(blendRgb(0.4, 0.6, 0.8, 0.2, 0.8, 0.5, "Darken"), [0.2, 0.6, 0.5], "Darken");
+  approx(blendRgb(0.4, 0.6, 0.8, 0.2, 0.8, 0.5, "Lighten"), [0.4, 0.8, 0.8], "Lighten");
+  approx(
+    blendRgb(0, 0.4, 0.8, 0.5, 1, 0.5, "ColorDodge"),
+    [0, 1, 1],
+    "ColorDodge edge"
+  );
+  approx(
+    blendRgb(0.3, 0.5, 0.2, 0.5, 0.2, 0.6, "ColorDodge"),
+    [0.6, 0.625, 0.5],
+    "ColorDodge mid"
+  );
+  approx(
+    blendRgb(1, 0.5, 0.8, 0.3, 0, 0.5, "ColorBurn"),
+    [1, 0, 0.6],
+    "ColorBurn"
+  );
+  approx(
+    blendRgb(0.6, 0.4, 0.8, 0.25, 0.75, 0.5, "HardLight"),
+    [2 * 0.6 * 0.25, 1 - 2 * 0.6 * 0.25, 0.8],
+    "HardLight"
+  );
+  approx(
+    blendRgb(0.16, 0.64, 0.5, 0.25, 0.75, 0.5, "SoftLight"),
+    [
+      0.16 - (1 - 0.5) * 0.16 * 0.84,
+      0.64 + (1.5 - 1) * (Math.sqrt(0.64) - 0.64),
+      0.5,
+    ],
+    "SoftLight"
+  );
+  approx(
+    blendRgb(0.4, 0.6, 0.8, 0.7, 0.2, 0.8, "Difference"),
+    [0.3, 0.4, 0],
+    "Difference"
+  );
+
+  // Non-separable W3C HSL modes
+  // dst = (0.8, 0.2, 0.2) -> lum = 0.38, sat = 0.6 (red hue)
+  // src = (0.2, 0.4, 0.9) -> lum = 0.395, sat = 0.7 (blue-ish hue)
+  const lumFn = (c: [number, number, number]) => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+  const satFn = (c: [number, number, number]) => Math.max(...c) - Math.min(...c);
+
+  const hueOut = blendRgb(0.8, 0.2, 0.2, 0.2, 0.4, 0.9, "Hue");
+  assert.ok(Math.abs(lumFn(hueOut) - lumFn([0.8, 0.2, 0.2])) < 1e-5);
+  assert.ok(hueOut[2] > hueOut[1] && hueOut[1] > hueOut[0]);
+
+  const satOut = blendRgb(0.8, 0.2, 0.2, 0.2, 0.4, 0.9, "Saturation");
+  assert.ok(Math.abs(lumFn(satOut) - lumFn([0.8, 0.2, 0.2])) < 1e-5);
+  assert.ok(satOut[0] > satOut[1] && Math.abs(satOut[1] - satOut[2]) < 1e-5);
+  assert.ok(Math.abs(satFn(satOut) - 0.7) < 1e-5);
+
+  const colorOut = blendRgb(0.8, 0.2, 0.2, 0.2, 0.4, 0.9, "Color");
+  assert.ok(Math.abs(lumFn(colorOut) - lumFn([0.8, 0.2, 0.2])) < 1e-5);
+  assert.ok(colorOut[2] > colorOut[1] && colorOut[1] > colorOut[0]);
+
+  const lumOut = blendRgb(0.8, 0.2, 0.2, 0.2, 0.4, 0.9, "Luminosity");
+  assert.ok(Math.abs(lumFn(lumOut) - lumFn([0.2, 0.4, 0.9])) < 1e-5);
+  assert.ok(lumOut[0] > lumOut[1] && Math.abs(lumOut[1] - lumOut[2]) < 1e-5);
+});
+
+test("D6 PixelEngine: clipping masks (single, stacked, semi-transparent base, orphan clipped, and blend modes)", () => {
+  pixelEngine.resetForDocument(4, 1);
+
+  const base = pixelEngine.getOrCreateCel("base", 0);
+  // px0: opaque blue; px1: ~50% alpha blue; px2: transparent; px3: opaque blue
+  base.setPixel(0, 0, 0, 0, 255, 255);
+  base.setPixel(1, 0, 0, 0, 255, 128);
+  base.setPixel(3, 0, 0, 0, 255, 255);
+
+  // Stacked clipped layers cover all 4 pixels with solid colors
+  const clip1 = pixelEngine.getOrCreateCel("clip1", 0);
+  const clip2 = pixelEngine.getOrCreateCel("clip2", 0);
+  for (let x = 0; x < 4; x++) {
+    clip1.setPixel(x, 0, 255, 0, 0, 255);
+    clip2.setPixel(x, 0, 0, 255, 0, 128);
+  }
+
+  // Layers are ordered top-to-bottom
+  const singleLayers = [
+    {
+      id: "clip1",
+      kind: "raster",
+      visible: true,
+      opacity: 100,
+      blendMode: "Normal" as BlendMode,
+      parentId: null,
+      clipped: true,
+    },
+    {
+      id: "base",
+      kind: "raster",
+      visible: true,
+      opacity: 100,
+      blendMode: "Normal" as BlendMode,
+      parentId: null,
+      clipped: false,
+    },
+  ];
+
+  const singleOut = pixelEngine.compositeFrame(singleLayers, 0);
+  // px0: clipped fully onto opaque base -> red
+  assert.deepEqual(Array.from(singleOut.slice(0, 4)), [255, 0, 0, 255]);
+  // px1: clip1 alpha is 128/255 over base alpha 128/255
+  assert.equal(singleOut[6], 85); // blue contribution ~ 1/3
+  assert.equal(singleOut[4], 170); // red contribution ~ 2/3
+  assert.equal(singleOut[7], 192); // outA = 0.502 + 0.502*(1-0.502) = 0.752 -> 192
+  // px2: base is transparent -> clipped pixel remains transparent
+  assert.deepEqual(Array.from(singleOut.slice(8, 12)), [0, 0, 0, 0]);
+
+  // Stacked clipping masks share the same base alpha
+  const stackedLayers = [
+    {
+      id: "clip2",
+      kind: "raster",
+      visible: true,
+      opacity: 100,
+      blendMode: "Lighten" as BlendMode,
+      parentId: null,
+      clipped: true,
+    },
+    ...singleLayers,
+  ];
+  const stackedOut = pixelEngine.compositeFrame(stackedLayers, 0);
+  // px2 still transparent across both stacked clipped layers
+  assert.deepEqual(Array.from(stackedOut.slice(8, 12)), [0, 0, 0, 0]);
+  // px0: clip1 was (255,0,0,255), clip2 Lighten with (0,255,0) -> (255,255,0) blended at ~50% alpha -> (255,128,0,255)
+  assert.deepEqual(Array.from(stackedOut.slice(0, 4)), [255, 128, 0, 255]);
+
+  // Clipped layer with no visible non-clipped base beneath it renders nothing
+  const orphanLayers = [
+    {
+      id: "clip1",
+      kind: "raster",
+      visible: true,
+      opacity: 100,
+      blendMode: "Normal" as BlendMode,
+      parentId: null,
+      clipped: true,
+    },
+    {
+      id: "base",
+      kind: "raster",
+      visible: false,
+      opacity: 100,
+      blendMode: "Normal" as BlendMode,
+      parentId: null,
+      clipped: false,
+    },
+  ];
+  const orphanOut = pixelEngine.compositeFrame(orphanLayers, 0);
+  assert.ok(orphanOut.every((v) => v === 0));
+
+  // Store actions: toggleLayerClipped & setLayerColorTag
+  const store = useEditorStore.getState();
+  const targetId = store.layers[0].id;
+  const wasClipped = Boolean(store.layers[0].clipped);
+  store.toggleLayerClipped(targetId);
+  assert.equal(useEditorStore.getState().layers[0].clipped, !wasClipped);
+  store.toggleLayerClipped(targetId);
+  assert.equal(Boolean(useEditorStore.getState().layers[0].clipped), wasClipped);
+
+  store.setLayerColorTag(targetId, "#d95763");
+  assert.equal(useEditorStore.getState().layers[0].colorTag, "#d95763");
+  store.setLayerColorTag(targetId, null);
+  assert.equal(useEditorStore.getState().layers[0].colorTag, null);
+});
+
+test("D6-UI: soloLayer toggles solo visibility and restores snapshot (with group ancestors)", () => {
+  useEditorStore.setState({
+    layers: [
+      {
+        id: "grp-1",
+        name: "Group",
+        kind: "group",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        expanded: true,
+        cels: {},
+      },
+      {
+        id: "l-child",
+        name: "Child",
+        kind: "raster",
+        visible: false,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: "grp-1",
+        cels: { 0: false },
+      },
+      {
+        id: "l-other",
+        name: "Other",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        cels: { 0: false },
+      },
+    ],
+    activeLayerId: "l-child",
+    selectedLayerIds: ["l-child"],
+    soloVisibilitySnapshot: null,
+  });
+
+  // First call: solos l-child and its parent grp-1, hides l-other, saves original visibility
+  useEditorStore.getState().soloLayer("l-child");
+  let st = useEditorStore.getState();
+  assert.deepEqual(st.soloVisibilitySnapshot, {
+    "grp-1": true,
+    "l-child": false,
+    "l-other": true,
+  });
+  assert.equal(st.layers.find((l) => l.id === "grp-1")?.visible, true);
+  assert.equal(st.layers.find((l) => l.id === "l-child")?.visible, true);
+  assert.equal(st.layers.find((l) => l.id === "l-other")?.visible, false);
+
+  // Second call on same layer: restores original snapshot and clears snapshot
+  useEditorStore.getState().soloLayer("l-child");
+  st = useEditorStore.getState();
+  assert.equal(st.soloVisibilitySnapshot, null);
+  assert.equal(st.layers.find((l) => l.id === "grp-1")?.visible, true);
+  assert.equal(st.layers.find((l) => l.id === "l-child")?.visible, false);
+  assert.equal(st.layers.find((l) => l.id === "l-other")?.visible, true);
+});
+
+test("D6-UI: layerActions mergeDown, mergeVisible, flattenImage, clearActiveCel (undoable), and duplicateLayerAllFrames", () => {
+  pixelEngine.resetForDocument(2, 2);
+  useEditorStore.setState({
+    layers: [
+      {
+        id: "top",
+        name: "Top",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        clipped: true,
+        cels: { 0: true, 1: true },
+      },
+      {
+        id: "mid",
+        name: "Mid",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        clipped: false,
+        cels: { 0: true, 1: true },
+      },
+      {
+        id: "hidden",
+        name: "Hidden",
+        kind: "raster",
+        visible: false,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        cels: { 0: true, 1: true },
+      },
+    ],
+    frames: [
+      { id: "f1", index: 0, durationMs: 100 },
+      { id: "f2", index: 1, durationMs: 100 },
+    ],
+    currentFrame: 0,
+    activeLayerId: "top",
+    selectedLayerIds: ["top"],
+    soloVisibilitySnapshot: null,
+  });
+
+  // Frame 0: mid has opaque blue at (0,0), transparent at (1,0); top (clipped) has red at both
+  const mid0 = pixelEngine.getOrCreateCel("mid", 0);
+  mid0.setPixel(0, 0, 0, 0, 255, 255);
+  const top0 = pixelEngine.getOrCreateCel("top", 0);
+  top0.setPixel(0, 0, 255, 0, 0, 255);
+  top0.setPixel(1, 0, 255, 0, 0, 255);
+
+  // Frame 1: mid has green at (1,1); top has blue at (1,1)
+  const mid1 = pixelEngine.getOrCreateCel("mid", 1);
+  mid1.setPixel(1, 1, 0, 255, 0, 255);
+  const top1 = pixelEngine.getOrCreateCel("top", 1);
+  top1.setPixel(1, 1, 0, 0, 255, 255);
+
+  // Hidden layer has white at (0,1)
+  const hid0 = pixelEngine.getOrCreateCel("hidden", 0);
+  hid0.setPixel(0, 1, 255, 255, 255, 255);
+
+  // 1. Merge Down: top (clipped) merges into mid across all frames
+  assert.equal(mergeDownLayerAction(), true);
+  let st = useEditorStore.getState();
+  assert.equal(st.layers.length, 2);
+  assert.equal(st.activeLayerId, "mid");
+  assert.deepEqual(pixelEngine.getCel("mid", 0)?.getPixel(0, 0), [255, 0, 0, 255]);
+  // Clipped (1,0) over transparent mid remains transparent
+  assert.deepEqual(pixelEngine.getCel("mid", 0)?.getPixel(1, 0), [0, 0, 0, 0]);
+  assert.deepEqual(pixelEngine.getCel("mid", 1)?.getPixel(1, 1), [0, 0, 255, 255]);
+
+  // 2. Duplicate Across All Frames
+  assert.equal(duplicateLayerAllFramesAction("mid"), true);
+  st = useEditorStore.getState();
+  assert.equal(st.layers.length, 3);
+  const dupId = st.activeLayerId;
+  assert.notEqual(dupId, "mid");
+  assert.deepEqual(pixelEngine.getCel(dupId, 0)?.getPixel(0, 0), [255, 0, 0, 255]);
+  assert.deepEqual(pixelEngine.getCel(dupId, 1)?.getPixel(1, 1), [0, 0, 255, 255]);
+
+  // 3. Clear Cel (undoable via TileHistory)
+  assert.equal(clearActiveCelAction(), true);
+  assert.equal(pixelEngine.getCel(dupId, 0)?.isEmpty(), true);
+  assert.equal(useEditorStore.getState().canUndo, true);
+  performUndo();
+  assert.deepEqual(pixelEngine.getCel(dupId, 0)?.getPixel(0, 0), [255, 0, 0, 255]);
+  performRedo();
+  assert.equal(pixelEngine.getCel(dupId, 0)?.isEmpty(), true);
+
+  // 4. Merge Visible (2 visible raster layers: dupId + mid; hidden stays untouched)
+  assert.equal(mergeVisibleLayersAction(), true);
+  st = useEditorStore.getState();
+  assert.equal(st.layers.length, 2);
+  assert.ok(st.layers.some((l) => l.id === "hidden"));
+  const mergedId = st.activeLayerId;
+  assert.deepEqual(pixelEngine.getCel(mergedId, 0)?.getPixel(0, 0), [255, 0, 0, 255]);
+
+  // 5. Flatten Image -> single "Background" layer
+  assert.equal(flattenImageAction(), true);
+  st = useEditorStore.getState();
+  assert.equal(st.layers.length, 1);
+  assert.equal(st.layers[0].name, "Background");
+  assert.deepEqual(pixelEngine.getCel(st.layers[0].id, 0)?.getPixel(0, 0), [255, 0, 0, 255]);
+  // Hidden layer is excluded from flattened output
+  assert.deepEqual(pixelEngine.getCel(st.layers[0].id, 0)?.getPixel(0, 1), [0, 0, 0, 0]);
+});
+
 
 
 

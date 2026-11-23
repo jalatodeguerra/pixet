@@ -1,4 +1,5 @@
 import { PixelBuffer } from "../document/PixelBuffer.ts";
+import { type BlendMode, blendRgb } from "../document/blendModes.ts";
 import {
   type CellFlags,
   packCell,
@@ -11,34 +12,7 @@ import { resolveAnimatedTileId } from "./tileAuthoring.ts";
 export * from "./cell.ts";
 export * from "./Tileset.ts";
 
-export type BlendModeName =
-  | "Normal"
-  | "Multiply"
-  | "Screen"
-  | "Overlay"
-  | "Add";
-
-export function blendChannel(
-  dst: number,
-  src: number,
-  mode: BlendModeName
-): number {
-  const d = dst / 255;
-  const s = src / 255;
-  switch (mode) {
-    case "Multiply":
-      return d * s * 255;
-    case "Screen":
-      return (1 - (1 - d) * (1 - s)) * 255;
-    case "Overlay":
-      return (d < 0.5 ? 2 * d * s : 1 - 2 * (1 - d) * (1 - s)) * 255;
-    case "Add":
-      return Math.min(1, d + s) * 255;
-    case "Normal":
-    default:
-      return src;
-  }
-}
+export type BlendModeName = BlendMode;
 
 export function compositeSourceOnto(
   dst: Uint8ClampedArray,
@@ -48,7 +22,8 @@ export function compositeSourceOnto(
   offsetX: number,
   offsetY: number,
   layerOpacity: number,
-  mode: BlendModeName
+  mode: BlendModeName,
+  clipBaseAlpha?: Uint8Array | null
 ): void {
   for (let sy = 0; sy < src.height; sy++) {
     const dy = offsetY + sy;
@@ -61,8 +36,12 @@ export function compositeSourceOnto(
       const rawSrcA = src.data[sIdx + 3];
       if (rawSrcA === 0) continue;
 
-      const dIdx = (dy * dstWidth + dx) * 4;
-      const sa = (rawSrcA / 255) * layerOpacity;
+      const pIdx = dy * dstWidth + dx;
+      const clipFactor = clipBaseAlpha ? clipBaseAlpha[pIdx] / 255 : 1;
+      if (clipFactor <= 0) continue;
+
+      const dIdx = pIdx * 4;
+      const sa = (rawSrcA / 255) * layerOpacity * clipFactor;
       const da = dst[dIdx + 3] / 255;
       const outA = sa + da * (1 - sa);
       if (outA <= 0) continue;
@@ -76,9 +55,18 @@ export function compositeSourceOnto(
       let bb = sb;
 
       if (mode !== "Normal" && da > 0) {
-        const mixedR = blendChannel(dst[dIdx], sr, mode);
-        const mixedG = blendChannel(dst[dIdx + 1], sg, mode);
-        const mixedB = blendChannel(dst[dIdx + 2], sb, mode);
+        const [mr, mg, mb] = blendRgb(
+          dst[dIdx] / 255,
+          dst[dIdx + 1] / 255,
+          dst[dIdx + 2] / 255,
+          sr / 255,
+          sg / 255,
+          sb / 255,
+          mode
+        );
+        const mixedR = mr * 255;
+        const mixedG = mg * 255;
+        const mixedB = mb * 255;
         br = mixedR * da + sr * (1 - da);
         bg = mixedG * da + sg * (1 - da);
         bb = mixedB * da + sb * (1 - da);
@@ -105,7 +93,8 @@ export function blitTileTransformed(
   offsetY: number,
   flags: CellFlags,
   layerOpacity: number,
-  mode: BlendModeName
+  mode: BlendModeName,
+  clipBaseAlpha?: Uint8Array | null
 ): void {
   if (!flags.flipH && !flags.flipV && !flags.flipD) {
     compositeSourceOnto(
@@ -116,7 +105,8 @@ export function blitTileTransformed(
       offsetX,
       offsetY,
       layerOpacity,
-      mode
+      mode,
+      clipBaseAlpha
     );
     return;
   }
@@ -133,8 +123,12 @@ export function blitTileTransformed(
       const rawSrcA = src.data[sIdx + 3];
       if (rawSrcA === 0) continue;
 
-      const dIdx = (dy * dstWidth + dx) * 4;
-      const sa = (rawSrcA / 255) * layerOpacity;
+      const pIdx = dy * dstWidth + dx;
+      const clipFactor = clipBaseAlpha ? clipBaseAlpha[pIdx] / 255 : 1;
+      if (clipFactor <= 0) continue;
+
+      const dIdx = pIdx * 4;
+      const sa = (rawSrcA / 255) * layerOpacity * clipFactor;
       const da = dst[dIdx + 3] / 255;
       const outA = sa + da * (1 - sa);
       if (outA <= 0) continue;
@@ -148,9 +142,18 @@ export function blitTileTransformed(
       let bb = sb;
 
       if (mode !== "Normal" && da > 0) {
-        const mixedR = blendChannel(dst[dIdx], sr, mode);
-        const mixedG = blendChannel(dst[dIdx + 1], sg, mode);
-        const mixedB = blendChannel(dst[dIdx + 2], sb, mode);
+        const [mr, mg, mb] = blendRgb(
+          dst[dIdx] / 255,
+          dst[dIdx + 1] / 255,
+          dst[dIdx + 2] / 255,
+          sr / 255,
+          sg / 255,
+          sb / 255,
+          mode
+        );
+        const mixedR = mr * 255;
+        const mixedG = mg * 255;
+        const mixedB = mb * 255;
         br = mixedR * da + sr * (1 - da);
         bg = mixedG * da + sg * (1 - da);
         bb = mixedB * da + sb * (1 - da);
@@ -306,7 +309,8 @@ export function renderTilemapToBuffer(
   dstH: number,
   opacity: number,
   blendMode: BlendModeName,
-  elapsedMs?: number
+  elapsedMs?: number,
+  clipBaseAlpha?: Uint8Array | null
 ): void {
   const baseTs =
     tilesetOrRegistry instanceof TilesetRegistry
@@ -330,7 +334,8 @@ export function renderTilemapToBuffer(
         row * baseH,
         resolved.flags,
         opacity,
-        blendMode
+        blendMode,
+        clipBaseAlpha
       );
     }
   }

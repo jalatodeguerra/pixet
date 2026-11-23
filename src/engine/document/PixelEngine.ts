@@ -64,6 +64,7 @@ export interface LayerCompositingInfo {
   opacity: number; // 0..100
   blendMode: BlendModeName;
   parentId?: string | null;
+  clipped?: boolean;
   mapRole?: LayerMapRole;
 }
 
@@ -777,6 +778,8 @@ export class PixelEngine {
         ? this.floating
         : null;
     let floatingComposited = false;
+    let clipBaseAlpha: Uint8Array | null = null;
+    const pixelCount = this.width * this.height;
 
     // `layers` is ordered top-to-bottom in UI; composite bottom-to-top.
     for (let li = layers.length - 1; li >= 0; li--) {
@@ -784,11 +787,88 @@ export class PixelEngine {
       if (layer.kind === "group") continue;
 
       const effective = resolveLayerEffective(layer, byId);
+      const isClipped = Boolean(layer.clipped);
       if (!effective.visible || effective.opacity <= 0) {
+        if (!isClipped && (layer.kind === "raster" || layer.kind === "tilemap")) {
+          clipBaseAlpha = null;
+        }
         if (activeFloat && activeFloat.sourceLayerId === layer.id) {
           floatingComposited = true;
         }
         continue;
+      }
+
+      if (isClipped && !clipBaseAlpha) {
+        if (activeFloat && activeFloat.sourceLayerId === layer.id) {
+          floatingComposited = true;
+        }
+        continue;
+      }
+
+      const activeClipMask = isClipped ? clipBaseAlpha : null;
+
+      if (!isClipped && (layer.kind === "raster" || layer.kind === "tilemap")) {
+        const baseAlpha = new Uint8Array(pixelCount);
+        if (layer.kind === "tilemap") {
+          const tm = this.getTilemap(layer.id, frameIndex);
+          if (tm) {
+            const scratch = new Uint8ClampedArray(pixelCount * 4);
+            if (this.tileProjection === "isometric") {
+              renderIsometricTilemapToBuffer(
+                tm,
+                this.tilesetRegistry,
+                scratch,
+                this.width,
+                this.height,
+                effective.opacity,
+                "Normal",
+                this.tileAnimationElapsedMs
+              );
+            } else {
+              renderTilemapToBuffer(
+                tm,
+                this.tilesetRegistry,
+                scratch,
+                this.width,
+                this.height,
+                effective.opacity,
+                "Normal",
+                this.tileAnimationElapsedMs
+              );
+            }
+            for (let p = 0; p < pixelCount; p++) {
+              baseAlpha[p] = scratch[p * 4 + 3];
+            }
+          }
+        } else {
+          const cel = this.getCel(layer.id, frameIndex);
+          if (cel) {
+            for (let p = 0; p < pixelCount; p++) {
+              const a = cel.data[p * 4 + 3];
+              if (a > 0) {
+                baseAlpha[p] = Math.round(a * effective.opacity);
+              }
+            }
+          }
+          if (activeFloat && activeFloat.sourceLayerId === layer.id) {
+            const fBuf = activeFloat.pixels;
+            for (let sy = 0; sy < fBuf.height; sy++) {
+              const dy = activeFloat.offsetY + sy;
+              if (dy < 0 || dy >= this.height) continue;
+              for (let sx = 0; sx < fBuf.width; sx++) {
+                const dx = activeFloat.offsetX + sx;
+                if (dx < 0 || dx >= this.width) continue;
+                const fa = fBuf.data[(sy * fBuf.width + sx) * 4 + 3];
+                if (fa === 0) continue;
+                const p = dy * this.width + dx;
+                const sa = (fa / 255) * effective.opacity;
+                const da = baseAlpha[p] / 255;
+                baseAlpha[p] = Math.round((sa + da * (1 - sa)) * 255);
+              }
+            }
+          }
+        }
+        clipBaseAlpha = baseAlpha;
       }
 
       if (layer.kind === "tilemap") {
@@ -803,7 +883,8 @@ export class PixelEngine {
               this.height,
               effective.opacity,
               layer.blendMode,
-              this.tileAnimationElapsedMs
+              this.tileAnimationElapsedMs,
+              activeClipMask
             );
           } else {
             renderTilemapToBuffer(
@@ -814,7 +895,8 @@ export class PixelEngine {
               this.height,
               effective.opacity,
               layer.blendMode,
-              this.tileAnimationElapsedMs
+              this.tileAnimationElapsedMs,
+              activeClipMask
             );
           }
         }
@@ -829,7 +911,8 @@ export class PixelEngine {
             0,
             0,
             effective.opacity,
-            layer.blendMode
+            layer.blendMode,
+            activeClipMask
           );
         }
       }
@@ -843,7 +926,8 @@ export class PixelEngine {
           activeFloat.offsetX,
           activeFloat.offsetY,
           effective.opacity,
-          layer.blendMode
+          layer.blendMode,
+          activeClipMask
         );
         floatingComposited = true;
       }

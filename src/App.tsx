@@ -19,6 +19,7 @@ import { TopBar } from "./components/TopBar";
 import { Viewport } from "./components/Viewport";
 import { pixelEngine } from "./engine/document/PixelEngine";
 import { performRedo, performUndo } from "./engine/document/historyActions";
+import { mergeDownLayerAction } from "./engine/document/layerActions";
 import {
   captureCustomBrushFromSelectionAction,
   commitFloatingSelection,
@@ -202,6 +203,11 @@ export function App() {
         if (ctrlKey === "j") {
           e.preventDefault();
           copySelectionToNewLayer();
+          return;
+        }
+        if (ctrlKey === "m") {
+          e.preventDefault();
+          mergeDownLayerAction();
           return;
         }
         if (ctrlKey === "v") {

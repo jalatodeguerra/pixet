@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { BlendMode } from "../engine/document/blendModes";
 import type { PendingImageImport } from "../engine/io/imageImport";
 import type { AutoTileMode } from "../engine/tiles/autoTile";
 import type { CellFlags } from "../engine/tiles/cell";
@@ -13,6 +14,7 @@ import type { InkMode } from "../engine/tools/ink";
 import type { TransformAlgorithm, TransformState } from "../engine/tools/transform";
 
 export type {
+  BlendMode,
   BrushShape,
   CustomBrushData,
   DitherPattern,
@@ -94,7 +96,6 @@ export type ToolId =
   | "tileStamp"
   | "isoBox";
 
-export type BlendMode = "Normal" | "Multiply" | "Screen" | "Overlay" | "Add";
 export type LayerKind = "raster" | "group" | "tilemap" | "rig" | "data";
 
 export interface LayerItem {
@@ -107,6 +108,8 @@ export interface LayerItem {
   alphaLock: boolean;
   blendMode: BlendMode;
   parentId: string | null;
+  clipped?: boolean;
+  colorTag?: string | null;
   mapRole?: LayerMapRole;
   expanded?: boolean;
   cels: Record<number, boolean>;
@@ -333,6 +336,7 @@ interface EditorState {
   layers: LayerItem[];
   activeLayerId: string;
   selectedLayerIds: string[];
+  soloVisibilitySnapshot: Record<string, boolean> | null;
 
   frames: FrameItem[];
   currentFrame: number;
@@ -483,6 +487,9 @@ interface EditorState {
   toggleLayerAlphaLock: (id: string) => void;
   setLayerOpacity: (id: string, opacity: number) => void;
   setLayerBlendMode: (id: string, blendMode: BlendMode) => void;
+  toggleLayerClipped: (id: string) => void;
+  setLayerColorTag: (id: string, color: string | null) => void;
+  soloLayer: (id: string) => void;
   addLayer: () => void;
   addNamedLayer: (name: string) => string;
   addMapLayer: (role: "normal" | "emission", name?: string) => string;
@@ -859,6 +866,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   ],
   activeLayerId: "layer-outline",
   selectedLayerIds: ["layer-outline"],
+  soloVisibilitySnapshot: null,
 
   frames: [
     { id: "frame-1", index: 0, durationMs: 100 },
@@ -1311,6 +1319,66 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((s) => ({
       layers: s.layers.map((l) => (l.id === id ? { ...l, blendMode } : l)),
     })),
+  toggleLayerClipped: (id) =>
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, clipped: !l.clipped } : l
+      ),
+    })),
+  setLayerColorTag: (id, color) =>
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, colorTag: color } : l
+      ),
+    })),
+  soloLayer: (id) =>
+    set((s) => {
+      const target = s.layers.find((l) => l.id === id);
+      if (!target) return s;
+
+      const byId = new Map(s.layers.map((l) => [l.id, l]));
+      const allowedVisible = new Set<string>([id]);
+      let curParent = target.parentId;
+      const visited = new Set<string>([id]);
+      while (curParent && !visited.has(curParent)) {
+        visited.add(curParent);
+        allowedVisible.add(curParent);
+        curParent = byId.get(curParent)?.parentId ?? null;
+      }
+
+      const isAlreadySoloedOnId =
+        s.soloVisibilitySnapshot !== null &&
+        s.layers.every((l) =>
+          allowedVisible.has(l.id) ? l.visible : !l.visible
+        );
+
+      if (isAlreadySoloedOnId) {
+        const snapshot = s.soloVisibilitySnapshot!;
+        return {
+          layers: s.layers.map((l) => ({
+            ...l,
+            visible: snapshot[l.id] ?? l.visible,
+          })),
+          soloVisibilitySnapshot: null,
+        };
+      }
+
+      const nextSnapshot: Record<string, boolean> =
+        s.soloVisibilitySnapshot ?? {};
+      if (!s.soloVisibilitySnapshot) {
+        for (const l of s.layers) {
+          nextSnapshot[l.id] = l.visible;
+        }
+      }
+
+      return {
+        layers: s.layers.map((l) => ({
+          ...l,
+          visible: allowedVisible.has(l.id),
+        })),
+        soloVisibilitySnapshot: nextSnapshot,
+      };
+    }),
   addLayer: () =>
     set((s) => {
       const id = `layer-${layerCounter++}`;
@@ -1888,6 +1956,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       layers: payload.layers,
       activeLayerId: payload.layers[0]?.id ?? "",
       selectedLayerIds: payload.layers[0]?.id ? [payload.layers[0].id] : [],
+      soloVisibilitySnapshot: null,
       frames: payload.frames,
       currentFrame: 0,
       tags: payload.tags,
