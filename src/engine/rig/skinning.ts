@@ -14,8 +14,14 @@ import type {
  * runtime import cycle (RigEngine runtime-imports this module).
  */
 
-export type WeightBrushMode = "add" | "subtract" | "smooth" | "replace";
-export type WeightFalloff = "hard" | "linear";
+export type WeightBrushMode =
+  | "add"
+  | "subtract"
+  | "smooth"
+  | "replace"
+  | "sharpen"
+  | "scale";
+export type WeightFalloff = "hard" | "linear" | "smoothstep" | "gaussian";
 
 /** R0 hard cap on influences per pixel. */
 export const MAX_WEIGHT_INFLUENCES = 4;
@@ -36,6 +42,14 @@ export interface WeightPaintOptions {
   strength: number;
   mode: WeightBrushMode;
   falloff: WeightFalloff;
+  /** Bones whose existing weights must remain unchanged. */
+  lockedBoneIds?: ReadonlySet<string> | null;
+  /** Optional pixel selection mask; pixels outside are skipped. */
+  selectionMask?: { contains(x: number, y: number): boolean } | null;
+  /** Per-stroke max falloff reached per pixel index (prevents over-compounding). */
+  strokeVisitedMax?: Map<number, number> | null;
+  /** Snapshot of pixel influences at stroke start, paired with `strokeVisitedMax`. */
+  strokeBaseWeights?: ReadonlyMap<number, readonly BoneWeightInfluence[]> | null;
 }
 
 export interface PixelBounds {
@@ -153,8 +167,18 @@ export function falloffAt(
   if (falloff === "hard") {
     return distance <= r + 1e-6 ? 1 : 0;
   }
+  if (falloff === "gaussian") {
+    if (distance > r + 1e-6) return 0;
+    const u = distance / r;
+    return Math.exp(-(u * u) * 3.0);
+  }
   const t = 1 - distance / r;
-  return t <= 0 ? 0 : Math.min(1, t);
+  if (t <= 0) return 0;
+  const clamped = Math.min(1, t);
+  if (falloff === "smoothstep") {
+    return clamped * clamped * (3 - 2 * clamped);
+  }
+  return clamped;
 }
 
 /**
@@ -202,31 +226,115 @@ export function setBoneWeightNormalized(
   boneId: string,
   target: number
 ): BoneWeightInfluence[] {
-  const t = clamp01(target);
-  let otherSum = 0;
-  const others: BoneWeightInfluence[] = [];
+  return setBoneWeightNormalizedWithLocks(influences, boneId, target, null);
+}
+
+/**
+ * Normalizes `influences` while preserving the exact weights of `lockedBoneIds`
+ * (clamped so their sum does not exceed 1). Remaining weight is distributed
+ * across the strongest unlocked bones up to `MAX_WEIGHT_INFLUENCES`.
+ */
+export function normalizeInfluencesWithLocks(
+  influences: readonly BoneWeightInfluence[],
+  lockedBoneIds?: ReadonlySet<string> | null
+): BoneWeightInfluence[] {
+  if (!lockedBoneIds || lockedBoneIds.size === 0) {
+    return normalizeInfluences(influences);
+  }
+  const locked = new Map<string, number>();
+  const unlocked = new Map<string, number>();
   for (const influence of influences) {
-    if (influence.boneId === boneId) continue;
     if (!Number.isFinite(influence.w) || influence.w <= 1e-5) continue;
+    const map = lockedBoneIds.has(influence.boneId) ? locked : unlocked;
+    map.set(influence.boneId, (map.get(influence.boneId) ?? 0) + influence.w);
+  }
+  const lockedList: BoneWeightInfluence[] = Array.from(locked.entries())
+    .map(([boneId, w]) => ({ boneId, w }))
+    .sort((a, b) => b.w - a.w || a.boneId.localeCompare(b.boneId))
+    .slice(0, MAX_WEIGHT_INFLUENCES);
+
+  let lockedSum = 0;
+  for (const item of lockedList) lockedSum += item.w;
+  if (lockedSum > 1) {
+    for (const item of lockedList) item.w = item.w / lockedSum;
+    lockedSum = 1;
+  }
+
+  const remaining = Math.max(0, 1 - lockedSum);
+  const unlockedCap = Math.max(0, MAX_WEIGHT_INFLUENCES - lockedList.length);
+  const unlockedList = Array.from(unlocked.entries())
+    .map(([boneId, w]) => ({ boneId, w }))
+    .sort((a, b) => b.w - a.w || a.boneId.localeCompare(b.boneId))
+    .slice(0, unlockedCap);
+
+  if (remaining <= 1e-5 || unlockedList.length === 0) {
+    return lockedList;
+  }
+
+  let unlockedSum = 0;
+  for (const item of unlockedList) unlockedSum += item.w;
+  if (unlockedSum <= 0) return lockedList;
+  for (const item of unlockedList) {
+    item.w = (item.w / unlockedSum) * remaining;
+  }
+  return [...lockedList, ...unlockedList].sort(
+    (a, b) => b.w - a.w || a.boneId.localeCompare(b.boneId)
+  );
+}
+
+/**
+ * Forces `boneId` to `target` (0..1) while keeping `lockedBoneIds` exact and
+ * rescaling unlocked influences so total weight stays 1.
+ */
+export function setBoneWeightNormalizedWithLocks(
+  influences: readonly BoneWeightInfluence[],
+  boneId: string,
+  target: number,
+  lockedBoneIds?: ReadonlySet<string> | null
+): BoneWeightInfluence[] {
+  if (lockedBoneIds?.has(boneId)) {
+    return influences.map((inf) => ({ ...inf }));
+  }
+
+  const locked: BoneWeightInfluence[] = [];
+  const others: BoneWeightInfluence[] = [];
+  let lockedSum = 0;
+  let otherSum = 0;
+
+  for (const influence of influences) {
+    if (!Number.isFinite(influence.w) || influence.w <= 1e-5) continue;
+    if (lockedBoneIds?.has(influence.boneId)) {
+      locked.push({ boneId: influence.boneId, w: influence.w });
+      lockedSum += influence.w;
+      continue;
+    }
+    if (influence.boneId === boneId) continue;
     others.push({ boneId: influence.boneId, w: influence.w });
     otherSum += influence.w;
   }
 
-  if (others.length === 0) {
-    return t > 1e-5 ? [{ boneId, w: 1 }] : [];
-  }
-  if (t >= 1 - 1e-6) {
-    return [{ boneId, w: 1 }];
+  if (lockedSum > 1) {
+    for (const item of locked) item.w = item.w / lockedSum;
+    lockedSum = 1;
   }
 
-  const result: BoneWeightInfluence[] = [];
-  if (t > 1e-5) result.push({ boneId, w: t });
-  const scale = (1 - t) / otherSum;
-  for (const other of others) {
-    const w = other.w * scale;
-    if (w > 1e-5) result.push({ boneId: other.boneId, w });
+  const available = Math.max(0, 1 - lockedSum);
+  const t = Math.min(available, clamp01(target));
+  const next: BoneWeightInfluence[] = [...locked];
+  if (t > 1e-5) next.push({ boneId, w: t });
+
+  const remainder = Math.max(0, available - t);
+  if (remainder > 1e-5 && otherSum > 1e-5) {
+    const scale = remainder / otherSum;
+    for (const other of others) {
+      next.push({ boneId: other.boneId, w: other.w * scale });
+    }
+  } else if (next.length === 1 && t > 1e-5) {
+    next[0].w = 1;
+  } else if (next.length === 0 && others.length > 0) {
+    return normalizeInfluencesWithLocks(others, lockedBoneIds);
   }
-  return normalizeInfluences(result);
+  return normalizeInfluencesWithLocks(next, lockedBoneIds);
 }
 
 export function boneWeightAt(
@@ -310,30 +418,54 @@ export function paintWeightBrush(
   boneId: string,
   options: WeightPaintOptions
 ): BoneWeights {
+  const locked = options.lockedBoneIds ?? null;
+  if (
+    locked?.has(boneId) &&
+    options.mode !== "smooth" &&
+    options.mode !== "sharpen"
+  ) {
+    return weights;
+  }
+
   const radius = Math.max(0.5, options.radius);
   const strength = clamp01(options.strength);
   const rInt = Math.ceil(radius);
   const cx = options.cx;
   const cy = options.cy;
+  const mask = options.selectionMask ?? null;
+  const visitedMax = options.strokeVisitedMax ?? null;
+  const baseWeights = options.strokeBaseWeights ?? null;
 
   for (let y = Math.floor(cy) - rInt; y <= Math.floor(cy) + rInt; y++) {
     if (y < 0 || y >= weights.height) continue;
     for (let x = Math.floor(cx) - rInt; x <= Math.floor(cx) + rInt; x++) {
       if (x < 0 || x >= weights.width) continue;
+      if (mask && !mask.contains(x, y)) continue;
 
       const distance = Math.hypot(x - cx, y - cy);
       const falloff = falloffAt(distance, radius, options.falloff);
       if (falloff <= 0) continue;
 
       const index = y * weights.width + x;
-      const current = weights.entries.get(index) ?? [];
+      if (visitedMax) {
+        const prevMax = visitedMax.get(index) ?? 0;
+        if (falloff <= prevMax + 1e-6) continue;
+        visitedMax.set(index, falloff);
+      }
+
+      const current =
+        (visitedMax && baseWeights ? baseWeights.get(index) : undefined) ??
+        weights.entries.get(index) ??
+        [];
       let next: BoneWeightInfluence[];
 
       if (options.mode === "smooth") {
         const amount = strength * falloff;
         const averaged = averageNeighborhoodWeights(weights, x, y);
         const currentMap = new Map<string, number>();
-        for (const influence of current) currentMap.set(influence.boneId, influence.w);
+        for (const influence of current) {
+          currentMap.set(influence.boneId, influence.w);
+        }
 
         const blended: BoneWeightInfluence[] = [];
         const bones = new Set<string>([
@@ -342,11 +474,27 @@ export function paintWeightBrush(
         ]);
         for (const id of bones) {
           const now = currentMap.get(id) ?? 0;
+          if (locked?.has(id)) {
+            if (now > 1e-5) blended.push({ boneId: id, w: now });
+            continue;
+          }
           const target = averaged.get(id) ?? 0;
           const value = now + (target - now) * amount;
           if (value > 1e-5) blended.push({ boneId: id, w: value });
         }
-        next = normalizeInfluences(blended);
+        next = normalizeInfluencesWithLocks(blended, locked);
+      } else if (options.mode === "sharpen") {
+        const exp = 1 + strength * falloff * 2;
+        const sharpened: BoneWeightInfluence[] = [];
+        for (const influence of current) {
+          if (locked?.has(influence.boneId)) {
+            sharpened.push({ boneId: influence.boneId, w: influence.w });
+          } else {
+            const w = Math.pow(Math.max(0, influence.w), exp);
+            if (w > 1e-5) sharpened.push({ boneId: influence.boneId, w });
+          }
+        }
+        next = normalizeInfluencesWithLocks(sharpened, locked);
       } else {
         const currentWeight = current.reduce(
           (acc, influence) => (influence.boneId === boneId ? influence.w : acc),
@@ -357,7 +505,10 @@ export function paintWeightBrush(
         if (options.mode === "add") target = currentWeight + delta;
         else if (options.mode === "subtract") target = currentWeight - delta;
         else if (options.mode === "replace") target = delta;
-        next = setBoneWeightNormalized(current, boneId, target);
+        else if (options.mode === "scale") {
+          target = clamp01(currentWeight * (1 + (strength - 0.5) * 2 * falloff));
+        }
+        next = setBoneWeightNormalizedWithLocks(current, boneId, target, locked);
       }
 
       if (next.length === 0) {
@@ -366,6 +517,34 @@ export function paintWeightBrush(
         weights.entries.set(index, next);
       }
     }
+  }
+  return weights;
+}
+
+/**
+ * Paints a continuous weight-brush stroke from `(x0, y0)` to `(x1, y1)` using
+ * sub-pixel stepping so fast drags never leave gaps.
+ */
+export function paintWeightStroke(
+  weights: BoneWeights,
+  boneId: string,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  options: Omit<WeightPaintOptions, "cx" | "cy">
+): BoneWeights {
+  const radius = Math.max(0.5, options.radius);
+  const step = Math.max(0.5, radius * 0.35);
+  const dist = Math.hypot(x1 - x0, y1 - y0);
+  const steps = Math.max(1, Math.ceil(dist / step));
+  for (let i = 0; i <= steps; i++) {
+    const t = steps === 0 ? 0 : i / steps;
+    paintWeightBrush(weights, boneId, {
+      ...options,
+      cx: x0 + (x1 - x0) * t,
+      cy: y0 + (y1 - y0) * t,
+    });
   }
   return weights;
 }
@@ -653,18 +832,15 @@ export function sampleInverseTriangles(
 }
 
 /**
- * Per-pixel LBS of a cel: forward-map a sparse lattice over the opaque bounds,
- * then inverse-sample every destination pixel through the deformed triangles.
+ * Builds forward-mapped LBS lattice triangles over `bounds` for both skinning
+ * and posed-to-rest inverse point mapping.
  */
-export function skinLayerPixels(
-  src: PixelBuffer,
+export function buildSkinLatticeTriangles(
+  bounds: PixelBounds,
   weights: BoneWeights,
   transforms: BoneTransformMap,
   opts: SkinLayerOptions = {}
-): PixelBuffer {
-  const bounds = opaquePixelBounds(src);
-  if (!bounds) return src.clone();
-
+): InverseTriangle[] {
   const table = buildBoneDeformTable(transforms);
   const pixelSnap = opts.pixelSnap ?? false;
   const step = Math.max(
@@ -718,6 +894,108 @@ export function skinLayerPixels(
       );
     }
   }
+  return triangles;
+}
 
+/**
+ * Maps a posed-space pixel coordinate `(dx, dy)` back to rest-space pixel
+ * coordinates by inverting the deformed LBS lattice triangles.
+ */
+export function invertPosedPoint(
+  dx: number,
+  dy: number,
+  bounds: PixelBounds,
+  weights: BoneWeights,
+  transforms: BoneTransformMap,
+  opts: SkinLayerOptions = {}
+): Point2 {
+  const triangles = buildSkinLatticeTriangles(bounds, weights, transforms, opts);
+  const px = dx + 0.5;
+  const py = dy + 0.5;
+  const eps = 1e-4;
+
+  let bestTri: InverseTriangle | null = null;
+  let bestDistSq = Infinity;
+
+  for (const tri of triangles) {
+    const denom =
+      (tri.dy1 - tri.dy2) * (tri.dx0 - tri.dx2) +
+      (tri.dx2 - tri.dx1) * (tri.dy0 - tri.dy2);
+    if (Math.abs(denom) < 1e-9) continue;
+
+    const invDenom = 1 / denom;
+    const l0 =
+      ((tri.dy1 - tri.dy2) * (px - tri.dx2) +
+        (tri.dx2 - tri.dx1) * (py - tri.dy2)) *
+      invDenom;
+    const l1 =
+      ((tri.dy2 - tri.dy0) * (px - tri.dx2) +
+        (tri.dx0 - tri.dx2) * (py - tri.dy2)) *
+      invDenom;
+    const l2 = 1 - l0 - l1;
+
+    if (
+      l0 >= -eps &&
+      l0 <= 1 + eps &&
+      l1 >= -eps &&
+      l1 <= 1 + eps &&
+      l2 >= -eps &&
+      l2 <= 1 + eps
+    ) {
+      return {
+        x: l0 * tri.sx0 + l1 * tri.sx1 + l2 * tri.sx2 - 0.5,
+        y: l0 * tri.sy0 + l1 * tri.sy1 + l2 * tri.sy2 - 0.5,
+      };
+    }
+
+    const cx = (tri.dx0 + tri.dx1 + tri.dx2) / 3;
+    const cy = (tri.dy0 + tri.dy1 + tri.dy2) / 3;
+    const distSq = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      bestTri = tri;
+    }
+  }
+
+  if (bestTri) {
+    const denom =
+      (bestTri.dy1 - bestTri.dy2) * (bestTri.dx0 - bestTri.dx2) +
+      (bestTri.dx2 - bestTri.dx1) * (bestTri.dy0 - bestTri.dy2);
+    if (Math.abs(denom) >= 1e-9) {
+      const invDenom = 1 / denom;
+      const l0 =
+        ((bestTri.dy1 - bestTri.dy2) * (px - bestTri.dx2) +
+          (bestTri.dx2 - bestTri.dx1) * (py - bestTri.dy2)) *
+        invDenom;
+      const l1 =
+        ((bestTri.dy2 - bestTri.dy0) * (px - bestTri.dx2) +
+          (bestTri.dx0 - bestTri.dx2) * (py - bestTri.dy2)) *
+        invDenom;
+      const l2 = 1 - l0 - l1;
+      const rx = l0 * bestTri.sx0 + l1 * bestTri.sx1 + l2 * bestTri.sx2 - 0.5;
+      const ry = l0 * bestTri.sy0 + l1 * bestTri.sy1 + l2 * bestTri.sy2 - 0.5;
+      return {
+        x: Math.max(0, Math.min(weights.width - 1, rx)),
+        y: Math.max(0, Math.min(weights.height - 1, ry)),
+      };
+    }
+  }
+
+  return { x: dx, y: dy };
+}
+
+/**
+ * Per-pixel LBS of a cel: forward-map a sparse lattice over the opaque bounds,
+ * then inverse-sample every destination pixel through the deformed triangles.
+ */
+export function skinLayerPixels(
+  src: PixelBuffer,
+  weights: BoneWeights,
+  transforms: BoneTransformMap,
+  opts: SkinLayerOptions = {}
+): PixelBuffer {
+  const bounds = opaquePixelBounds(src);
+  if (!bounds) return src.clone();
+  const triangles = buildSkinLatticeTriangles(bounds, weights, transforms, opts);
   return sampleInverseTriangles(src, triangles);
 }

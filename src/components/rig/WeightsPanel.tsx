@@ -1,4 +1,5 @@
-import { Paintbrush } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { Lock, Paintbrush, Unlock } from "lucide-react";
 import { PixelBuffer } from "../../engine/document/PixelBuffer";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import {
@@ -6,6 +7,7 @@ import {
   defaultEnvelopeRadius,
 } from "../../engine/rig/autoWeights";
 import { mutateRig } from "../../engine/rig/rigActions";
+import { falloffAt } from "../../engine/rig/skinning";
 import { useEditorStore } from "../../store/editorStore";
 import { RigPanelSection } from "./RigPanelSection";
 
@@ -35,6 +37,11 @@ export function WeightsPanel() {
   const setRigWeightFalloff = useEditorStore((s) => s.setRigWeightFalloff);
   const rigWeightOverlay = useEditorStore((s) => s.rigWeightOverlay);
   const setRigWeightOverlay = useEditorStore((s) => s.setRigWeightOverlay);
+  const rigWeightAirbrush = useEditorStore((s) => s.rigWeightAirbrush);
+  const toggleRigWeightAirbrush = useEditorStore(
+    (s) => s.toggleRigWeightAirbrush
+  );
+  const falloffCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rigAutoWeightMethod = useEditorStore((s) => s.rigAutoWeightMethod);
   const setRigAutoWeightMethod = useEditorStore(
     (s) => s.setRigAutoWeightMethod
@@ -106,6 +113,28 @@ export function WeightsPanel() {
     setStatusMessage(`Auto-weighted pixels (${rigAutoWeightMethod})`);
   };
 
+  useEffect(() => {
+    const canvas = falloffCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.fillStyle = "#141414";
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "#4c8bf5";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const dist = (x / (w - 1)) * 1;
+      const val = falloffAt(dist, 1, rigWeightFalloff);
+      const y = h - 2 - val * (h - 4);
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }, [rigWeightFalloff, bones.length]);
+
   const selectedEnvelopeRadius = selectedBone
     ? selectedBone.envelopeRadius ??
       defaultEnvelopeRadius({
@@ -158,6 +187,30 @@ export function WeightsPanel() {
             <span>Show Influence</span>
           </label>
           <div style={{ display: "flex", gap: 4 }}>
+            {selectedBone && (
+              <button
+                type="button"
+                className={`mini-btn ${selectedBone.weightLocked ? "active" : ""}`}
+                title={
+                  selectedBone.weightLocked
+                    ? "Unlock bone weights"
+                    : "Lock bone weights against auto-weight and brush edits"
+                }
+                onClick={() => {
+                  mutateRig("Toggle bone weight lock", () => {
+                    pixelEngine.rig.updateBone(selectedBone.id, {
+                      weightLocked: !selectedBone.weightLocked,
+                    });
+                  });
+                }}
+              >
+                {selectedBone.weightLocked ? (
+                  <Lock size={11} />
+                ) : (
+                  <Unlock size={11} />
+                )}
+              </button>
+            )}
             <button
               type="button"
               className="mini-btn"
@@ -342,13 +395,15 @@ export function WeightsPanel() {
 
           <div className="rig-option-row">
             <span>Mode</span>
-            <div style={{ display: "flex", gap: 3 }}>
+            <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
               {(
                 [
                   ["add", "Add"],
                   ["subtract", "Sub"],
                   ["smooth", "Smooth"],
                   ["replace", "Replace"],
+                  ["sharpen", "Sharp"],
+                  ["scale", "Scale"],
                 ] as const
               ).map(([mode, label]) => (
                 <button
@@ -365,23 +420,49 @@ export function WeightsPanel() {
 
           <div className="rig-option-row">
             <span>Falloff</span>
-            <div style={{ display: "flex", gap: 3 }}>
-              {(
-                [
-                  ["hard", "Hard"],
-                  ["linear", "Linear"],
-                ] as const
-              ).map(([falloff, label]) => (
-                <button
-                  key={falloff}
-                  type="button"
-                  className={`mini-btn ${rigWeightFalloff === falloff ? "active" : ""}`}
-                  onClick={() => setRigWeightFalloff(falloff)}
-                >
-                  {label}
-                </button>
-              ))}
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 3 }}>
+                {(
+                  [
+                    ["hard", "Hard"],
+                    ["linear", "Linear"],
+                    ["smoothstep", "Smooth"],
+                    ["gaussian", "Gauss"],
+                  ] as const
+                ).map(([falloff, label]) => (
+                  <button
+                    key={falloff}
+                    type="button"
+                    className={`mini-btn ${rigWeightFalloff === falloff ? "active" : ""}`}
+                    onClick={() => setRigWeightFalloff(falloff)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <canvas
+                ref={falloffCanvasRef}
+                width={48}
+                height={20}
+                style={{
+                  border: "1px solid #303030",
+                  borderRadius: 0,
+                  flexShrink: 0,
+                }}
+                title="Brush falloff curve preview"
+              />
             </div>
+          </div>
+
+          <div className="rig-option-row">
+            <label className="modal-checkbox" style={{ fontSize: 11 }}>
+              <input
+                type="checkbox"
+                checked={rigWeightAirbrush}
+                onChange={toggleRigWeightAirbrush}
+              />
+              <span>Airbrush (Additive Drag)</span>
+            </label>
           </div>
 
           <span className="rotate3d-hint">

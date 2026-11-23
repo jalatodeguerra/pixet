@@ -8,6 +8,8 @@ import {
   FlipHorizontal2,
   Lock,
   Plus,
+  Shield,
+  ShieldOff,
   Sparkles,
   Trash2,
   Unlock,
@@ -196,7 +198,7 @@ export function BoneTreePanel() {
 
   const handleToggleFlags = (
     bone: Bone,
-    patch: { hidden?: boolean; locked?: boolean },
+    patch: { hidden?: boolean; locked?: boolean; weightLocked?: boolean },
     label: string
   ) => {
     mutateRig(label, () => pixelEngine.rig.updateBone(bone.id, patch));
@@ -558,6 +560,26 @@ export function BoneTreePanel() {
                   }}
                 >
                   {bone.hidden ? <EyeOff size={11} /> : <Eye size={11} />}
+                </button>
+                <button
+                  type="button"
+                  className={`icon-action-btn ${bone.weightLocked ? "active" : ""}`}
+                  style={{ width: 18, height: 18 }}
+                  title={bone.weightLocked ? "Unlock Weights" : "Lock Weights"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleFlags(
+                      bone,
+                      { weightLocked: !bone.weightLocked },
+                      "Toggle bone weight lock"
+                    );
+                  }}
+                >
+                  {bone.weightLocked ? (
+                    <Shield size={11} />
+                  ) : (
+                    <ShieldOff size={11} />
+                  )}
                 </button>
                 <button
                   type="button"

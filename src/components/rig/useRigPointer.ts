@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pixelEngine } from "../../engine/document/PixelEngine";
-import { solveTwoBoneIK } from "../../engine/rig/RigEngine";
+import {
+  type BoneWeightInfluence,
+  solveTwoBoneIK,
+} from "../../engine/rig/RigEngine";
 import {
   beginRigGesture,
   endRigGesture,
@@ -14,7 +17,6 @@ import {
   snapToPixelCenter,
 } from "../../engine/rig/skeletonTools";
 import { useEditorStore } from "../../store/editorStore";
-import { plotBresenhamLine } from "../../engine/tools/pixelAlgos";
 import {
   buildConstraintTargetShapes,
   buildRigBoneShapes,
@@ -72,6 +74,8 @@ interface RigDrag {
   eraseMask?: boolean;
   lastPx?: number;
   lastPy?: number;
+  strokeVisitedMax?: Map<number, number>;
+  strokeBaseWeights?: Map<number, BoneWeightInfluence[]>;
   historyStarted?: boolean;
 }
 
@@ -345,24 +349,69 @@ export function useRigPointer({
         state.setStatusMessage("Add or select a bone before painting weights");
         return true;
       }
+      const eraseMask = e.button === 2;
+      const effectiveMode = eraseMask ? "subtract" : state.rigWeightMode;
+      const targetBone = rig.bones.find((b) => b.id === targetBoneId);
+      if (
+        targetBone?.weightLocked &&
+        effectiveMode !== "smooth" &&
+        effectiveMode !== "sharpen"
+      ) {
+        state.setStatusMessage(`"${targetBone.name}" weights are locked`);
+        return true;
+      }
       if (state.selectedBoneId !== targetBoneId) {
         state.setSelectedBoneId(targetBoneId);
       }
       e.currentTarget.setPointerCapture(e.pointerId);
-      const eraseMask = e.button === 2;
+
+      const paintPt =
+        state.rigMode === "animate"
+          ? rig.mapPosedPointToRest(
+              pt.px,
+              pt.py,
+              state.currentFrame,
+              state.rigPixelSnap
+            )
+          : { x: pt.px, y: pt.py };
+
+      let strokeVisitedMax: Map<number, number> | undefined;
+      let strokeBaseWeights: Map<number, BoneWeightInfluence[]> | undefined;
+      if (!state.rigWeightAirbrush) {
+        strokeVisitedMax = new Map();
+        strokeBaseWeights = new Map();
+        const existing = rig.getBoneWeights();
+        if (existing) {
+          for (const [idx, infs] of existing.entries) {
+            strokeBaseWeights.set(
+              idx,
+              infs.map((inf) => ({ ...inf }))
+            );
+          }
+        }
+      }
+
+      const selectionMask =
+        state.rigAutoWeightRespectSelection && pixelEngine.selection
+          ? pixelEngine.selection
+          : null;
+
       beginRigGesture("Paint weights");
       mutateRig("Paint weights", () => {
         rig.paintBoneWeights(
           targetBoneId,
           state.canvasWidth,
           state.canvasHeight,
-          pt.px,
-          pt.py,
+          paintPt.x,
+          paintPt.y,
           state.rigBrushSize / 2,
           {
             strength: state.rigWeightStrength,
-            mode: eraseMask ? "subtract" : state.rigWeightMode,
+            mode: effectiveMode,
             falloff: state.rigWeightFalloff,
+            selectionMask,
+            strokeVisitedMax: strokeVisitedMax ?? null,
+            strokeBaseWeights: strokeBaseWeights ?? null,
           }
         );
       });
@@ -385,8 +434,10 @@ export function useRigPointer({
         addTipX: pt.px,
         addTipY: pt.py,
         eraseMask,
-        lastPx: pt.px,
-        lastPy: pt.py,
+        lastPx: paintPt.x,
+        lastPy: paintPt.y,
+        strokeVisitedMax,
+        strokeBaseWeights,
         historyStarted: true,
       };
       onHoverPixels(pt.px, pt.py);
@@ -722,28 +773,43 @@ export function useRigPointer({
 
     if (drag.kind === "weightPaint") {
       ensureGesture(drag, "Paint weights");
-      const lastX = drag.lastPx ?? pt.px;
-      const lastY = drag.lastPy ?? pt.py;
-      const segment = plotBresenhamLine(lastX, lastY, pt.px, pt.py);
+      const nextPt =
+        state.rigMode === "animate"
+          ? rig.mapPosedPointToRest(
+              pt.px,
+              pt.py,
+              state.currentFrame,
+              state.rigPixelSnap
+            )
+          : { x: pt.px, y: pt.py };
+      const lastX = drag.lastPx ?? nextPt.x;
+      const lastY = drag.lastPy ?? nextPt.y;
+      const selectionMask =
+        state.rigAutoWeightRespectSelection && pixelEngine.selection
+          ? pixelEngine.selection
+          : null;
       mutateRig("Paint weights", () => {
-        for (const point of segment) {
-          rig.paintBoneWeights(
-            drag.boneId,
-            state.canvasWidth,
-            state.canvasHeight,
-            point.x,
-            point.y,
-            state.rigBrushSize / 2,
-            {
-              strength: state.rigWeightStrength,
-              mode: drag.eraseMask ? "subtract" : state.rigWeightMode,
-              falloff: state.rigWeightFalloff,
-            }
-          );
-        }
+        rig.paintBoneWeightStroke(
+          drag.boneId,
+          state.canvasWidth,
+          state.canvasHeight,
+          lastX,
+          lastY,
+          nextPt.x,
+          nextPt.y,
+          state.rigBrushSize / 2,
+          {
+            strength: state.rigWeightStrength,
+            mode: drag.eraseMask ? "subtract" : state.rigWeightMode,
+            falloff: state.rigWeightFalloff,
+            selectionMask,
+            strokeVisitedMax: drag.strokeVisitedMax ?? null,
+            strokeBaseWeights: drag.strokeBaseWeights ?? null,
+          }
+        );
       });
-      drag.lastPx = pt.px;
-      drag.lastPy = pt.py;
+      drag.lastPx = nextPt.x;
+      drag.lastPy = nextPt.y;
       onHoverPixels(pt.px, pt.py);
       return true;
     }

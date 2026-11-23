@@ -371,6 +371,8 @@ interface EditorState {
   rigWeightFalloff: WeightFalloff;
   /** R6 influence overlay: selected-bone heatmap or per-bone colors. */
   rigWeightOverlay: RigWeightOverlayMode;
+  /** W1 airbrush accumulation toggle (when false, caps per-stroke dab falloff). */
+  rigWeightAirbrush: boolean;
   /** W0 smart auto-weight solver method. */
   rigAutoWeightMethod: AutoWeightMethod;
   /** W0 falloff power (0.5..6). */
@@ -662,6 +664,7 @@ interface EditorState {
   setRigWeightMode: (mode: WeightBrushMode) => void;
   setRigWeightFalloff: (falloff: WeightFalloff) => void;
   setRigWeightOverlay: (mode: RigWeightOverlayMode) => void;
+  toggleRigWeightAirbrush: () => void;
   setRigAutoWeightMethod: (method: AutoWeightMethod) => void;
   setRigAutoWeightPower: (power: number) => void;
   setRigAutoWeightColorPenalty: (penalty: number) => void;
@@ -958,6 +961,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigWeightMode: "add",
   rigWeightFalloff: "linear",
   rigWeightOverlay: "heatmap",
+  rigWeightAirbrush: false,
   rigAutoWeightMethod: "geodesic",
   rigAutoWeightPower: 2,
   rigAutoWeightColorPenalty: 0.35,
@@ -2167,6 +2171,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRigWeightMode: (rigWeightMode) => set({ rigWeightMode }),
   setRigWeightFalloff: (rigWeightFalloff) => set({ rigWeightFalloff }),
   setRigWeightOverlay: (rigWeightOverlay) => set({ rigWeightOverlay }),
+  toggleRigWeightAirbrush: () =>
+    set((s) => ({ rigWeightAirbrush: !s.rigWeightAirbrush })),
   setRigAutoWeightMethod: (rigAutoWeightMethod) => set({ rigAutoWeightMethod }),
   setRigAutoWeightPower: (power) =>
     set({ rigAutoWeightPower: Math.max(0.5, Math.min(6, power)) }),

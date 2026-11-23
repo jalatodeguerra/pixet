@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PixelBuffer } from "../src/engine/document/PixelBuffer.ts";
 import { computeAutoWeightsV2 } from "../src/engine/rig/autoWeights.ts";
-import { RigState } from "../src/engine/rig/RigEngine.ts";
-import { weightsAreHard } from "../src/engine/rig/skinning.ts";
+import {
+  renderBoneInfluenceOverlay,
+  RigState,
+} from "../src/engine/rig/RigEngine.ts";
+import {
+  falloffAt,
+  paintWeightBrush,
+  paintWeightStroke,
+  weightsAreHard,
+} from "../src/engine/rig/skinning.ts";
 
 function weightFor(
   infs: readonly { boneId: string; w: number }[] | undefined,
@@ -232,4 +240,171 @@ test("locked-bone and selection-mask preservation via RigState.autoAssignBoneWei
   restored.fromSnapshot(snap);
   assert.equal(restored.bones[0].weightLocked, true);
   assert.equal(restored.bones[0].envelopeRadius, 5);
+});
+
+test("W1: locked bone weight stays invariant under paintWeightBrush (add, subtract, smooth, sharpen)", () => {
+  const locked = new Set(["b1"]);
+  const weights = {
+    width: 4,
+    height: 4,
+    entries: new Map<number, { boneId: string; w: number }[]>([
+      [5, [{ boneId: "b1", w: 0.6 }, { boneId: "b2", w: 0.4 }]],
+      [6, [{ boneId: "b1", w: 0.6 }, { boneId: "b3", w: 0.4 }]],
+    ]),
+  };
+
+  paintWeightBrush(weights, "b1", {
+    cx: 1,
+    cy: 1,
+    radius: 2,
+    strength: 0.8,
+    mode: "add",
+    falloff: "linear",
+    lockedBoneIds: locked,
+  });
+  assert.ok(Math.abs(weightFor(weights.entries.get(5), "b1") - 0.6) < 1e-5);
+
+  paintWeightBrush(weights, "b2", {
+    cx: 1,
+    cy: 1,
+    radius: 2,
+    strength: 1,
+    mode: "add",
+    falloff: "hard",
+    lockedBoneIds: locked,
+  });
+  assert.ok(Math.abs(weightFor(weights.entries.get(5), "b1") - 0.6) < 1e-5);
+  assert.ok(Math.abs(weightFor(weights.entries.get(5), "b2") - 0.4) < 1e-5);
+
+  paintWeightBrush(weights, "b2", {
+    cx: 1,
+    cy: 1,
+    radius: 2,
+    strength: 0.5,
+    mode: "sharpen",
+    falloff: "hard",
+    lockedBoneIds: locked,
+  });
+  assert.ok(Math.abs(weightFor(weights.entries.get(5), "b1") - 0.6) < 1e-5);
+});
+
+test("W1: sharpen increases dominant unlocked bone share and scale adjusts target weight", () => {
+  const weights = {
+    width: 3,
+    height: 3,
+    entries: new Map<number, { boneId: string; w: number }[]>([
+      [4, [{ boneId: "b1", w: 0.7 }, { boneId: "b2", w: 0.3 }]],
+    ]),
+  };
+
+  paintWeightBrush(weights, "b1", {
+    cx: 1,
+    cy: 1,
+    radius: 1,
+    strength: 0.8,
+    mode: "sharpen",
+    falloff: "hard",
+  });
+  assert.ok(weightFor(weights.entries.get(4), "b1") > 0.7);
+  assert.ok(weightFor(weights.entries.get(4), "b2") < 0.3);
+
+  paintWeightBrush(weights, "b1", {
+    cx: 1,
+    cy: 1,
+    radius: 1,
+    strength: 0.25, // < 0.5 scales down
+    mode: "scale",
+    falloff: "hard",
+  });
+  const scaled = weights.entries.get(4)!;
+  const sum = scaled.reduce((a, b) => a + b.w, 0);
+  assert.ok(Math.abs(sum - 1) < 1e-5);
+  assert.ok(weightFor(scaled, "b1") < 0.7);
+});
+
+test("W1: smoothstep and gaussian falloff curves at d=0, d=r/2, d=r", () => {
+  assert.equal(falloffAt(0, 4, "smoothstep"), 1);
+  assert.ok(Math.abs(falloffAt(2, 4, "smoothstep") - 0.5) < 1e-6);
+  assert.equal(falloffAt(4, 4, "smoothstep"), 0);
+
+  assert.equal(falloffAt(0, 4, "gaussian"), 1);
+  assert.ok(Math.abs(falloffAt(2, 4, "gaussian") - Math.exp(-0.75)) < 1e-6);
+  assert.ok(Math.abs(falloffAt(4, 4, "gaussian") - Math.exp(-3.0)) < 1e-6);
+  assert.equal(falloffAt(4.1, 4, "gaussian"), 0);
+});
+
+test("W1: paintWeightStroke with per-stroke cap does not over-compound and respects selectionMask", () => {
+  const weights = {
+    width: 8,
+    height: 4,
+    entries: new Map<number, { boneId: string; w: number }[]>([
+      [1 * 8 + 2, [{ boneId: "b2", w: 1 }]],
+      [1 * 8 + 4, [{ boneId: "b2", w: 1 }]],
+    ]),
+  };
+  const baseWeights = new Map(
+    Array.from(weights.entries.entries()).map(([k, v]) => [k, v.map((i) => ({ ...i }))])
+  );
+  const visitedMax = new Map<number, number>();
+  const selectionMask = {
+    contains: (x: number, _y: number) => x <= 3,
+  };
+
+  paintWeightStroke(weights, "b1", 1, 1, 5, 1, {
+    radius: 2,
+    strength: 0.4,
+    mode: "add",
+    falloff: "hard",
+    selectionMask,
+    strokeVisitedMax: visitedMax,
+    strokeBaseWeights: baseWeights,
+  });
+
+  // Inside selection mask (x=2): capped at 0 + 0.4 = 0.4 despite multiple overlapping dabs
+  assert.ok(Math.abs(weightFor(weights.entries.get(1 * 8 + 2), "b1") - 0.4) < 1e-5);
+  // Outside selection mask (x=4): untouched
+  assert.equal(weightFor(weights.entries.get(1 * 8 + 4), "b1"), 0);
+  assert.equal(weightFor(weights.entries.get(1 * 8 + 4), "b2"), 1);
+});
+
+test("W1: mapPosedPointToRest and renderBoneInfluenceOverlay follow bone deformation in animate mode", () => {
+  const rig = new RigState();
+  const bone = rig.addBone({
+    name: "Arm",
+    parentId: null,
+    localX: 4,
+    localY: 4,
+    length: 6,
+    rotationDeg: 0,
+  });
+
+  const entries = new Map<number, { boneId: string; w: number }[]>();
+  for (let y = 3; y <= 5; y++) {
+    for (let x = 4; x <= 10; x++) {
+      entries.set(y * 16 + x, [{ boneId: bone.id, w: 1 }]);
+    }
+  }
+  rig.setBoneWeights({ width: 16, height: 16, entries });
+
+  // Rotate bone 90 degrees on frame 0 in active clip
+  rig.setPoseOverride(bone.id, { rotationDeg: 90 }, 0);
+
+  // Rest point (8, 4) is 4px along +X from joint (4, 4).
+  // Under +90 deg rotation, it moves to (4, 8) (4px along +Y from joint (4, 4)).
+  const restMapped = rig.mapPosedPointToRest(4, 8, 0, false);
+  assert.ok(
+    Math.hypot(restMapped.x - 8, restMapped.y - 4) < 1.2,
+    `expected posed (4,8) to map near rest (8,4), got (${restMapped.x.toFixed(2)}, ${restMapped.y.toFixed(2)})`
+  );
+
+  // Deformed overlay in animate mode should place alpha > 0 at (4, 8) and 0 at (8, 4)
+  const overlay = new PixelBuffer(16, 16);
+  renderBoneInfluenceOverlay(rig, overlay, bone.id, {
+    mode: "heatmap",
+    rigMode: "animate",
+    frame: 0,
+    pixelSnap: false,
+  });
+  assert.ok(overlay.getPixel(4, 8)[3] > 0, "expected deformed overlay pixel at (4,8)");
+  assert.equal(overlay.getPixel(8, 4)[3], 0, "expected rest-only pixel (8,4) to be empty after 90deg rotation");
 });

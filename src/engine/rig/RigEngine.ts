@@ -7,8 +7,12 @@ import {
   type AutoWeightV2Options,
 } from "./autoWeights.ts";
 import {
+  buildBoneTransformMap,
+  invertPosedPoint,
   normalizeInfluences,
   paintWeightBrush,
+  paintWeightStroke,
+  skinLayerPixels,
   type WeightBrushMode,
   type WeightFalloff,
 } from "./skinning.ts";
@@ -1242,6 +1246,29 @@ export class RigState {
     }
   }
 
+  private ensureWeightMap(width: number, height: number): BoneWeights {
+    let weights = this.skinWeights;
+    if (!weights || weights.width !== width || weights.height !== height) {
+      const derived = masksToBoneWeights(this.boneMasks);
+      weights =
+        derived && derived.width === width && derived.height === height
+          ? derived
+          : { width, height, entries: new Map() };
+      this.skinWeights = weights;
+      this.cachedWeights = weights;
+    }
+    return weights;
+  }
+
+  private getLockedWeightBoneIds(respectLockedBones = true): Set<string> | null {
+    if (!respectLockedBones) return null;
+    const locked = new Set<string>();
+    for (const bone of this.bones) {
+      if (bone.weightLocked) locked.add(bone.id);
+    }
+    return locked.size > 0 ? locked : null;
+  }
+
   /**
    * Paints one smooth-weight brush dab (strength/mode/falloff) for `boneId`.
    * Every touched pixel keeps its influences normalized and capped at 4.
@@ -1257,19 +1284,14 @@ export class RigState {
       strength: number;
       mode: WeightBrushMode;
       falloff: WeightFalloff;
+      selectionMask?: { contains(x: number, y: number): boolean } | null;
+      strokeVisitedMax?: Map<number, number> | null;
+      strokeBaseWeights?: ReadonlyMap<number, readonly BoneWeightInfluence[]> | null;
+      respectLockedBones?: boolean;
     }
   ): void {
     if (!this.bones.some((b) => b.id === boneId)) return;
-    let weights = this.skinWeights;
-    if (!weights || weights.width !== width || weights.height !== height) {
-      const derived = masksToBoneWeights(this.boneMasks);
-      weights =
-        derived && derived.width === width && derived.height === height
-          ? derived
-          : { width, height, entries: new Map() };
-      this.skinWeights = weights;
-      this.cachedWeights = weights;
-    }
+    const weights = this.ensureWeightMap(width, height);
     paintWeightBrush(weights, boneId, {
       cx,
       cy,
@@ -1277,9 +1299,101 @@ export class RigState {
       strength: options.strength,
       mode: options.mode,
       falloff: options.falloff,
+      lockedBoneIds: this.getLockedWeightBoneIds(
+        options.respectLockedBones ?? true
+      ),
+      selectionMask: options.selectionMask ?? null,
+      strokeVisitedMax: options.strokeVisitedMax ?? null,
+      strokeBaseWeights: options.strokeBaseWeights ?? null,
     });
     this.rebuildMasksFromWeights();
     this.invalidateEvaluation();
+  }
+
+  /**
+   * Paints a continuous weight-brush stroke from `(x0, y0)` to `(x1, y1)`.
+   */
+  paintBoneWeightStroke(
+    boneId: string,
+    width: number,
+    height: number,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    radius: number,
+    options: {
+      strength: number;
+      mode: WeightBrushMode;
+      falloff: WeightFalloff;
+      selectionMask?: { contains(x: number, y: number): boolean } | null;
+      strokeVisitedMax?: Map<number, number> | null;
+      strokeBaseWeights?: ReadonlyMap<number, readonly BoneWeightInfluence[]> | null;
+      respectLockedBones?: boolean;
+    }
+  ): void {
+    if (!this.bones.some((b) => b.id === boneId)) return;
+    const weights = this.ensureWeightMap(width, height);
+    paintWeightStroke(weights, boneId, x0, y0, x1, y1, {
+      radius,
+      strength: options.strength,
+      mode: options.mode,
+      falloff: options.falloff,
+      lockedBoneIds: this.getLockedWeightBoneIds(
+        options.respectLockedBones ?? true
+      ),
+      selectionMask: options.selectionMask ?? null,
+      strokeVisitedMax: options.strokeVisitedMax ?? null,
+      strokeBaseWeights: options.strokeBaseWeights ?? null,
+    });
+    this.rebuildMasksFromWeights();
+    this.invalidateEvaluation();
+  }
+
+  /**
+   * Maps a posed-space canvas coordinate `(x, y)` back to rest-space pixel
+   * coordinates using the inverse of the deformed LBS lattice.
+   */
+  mapPosedPointToRest(
+    x: number,
+    y: number,
+    frame = 0,
+    pixelSnap = false
+  ): { x: number; y: number } {
+    const weights = this.getBoneWeights();
+    if (!weights || weights.entries.size === 0 || this.bones.length === 0) {
+      return { x, y };
+    }
+
+    let minX = weights.width;
+    let minY = weights.height;
+    let maxX = -1;
+    let maxY = -1;
+    for (const index of weights.entries.keys()) {
+      const px = index % weights.width;
+      const py = Math.floor(index / weights.width);
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+    if (maxX < minX || maxY < minY) return { x, y };
+
+    const padMinX = Math.max(0, minX - 1);
+    const padMinY = Math.max(0, minY - 1);
+    const padMaxX = Math.min(weights.width - 1, maxX + 1);
+    const padMaxY = Math.min(weights.height - 1, maxY + 1);
+    const bounds = {
+      x: padMinX,
+      y: padMinY,
+      width: padMaxX - padMinX + 1,
+      height: padMaxY - padMinY + 1,
+    };
+
+    const rest = this.computeWorldTransforms(frame, "rest", false);
+    const posed = this.computeWorldTransforms(frame, "pose", true);
+    const transforms = buildBoneTransformMap(rest, posed);
+    return invertPosedPoint(x, y, bounds, weights, transforms, { pixelSnap });
   }
 
   /**
@@ -2817,42 +2931,83 @@ function constraintReferencesBone(
 /**
  * Draws per-bone color-coded influence masks onto `overlay` for live visual
  * preview. Pass `mode: "heatmap"` to show the selected bone's weight as an
- * alpha heatmap instead (R6 default in the UI).
+ * alpha heatmap instead (R6 default in the UI). When `rigMode === "animate"`,
+ * deforms the overlay with the live bone pose so weights follow the sprite.
  */
 export function renderBoneInfluenceOverlay(
   rig: RigState,
   overlay: PixelBuffer,
   selectedBoneId: string | null,
-  opts: { mode?: "boneColors" | "heatmap" } = {}
+  opts: {
+    mode?: "boneColors" | "heatmap";
+    rigMode?: "setup" | "animate";
+    frame?: number;
+    pixelSnap?: boolean;
+  } = {}
 ): void {
-  if (opts.mode === "heatmap") {
-    renderBoneWeightHeatmap(rig, overlay, selectedBoneId);
-    return;
-  }
+  const weights = rig.getBoneWeights();
+  let target = overlay;
+  let shouldDeform = false;
 
-  const w = overlay.width;
-  const h = overlay.height;
-  const out = overlay.data;
-
-  for (let bi = 0; bi < rig.bones.length; bi++) {
-    const bone = rig.bones[bi];
-    const mask = rig.getBoneMask(bone.id);
-    if (!mask || mask.width !== w || mask.height !== h) continue;
-
-    const color = getBoneInfluenceColor(bi);
-    const alpha = bone.id === selectedBoneId ? 145 : 65;
-    const len = w * h;
-    for (let i = 0; i < len; i++) {
-      if (mask.data[i] === 0) continue;
-      const pIdx = i * 4;
-      out[pIdx] = color[0];
-      out[pIdx + 1] = color[1];
-      out[pIdx + 2] = color[2];
-      out[pIdx + 3] = alpha;
+  if (opts.rigMode === "animate" && weights && weights.entries.size > 0) {
+    const frame = opts.frame ?? 0;
+    const rest = rig.computeWorldTransforms(frame, "rest", false);
+    const posed = rig.computeWorldTransforms(frame, "pose", true);
+    for (const [id, r] of rest.entries()) {
+      const p = posed.get(id);
+      if (
+        p &&
+        (Math.abs(p.x - r.x) > 1e-4 ||
+          Math.abs(p.y - r.y) > 1e-4 ||
+          Math.abs(p.worldRotationDeg - r.worldRotationDeg) > 1e-4)
+      ) {
+        shouldDeform = true;
+        break;
+      }
+    }
+    if (shouldDeform) {
+      target = new PixelBuffer(overlay.width, overlay.height);
     }
   }
 
-  overlay.markAllDirty();
+  if (opts.mode === "heatmap") {
+    renderBoneWeightHeatmap(rig, target, selectedBoneId);
+  } else {
+    const w = target.width;
+    const h = target.height;
+    const out = target.data;
+
+    for (let bi = 0; bi < rig.bones.length; bi++) {
+      const bone = rig.bones[bi];
+      const mask = rig.getBoneMask(bone.id);
+      if (!mask || mask.width !== w || mask.height !== h) continue;
+
+      const color = getBoneInfluenceColor(bi);
+      const alpha = bone.id === selectedBoneId ? 145 : 65;
+      const len = w * h;
+      for (let i = 0; i < len; i++) {
+        if (mask.data[i] === 0) continue;
+        const pIdx = i * 4;
+        out[pIdx] = color[0];
+        out[pIdx + 1] = color[1];
+        out[pIdx + 2] = color[2];
+        out[pIdx + 3] = alpha;
+      }
+    }
+    target.markAllDirty();
+  }
+
+  if (shouldDeform && weights) {
+    const frame = opts.frame ?? 0;
+    const rest = rig.computeWorldTransforms(frame, "rest", false);
+    const posed = rig.computeWorldTransforms(frame, "pose", true);
+    const transforms = buildBoneTransformMap(rest, posed);
+    const deformed = skinLayerPixels(target, weights, transforms, {
+      pixelSnap: opts.pixelSnap ?? false,
+    });
+    overlay.data.set(deformed.data);
+    overlay.markAllDirty();
+  }
 }
 
 /**
@@ -2864,7 +3019,8 @@ export function renderBoneWeightHeatmap(
   overlay: PixelBuffer,
   boneId: string | null
 ): void {
-  if (!boneId) return;
+  const effectiveBoneId = boneId ?? rig.bones[0]?.id ?? null;
+  if (!effectiveBoneId) return;
   const weights = rig.getBoneWeights();
   if (!weights) return;
   if (weights.width !== overlay.width || weights.height !== overlay.height) return;
@@ -2874,7 +3030,7 @@ export function renderBoneWeightHeatmap(
   for (const [index, influences] of weights.entries) {
     let weight = 0;
     for (const influence of influences) {
-      if (influence.boneId === boneId) {
+      if (influence.boneId === effectiveBoneId) {
         weight = influence.w;
         break;
       }

@@ -308,9 +308,14 @@ export function Viewport() {
           pixelEngine.rig,
           pixelEngine.overlayBuffer,
           state.selectedBoneId,
-          { mode: state.rigWeightOverlay }
+          {
+            mode: state.rigWeightOverlay,
+            rigMode: state.rigMode,
+            frame: state.currentFrame,
+            pixelSnap: state.rigPixelSnap,
+          }
         );
-      } else if (state.workspaceMode !== "rig" && !hasActiveDrawStrokeRef.current()) {
+      } else if (!hasActiveDrawStrokeRef.current()) {
         pixelEngine.clearOverlay();
       }
       renderer.uploadOverlay(
@@ -531,7 +536,12 @@ export function Viewport() {
           pixelEngine.rig,
           pixelEngine.overlayBuffer,
           state.selectedBoneId,
-          { mode: state.rigWeightOverlay }
+          {
+            mode: state.rigWeightOverlay,
+            rigMode: state.rigMode,
+            frame: state.currentFrame,
+            pixelSnap: state.rigPixelSnap,
+          }
         );
       }
       if (
@@ -764,7 +774,12 @@ export function Viewport() {
           pixelEngine.rig,
           pixelEngine.overlayBuffer,
           state.selectedBoneId,
-          { mode: state.rigWeightOverlay }
+          {
+            mode: state.rigWeightOverlay,
+            rigMode: state.rigMode,
+            frame: state.currentFrame,
+            pixelSnap: state.rigPixelSnap,
+          }
         );
       }
       renderOverlayOnly();
