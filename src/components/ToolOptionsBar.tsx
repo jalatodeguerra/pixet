@@ -1,13 +1,17 @@
 import {
   Box,
+  Contrast,
+  EyeOff,
   FlipHorizontal2,
   FlipVertical2,
   Grid2x2,
   Grid3x3,
   Infinity as InfinityIcon,
+  LayoutGrid,
   Redo2,
   RotateCcw,
   RotateCw,
+  Ruler,
   Sparkles,
   Square,
   Undo2,
@@ -59,6 +63,16 @@ export function ToolOptionsBar() {
   const toggleShowIsoGrid = useEditorStore((s) => s.toggleShowIsoGrid);
   const isoBoxHeight = useEditorStore((s) => s.isoBoxHeight);
   const setIsoBoxHeight = useEditorStore((s) => s.setIsoBoxHeight);
+  const viewFlipH = useEditorStore((s) => s.viewFlipH);
+  const toggleViewFlipH = useEditorStore((s) => s.toggleViewFlipH);
+  const viewGrayscale = useEditorStore((s) => s.viewGrayscale);
+  const toggleViewGrayscale = useEditorStore((s) => s.toggleViewGrayscale);
+  const viewSilhouette = useEditorStore((s) => s.viewSilhouette);
+  const toggleViewSilhouette = useEditorStore((s) => s.toggleViewSilhouette);
+  const showRulers = useEditorStore((s) => s.showRulers);
+  const toggleShowRulers = useEditorStore((s) => s.toggleShowRulers);
+  const showCustomGrid = useEditorStore((s) => s.showCustomGrid);
+  const toggleShowCustomGrid = useEditorStore((s) => s.toggleShowCustomGrid);
   const layers = useEditorStore((s) => s.layers);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const canUndo = useEditorStore((s) => s.canUndo);
@@ -348,6 +362,57 @@ export function ToolOptionsBar() {
           <Box size={12} />
           <span>Iso Grid</span>
         </button>
+
+        {workspaceMode === "draw" && (
+          <>
+            <div className="option-divider" />
+            <button
+              type="button"
+              className={`toggle-chip ${viewFlipH ? "active" : ""}`}
+              onClick={toggleViewFlipH}
+              title="Non-destructive Flip View Horizontal (H)"
+            >
+              <FlipHorizontal2 size={12} />
+              <span>Flip H</span>
+            </button>
+            <button
+              type="button"
+              className={`toggle-chip ${viewGrayscale ? "active" : ""}`}
+              onClick={toggleViewGrayscale}
+              title="Non-destructive Grayscale Value Check"
+            >
+              <Contrast size={12} />
+              <span>Gray</span>
+            </button>
+            <button
+              type="button"
+              className={`toggle-chip ${viewSilhouette ? "active" : ""}`}
+              onClick={toggleViewSilhouette}
+              title="Non-destructive Silhouette Check"
+            >
+              <EyeOff size={12} />
+              <span>Silh</span>
+            </button>
+            <button
+              type="button"
+              className={`toggle-chip ${showRulers ? "active" : ""}`}
+              onClick={toggleShowRulers}
+              title="Toggle Pixel Rulers & Guides"
+            >
+              <Ruler size={12} />
+              <span>Rulers</span>
+            </button>
+            <button
+              type="button"
+              className={`toggle-chip ${showCustomGrid ? "active" : ""}`}
+              onClick={toggleShowCustomGrid}
+              title="Toggle Custom Grid Overlay"
+            >
+              <LayoutGrid size={12} />
+              <span>C-Grid</span>
+            </button>
+          </>
+        )}
 
         {activeTool === "isoBox" && (
           <label className="option-label">

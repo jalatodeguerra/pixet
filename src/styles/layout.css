@@ -186,21 +186,23 @@
 
 /* Tool Options Bar */
 .tool-options-bar {
-  height: var(--optionsbar-height);
+  min-height: var(--optionsbar-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 2px 12px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
-  gap: 14px;
+  gap: 10px;
+  overflow-x: auto;
 }
 
 .options-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .option-divider {
@@ -2740,3 +2742,362 @@
 .draw-footprint-outline.eraser {
   stroke: rgba(232, 232, 232, 0.85);
 }
+
+/* D1 Draw Sidebar Panels */
+.draw-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.draw-field-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.draw-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.draw-action-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.draw-chip-btn {
+  justify-content: center;
+  min-width: 0;
+  padding: 4px 6px;
+}
+
+.draw-slider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.draw-slider-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 38px;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.draw-range {
+  width: 100%;
+  min-width: 0;
+}
+
+.draw-val {
+  text-align: right;
+  font-size: 10px;
+}
+
+.draw-select-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.draw-num-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.draw-num-field {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.draw-num-input {
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-root);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+}
+
+.draw-num-input:focus {
+  border-color: var(--accent);
+}
+
+/* D1 Viewport Backdrops & Reference Image */
+.viewport-canvas-frame.backdrop-checkerLight {
+  background-color: #cccccc;
+  background-image:
+    linear-gradient(45deg, #ececec 25%, transparent 25%),
+    linear-gradient(-45deg, #ececec 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #ececec 75%),
+    linear-gradient(-45deg, transparent 75%, #ececec 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.viewport-canvas-frame.backdrop-solidDark {
+  background-color: #141414;
+  background-image: none;
+}
+
+.viewport-canvas-frame.backdrop-solidMid {
+  background-color: #4a4a4a;
+  background-image: none;
+}
+
+.viewport-canvas-frame.backdrop-custom {
+  background-image: none;
+}
+
+.viewport-reference-img {
+  position: absolute;
+  pointer-events: none;
+  image-rendering: pixelated;
+  max-width: none;
+  max-height: none;
+  z-index: 3;
+}
+
+/* D1 Guides & Custom Grid */
+.draw-guide-line {
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  shape-rendering: crispEdges;
+}
+
+.draw-custom-grid-line {
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  shape-rendering: crispEdges;
+}
+
+/* D1 Pixel Rulers */
+.draw-rulers-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.draw-ruler-corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  pointer-events: auto;
+}
+
+.draw-ruler-top {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow: hidden;
+  cursor: row-resize;
+  pointer-events: auto;
+}
+
+.draw-ruler-left {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-subtle);
+  overflow: hidden;
+  cursor: col-resize;
+  pointer-events: auto;
+}
+
+.draw-ruler-tick-h {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border-strong);
+  padding-left: 2px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.draw-ruler-tick-v {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--border-strong);
+  padding-top: 1px;
+  padding-left: 2px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 9px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.draw-ruler-guide-mark-h {
+  position: absolute;
+  bottom: 0;
+  width: 2px;
+  height: 5px;
+  margin-left: -1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.draw-ruler-guide-mark-v {
+  position: absolute;
+  right: 0;
+  width: 5px;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.draw-ruler-span-h {
+  position: absolute;
+  height: 2px;
+  background: rgba(76, 139, 245, 0.45);
+  pointer-events: none;
+}
+
+.draw-ruler-span-v {
+  position: absolute;
+  width: 2px;
+  background: rgba(76, 139, 245, 0.45);
+  pointer-events: none;
+}
+
+/* D1 Command Palette */
+.draw-cmd-backdrop {
+  align-items: flex-start;
+  padding-top: 72px;
+  z-index: 120;
+}
+
+.draw-cmd-modal {
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 0px;
+  display: flex;
+  flex-direction: column;
+}
+
+.draw-cmd-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 10px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.draw-cmd-search-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.draw-cmd-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.draw-cmd-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  gap: 2px;
+}
+
+.draw-cmd-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  border-radius: 0px;
+}
+
+.draw-cmd-item:hover,
+.draw-cmd-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.draw-cmd-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.draw-cmd-category {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  min-width: 46px;
+  flex-shrink: 0;
+}
+
+.draw-cmd-label {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draw-cmd-shortcut {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.draw-cmd-empty {
+  padding: 16px 10px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+

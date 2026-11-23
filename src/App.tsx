@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { CanvasSizeModal } from "./components/CanvasSizeModal";
+import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportModal } from "./components/ExportModal";
 import { RigExportModal } from "./components/rig/RigExportModal";
@@ -120,6 +121,15 @@ export function App() {
         target.tagName === "SELECT");
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
+        const st = useEditorStore.getState();
+        if (st.commandPaletteOpen || !isEditable(e.target)) {
+          e.preventDefault();
+          st.setCommandPaletteOpen(!st.commandPaletteOpen);
+          return;
+        }
+      }
+
       if (isEditable(e.target)) {
         return;
       }
@@ -431,6 +441,16 @@ export function App() {
         return;
       }
 
+      if (key === "h" && state.workspaceMode === "draw") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          state.toggleViewFlipV();
+        } else {
+          state.toggleViewFlipH();
+        }
+        return;
+      }
+
       const mappedTool = DRAW_TOOL_SHORTCUTS[key];
       if (mappedTool) {
         state.setActiveTool(mappedTool);
@@ -570,6 +590,7 @@ export function App() {
       <NewSpriteModal />
       <CanvasSizeModal />
       <ImportTilesetModal />
+      <CommandPalette />
       <ContextMenu />
       {isDragOver && (
         <div className="dropzone-overlay">

@@ -14,14 +14,22 @@ import {
   selectAllCanvas,
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
-import { WebGL2Renderer } from "../engine/renderer/WebGL2Renderer";
+import {
+  resolveRendererBackdrop,
+  WebGL2Renderer,
+} from "../engine/renderer/WebGL2Renderer";
 import { renderBoneInfluenceOverlay } from "../engine/rig/RigEngine";
 import { buildIsoGridSvgPath } from "../engine/tiles/isometric";
 import { expandBrushFootprint, type Point } from "../engine/tools/pixelAlgos";
 import { buildSelectionSvgPath } from "../engine/tools/selection";
+import {
+  applyViewCheckFilter,
+  mapFlippedPoint,
+} from "../engine/tools/viewChecks";
 import { useEditorStore } from "../store/editorStore";
 import { PALETTE_PRESETS } from "../utils/paletteParser";
 import { DrawOverlay } from "./draw/DrawOverlay";
+import { RulersOverlay } from "./draw/RulersOverlay";
 import { useDrawPointer } from "./draw/useDrawPointer";
 import { RigOverlay } from "./rig/RigOverlay";
 import { useRigPointer } from "./rig/useRigPointer";
@@ -51,6 +59,14 @@ export function Viewport() {
   const showIsoGrid = useEditorStore((s) => s.showIsoGrid);
   const tileWidth = useEditorStore((s) => s.tileWidth);
   const tileHeight = useEditorStore((s) => s.tileHeight);
+  const viewFlipH = useEditorStore((s) => s.viewFlipH);
+  const viewFlipV = useEditorStore((s) => s.viewFlipV);
+  const viewGrayscale = useEditorStore((s) => s.viewGrayscale);
+  const viewSilhouette = useEditorStore((s) => s.viewSilhouette);
+  const canvasBackdrop = useEditorStore((s) => s.canvasBackdrop);
+  const canvasBackdropColor = useEditorStore((s) => s.canvasBackdropColor);
+  const showRulers = useEditorStore((s) => s.showRulers);
+  const referenceImage = useEditorStore((s) => s.referenceImage);
   const onionSkin = useEditorStore((s) => s.onionSkin);
   const onionPrevFrames = useEditorStore((s) => s.onionPrevFrames);
   const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
@@ -84,6 +100,8 @@ export function Viewport() {
   const paletteLutPresetName = useEditorStore((s) => s.paletteLutPresetName);
   const palette = useEditorStore((s) => s.palette);
 
+  const stageRef = useRef<HTMLDivElement>(null);
+  const canvasFrameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapGhostRef = useRef<HTMLCanvasElement>(null);
   const wrapScratchRef = useRef<HTMLCanvasElement | null>(null);
@@ -129,10 +147,21 @@ export function Viewport() {
   const getPixelCoords = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>): Point => {
       const rect = e.currentTarget.getBoundingClientRect();
-      return {
+      const rawPt: Point = {
         x: Math.floor((e.clientX - rect.left) / zoom),
         y: Math.floor((e.clientY - rect.top) / zoom),
       };
+      const st = useEditorStore.getState();
+      if (st.workspaceMode === "draw" && (st.viewFlipH || st.viewFlipV)) {
+        return mapFlippedPoint(
+          rawPt,
+          st.canvasWidth,
+          st.canvasHeight,
+          st.viewFlipH,
+          st.viewFlipV
+        );
+      }
+      return rawPt;
     },
     [zoom]
   );
@@ -148,6 +177,9 @@ export function Viewport() {
     const renderer = rendererRef.current;
     if (renderer) {
       const state = useEditorStore.getState();
+      renderer.setBackdrop(
+        resolveRendererBackdrop(state.canvasBackdrop, state.canvasBackdropColor)
+      );
       if (state.onionSkin) {
         const onion = pixelEngine.compositeOnionSkin(
           state.layers,
@@ -165,7 +197,7 @@ export function Viewport() {
       const targetPalette =
         PALETTE_PRESETS.find((p) => p.name === state.paletteLutPresetName)
           ?.colors ?? [];
-      const composite = pixelEngine.compositeFrameWithShaderPreview(
+      const rawComposite = pixelEngine.compositeFrameWithShaderPreview(
         state.layers,
         state.currentFrame,
         {
@@ -198,6 +230,14 @@ export function Viewport() {
           },
         }
       );
+      const composite =
+        state.workspaceMode === "draw" &&
+        (state.viewGrayscale || state.viewSilhouette)
+          ? applyViewCheckFilter(rawComposite, {
+              grayscale: state.viewGrayscale,
+              silhouette: state.viewSilhouette,
+            })
+          : rawComposite;
       renderer.uploadFrame(pixelEngine.width, pixelEngine.height, composite);
       if (
         state.workspaceMode === "rig" &&
@@ -323,7 +363,7 @@ export function Viewport() {
     pixelEngine.rig.clearPoseOverrides();
   }, [currentFrame]);
 
-  // Re-composite when layers, active frame, wrap, onion skin, or rig state change
+  // Re-composite when layers, active frame, wrap, onion skin, or view checks change
   useEffect(() => {
     renderCanvas();
   }, [
@@ -335,6 +375,12 @@ export function Viewport() {
     onionNextFrames,
     onionOpacity,
     workspaceMode,
+    viewFlipH,
+    viewFlipV,
+    viewGrayscale,
+    viewSilhouette,
+    canvasBackdrop,
+    canvasBackdropColor,
     rigVersion,
     rigMode,
     rigPixelSnap,
@@ -710,6 +756,38 @@ export function Viewport() {
   const isTilesMap = workspaceMode === "tiles" && tilesMode === "map";
   const dragPreview = drawPointer.dragPreview;
 
+  const isDrawMode = workspaceMode === "draw";
+  const flipScaleX = isDrawMode && viewFlipH ? -1 : 1;
+  const flipScaleY = isDrawMode && viewFlipV ? -1 : 1;
+  const frameTransform =
+    flipScaleX === -1 || flipScaleY === -1
+      ? `translate(${pan.x}px, ${pan.y}px) scale(${flipScaleX}, ${flipScaleY})`
+      : `translate(${pan.x}px, ${pan.y}px)`;
+
+  const showRefOverlay = Boolean(isDrawMode && referenceImage && referenceImage.visible);
+  const refImgElement = showRefOverlay && referenceImage && (
+    <img
+      src={referenceImage.dataUrl}
+      alt="Reference"
+      className="viewport-reference-img"
+      style={{
+        width: referenceImage.width * zoom * (referenceImage.scale / 100),
+        height: referenceImage.height * zoom * (referenceImage.scale / 100),
+        left: referenceImage.offsetX * zoom,
+        top: referenceImage.offsetY * zoom,
+        opacity: referenceImage.opacity / 100,
+        pointerEvents: "none",
+        imageRendering: "pixelated",
+      }}
+    />
+  );
+
+  const frameBackdropClass = `backdrop-${canvasBackdrop}`;
+  const frameBackdropStyle =
+    canvasBackdrop === "custom"
+      ? { backgroundColor: canvasBackdropColor }
+      : undefined;
+
   return (
     <section className="viewport-container" aria-label="Canvas Viewport">
       <div className="document-tabs">
@@ -725,6 +803,7 @@ export function Viewport() {
       </div>
 
       <div
+        ref={stageRef}
         className={`viewport-stage ${workspaceMode === "rig" ? `rig-mode-${rigMode}` : workspaceMode === "tiles" ? `tiles-mode-${tilesMode}` : ""}`}
         style={{ cursor: spacePressed ? "grab" : undefined }}
         onWheel={workspaceMode === "tiles" && tilesMode === "tile" ? undefined : handleWheel}
@@ -738,13 +817,17 @@ export function Viewport() {
           <TileEditViewport />
         ) : (
         <div
-          className="viewport-canvas-frame"
+          ref={canvasFrameRef}
+          className={`viewport-canvas-frame ${frameBackdropClass}`}
           style={{
+            ...frameBackdropStyle,
             width: canvasWidth * zoom,
             height: canvasHeight * zoom,
-            transform: `translate(${pan.x}px, ${pan.y}px)`,
+            transform: frameTransform,
           }}
         >
+          {referenceImage?.behindCanvas && refImgElement}
+
           {seamlessWrap && (
             <canvas
               ref={wrapGhostRef}
@@ -763,7 +846,13 @@ export function Viewport() {
           <canvas
             ref={canvasRef}
             className="viewport-canvas"
-            style={{ cursor: cursorStyle }}
+            style={{
+              cursor: cursorStyle,
+              opacity:
+                showRefOverlay && referenceImage?.behindCanvas
+                  ? 0.96
+                  : 1,
+            }}
             onContextMenu={handleCanvasContextMenu}
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handleCanvasPointerMove}
@@ -772,10 +861,15 @@ export function Viewport() {
             onPointerLeave={handleCanvasPointerLeave}
           />
 
+          {!referenceImage?.behindCanvas && refImgElement}
+
           {showGrid && zoom >= 4 && (
             <div
               className="viewport-pixel-grid"
-              style={{ backgroundSize: `${zoom}px ${zoom}px` }}
+              style={{
+                backgroundSize: `${zoom}px ${zoom}px`,
+                opacity: zoom < 6 ? 0.5 : 1,
+              }}
             />
           )}
 
@@ -884,6 +978,18 @@ export function Viewport() {
           {symmetryX && <div className="viewport-symmetry-x" />}
           {symmetryY && <div className="viewport-symmetry-y" />}
         </div>
+        )}
+
+        {isDrawMode && showRulers && (
+          <RulersOverlay
+            stageRef={stageRef}
+            canvasFrameRef={canvasFrameRef}
+            canvasWidth={canvasWidth}
+            canvasHeight={canvasHeight}
+            zoom={zoom}
+            viewFlipH={viewFlipH}
+            viewFlipV={viewFlipV}
+          />
         )}
 
         <div className="viewport-overlay-pill">

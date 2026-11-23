@@ -91,6 +91,14 @@ export function TopBar() {
   const toggleShowGrid = useEditorStore((s) => s.toggleShowGrid);
   const toggleTimelineCollapsed = useEditorStore((s) => s.toggleTimelineCollapsed);
   const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
+  const setCommandPaletteOpen = useEditorStore((s) => s.setCommandPaletteOpen);
+  const toggleViewFlipH = useEditorStore((s) => s.toggleViewFlipH);
+  const toggleViewFlipV = useEditorStore((s) => s.toggleViewFlipV);
+  const toggleViewGrayscale = useEditorStore((s) => s.toggleViewGrayscale);
+  const toggleViewSilhouette = useEditorStore((s) => s.toggleViewSilhouette);
+  const toggleShowRulers = useEditorStore((s) => s.toggleShowRulers);
+  const toggleShowCustomGrid = useEditorStore((s) => s.toggleShowCustomGrid);
+  const clearGuides = useEditorStore((s) => s.clearGuides);
   const setZoom = useEditorStore((s) => s.setZoom);
   const zoom = useEditorStore((s) => s.zoom);
   const swapColors = useEditorStore((s) => s.swapColors);
@@ -160,7 +168,15 @@ export function TopBar() {
       { label: "Swap FG / BG Colors", shortcut: "X", action: () => { swapColors(); setOpenMenu(null); } },
     ],
     View: [
+      { label: "Command Palette...", shortcut: "Ctrl+K", action: () => { setOpenMenu(null); setCommandPaletteOpen(true); } },
+      { label: "Flip View Horizontal", shortcut: "H", action: () => { toggleViewFlipH(); setOpenMenu(null); } },
+      { label: "Flip View Vertical", shortcut: "Shift+H", action: () => { toggleViewFlipV(); setOpenMenu(null); } },
+      { label: "Grayscale Value Check", action: () => { toggleViewGrayscale(); setOpenMenu(null); } },
+      { label: "Silhouette Check", action: () => { toggleViewSilhouette(); setOpenMenu(null); } },
       { label: "Toggle Pixel Grid", shortcut: "G", action: () => { toggleShowGrid(); setOpenMenu(null); } },
+      { label: "Toggle Rulers", action: () => { toggleShowRulers(); setOpenMenu(null); } },
+      { label: "Toggle Custom Grid", action: () => { toggleShowCustomGrid(); setOpenMenu(null); } },
+      { label: "Clear Guides", action: () => { clearGuides(); setOpenMenu(null); } },
       { label: "Toggle Side Panels", shortcut: "Tab", action: () => { togglePanelsCollapsed(); setOpenMenu(null); } },
       { label: "Toggle Timeline", action: () => { toggleTimelineCollapsed(); setOpenMenu(null); } },
       { label: "Toggle Floating Preview", action: () => { toggleFloatingPreview(); setOpenMenu(null); } },

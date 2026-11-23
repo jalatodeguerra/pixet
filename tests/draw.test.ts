@@ -13,6 +13,20 @@ import {
 } from "../src/engine/tools/drawOverlayGeometry.ts";
 import { applyInkPixel } from "../src/engine/tools/ink.ts";
 import { expandBrushFootprint, plotBresenhamLine } from "../src/engine/tools/pixelAlgos.ts";
+import {
+  applyViewCheckFilter,
+  mapFlippedPoint,
+} from "../src/engine/tools/viewChecks.ts";
+import {
+  buildCustomGridLines,
+  snapCoordToGuides,
+  snapPointToGuides,
+  type GuideLine,
+} from "../src/engine/tools/guides.ts";
+import {
+  fuzzyMatchCommands,
+  type CommandEntry,
+} from "../src/engine/tools/commandMatcher.ts";
 
 function makeCfg(overrides: Partial<BrushConfig> = {}): BrushConfig {
   return {
@@ -508,3 +522,215 @@ test("drawOverlayGeometry: computeBrushOverlayFootprint handles symmetry, clampi
   assert.equal(wrapped.cells.length, 9);
   assert.ok(coordsSet(wrapped.cells).has("7,7"));
 });
+
+test("viewChecks: mapFlippedPoint round-trips for all 4 (flipH, flipV) combinations", () => {
+  const width = 32;
+  const height = 24;
+  const points = [
+    { x: 0, y: 0 },
+    { x: 31, y: 23 },
+    { x: 7, y: 15 },
+    { x: 16, y: 12 },
+  ];
+
+  const combos: Array<[boolean, boolean]> = [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ];
+
+  for (const [flipH, flipV] of combos) {
+    for (const pt of points) {
+      const mapped = mapFlippedPoint(pt, width, height, flipH, flipV);
+      assert.deepEqual(mapped, {
+        x: flipH ? width - 1 - pt.x : pt.x,
+        y: flipV ? height - 1 - pt.y : pt.y,
+      });
+      const roundTrip = mapFlippedPoint(mapped, width, height, flipH, flipV);
+      assert.deepEqual(roundTrip, pt);
+    }
+  }
+});
+
+test("viewChecks: applyViewCheckFilter handles grayscale, silhouette, precedence, alpha, and non-mutation", () => {
+  // Pixels:
+  // 0: opaque red-ish (200, 100, 50, 255)
+  // 1: semi-transparent green (20, 180, 40, 128)
+  // 2: fully transparent non-zero RGB (255, 255, 255, 0)
+  const src = new Uint8ClampedArray([
+    200, 100, 50, 255,
+    20, 180, 40, 128,
+    255, 255, 255, 0,
+  ]);
+  const snapshot = new Uint8ClampedArray(src);
+
+  // Neither enabled -> returns distinct copy with identical bytes
+  const noop = applyViewCheckFilter(src, { grayscale: false, silhouette: false });
+  assert.notEqual(noop, src);
+  assert.deepEqual(noop, src);
+  noop[0] = 0;
+  assert.deepEqual(src, snapshot);
+
+  // Grayscale Rec. 709 luminance preserving alpha and skipping a=0
+  const gray = applyViewCheckFilter(src, { grayscale: true, silhouette: false });
+  const l0 = Math.round(0.2126 * 200 + 0.7152 * 100 + 0.0722 * 50);
+  const l1 = Math.round(0.2126 * 20 + 0.7152 * 180 + 0.0722 * 40);
+  assert.deepEqual(
+    gray,
+    new Uint8ClampedArray([
+      l0, l0, l0, 255,
+      l1, l1, l1, 128,
+      255, 255, 255, 0,
+    ])
+  );
+  assert.deepEqual(src, snapshot);
+
+  // Silhouette default color [20, 20, 20] preserves alpha and ignores grayscale when both true
+  const silDefault = applyViewCheckFilter(src, { grayscale: true, silhouette: true });
+  assert.deepEqual(
+    silDefault,
+    new Uint8ClampedArray([
+      20, 20, 20, 255,
+      20, 20, 20, 128,
+      255, 255, 255, 0,
+    ])
+  );
+  assert.deepEqual(src, snapshot);
+
+  // Custom silhouetteColor
+  const silCustom = applyViewCheckFilter(src, {
+    grayscale: false,
+    silhouette: true,
+    silhouetteColor: [250, 10, 90],
+  });
+  assert.deepEqual(
+    silCustom,
+    new Uint8ClampedArray([
+      250, 10, 90, 255,
+      250, 10, 90, 128,
+      255, 255, 255, 0,
+    ])
+  );
+});
+
+test("guides: snapCoordToGuides & snapPointToGuides snap within threshold and choose nearest", () => {
+  const guides: GuideLine[] = [
+    { id: "gx1", axis: "x", pos: 10 },
+    { id: "gx2", axis: "x", pos: 13 },
+    { id: "gy1", axis: "y", pos: 20 },
+    { id: "gx3", axis: "x", pos: 40 },
+  ];
+
+  // Within default threshold (2)
+  assert.equal(snapCoordToGuides(8, "x", guides), 10);
+  assert.equal(snapCoordToGuides(10, "x", guides), 10);
+
+  // Outside threshold
+  assert.equal(snapCoordToGuides(7, "x", guides), 7);
+  assert.equal(snapCoordToGuides(16, "x", guides), 16);
+
+  // Nearest guide choice: 12 is dist 2 from 10 and dist 1 from 13 -> picks 13
+  assert.equal(snapCoordToGuides(12, "x", guides), 13);
+
+  // Equal distance tie: 11.5 is 1.5 from 10 and 1.5 from 13 -> picks first encountered (10)
+  assert.equal(snapCoordToGuides(11.5, "x", guides), 10);
+
+  // Respects axis filtering
+  assert.equal(snapCoordToGuides(20, "x", guides), 20);
+  assert.equal(snapCoordToGuides(10, "y", guides), 10);
+  assert.equal(snapCoordToGuides(19, "y", guides), 20);
+
+  // Custom threshold
+  assert.equal(snapCoordToGuides(36, "x", guides, 4), 40);
+  assert.equal(snapCoordToGuides(35, "x", guides, 4), 35);
+
+  // snapPointToGuides snaps both axes independently
+  assert.deepEqual(snapPointToGuides({ x: 9, y: 21 }, guides), { x: 10, y: 20 });
+  assert.deepEqual(snapPointToGuides({ x: 9, y: 5 }, guides), { x: 10, y: 5 });
+});
+
+test("guides: buildCustomGridLines handles default, positive/negative offsets, non-square, and clamping", () => {
+  // Default offset on 16x12 with 4x4 grid
+  assert.deepEqual(buildCustomGridLines(16, 12, 4, 4), {
+    verticals: [4, 8, 12],
+    horizontals: [4, 8],
+  });
+
+  // Non-square grid with positive offset
+  assert.deepEqual(buildCustomGridLines(16, 10, 6, 3, 2, 1), {
+    verticals: [2, 8, 14],
+    horizontals: [1, 4, 7],
+  });
+
+  // Negative offset wraps cleanly in (0, size)
+  assert.deepEqual(buildCustomGridLines(12, 8, 5, 4, -1, -2), {
+    verticals: [4, 9],
+    horizontals: [2, 6],
+  });
+
+  // Clamping gridW/gridH < 1 to 1
+  assert.deepEqual(buildCustomGridLines(4, 3, 0, -5), {
+    verticals: [1, 2, 3],
+    horizontals: [1, 2],
+  });
+});
+
+test("commandMatcher: fuzzyMatchCommands handles empty query, ranking, keywords, and no match", () => {
+  const commands: CommandEntry[] = [
+    { id: "1", label: "Canvas Flip Horizontal", category: "View", keywords: ["mirror"] },
+    { id: "2", label: "Flip View Horizontal", category: "View", shortcut: "H" },
+    { id: "3", label: "Filter: Gaussian Blur", category: "Filter" },
+    { id: "4", label: "Pencil Tool", category: "Tools", keywords: ["draw", "brush"] },
+    { id: "5", label: "Outline Selection", category: "Edit", keywords: ["stroke", "border"] },
+    { id: "6", label: "Flatten All Layers", category: "Layer" },
+  ];
+
+  // Empty or whitespace query returns all items in original order
+  assert.deepEqual(
+    fuzzyMatchCommands("", commands).map((c) => c.id),
+    ["1", "2", "3", "4", "5", "6"]
+  );
+  assert.deepEqual(
+    fuzzyMatchCommands("   ", commands).map((c) => c.id),
+    ["1", "2", "3", "4", "5", "6"]
+  );
+
+  // Prefix > word-boundary/substring > subsequence (case-insensitive)
+  // "flip": id 2 starts with "Flip" (prefix), id 1 has word-boundary "Flip"
+  const flipMatches = fuzzyMatchCommands("flip", commands);
+  assert.deepEqual(
+    flipMatches.map((c) => c.id),
+    ["2", "1"]
+  );
+
+  // Substring vs subsequence: "flat" matches id 6 as prefix, "fl" matches id 2 (prefix), id 3 (subseq? no 'l' before 'f', wait 'FiLter'), id 6 (prefix)
+  const fllMatches = fuzzyMatchCommands("fll", commands);
+  // "fll" is ordered subsequence in "Flip View Horizontal" (F-l-l) and "Flatten All Layers" (F-l-l)
+  assert.ok(fllMatches.some((c) => c.id === "2"));
+  assert.ok(fllMatches.some((c) => c.id === "6"));
+
+  // Keyword match
+  const mirrorMatches = fuzzyMatchCommands("mirror", commands);
+  assert.deepEqual(
+    mirrorMatches.map((c) => c.id),
+    ["1"]
+  );
+  const drawMatches = fuzzyMatchCommands("draw", commands);
+  assert.deepEqual(
+    drawMatches.map((c) => c.id),
+    ["4"]
+  );
+
+  // Label match ranks ahead of category-only match
+  const filterMatches = fuzzyMatchCommands("filter", commands);
+  assert.equal(filterMatches[0].id, "3");
+
+  // Subsequence match
+  const ptMatches = fuzzyMatchCommands("ptl", commands);
+  assert.ok(ptMatches.some((c) => c.id === "4")); // "Pencil TooL"
+
+  // No match
+  assert.deepEqual(fuzzyMatchCommands("zzzznope", commands), []);
+});
+

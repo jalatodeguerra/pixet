@@ -36,6 +36,7 @@ import {
   createRectSelection,
   type SelectionMask,
 } from "../../engine/tools/selection";
+import { snapPointToGuides } from "../../engine/tools/guides";
 import {
   isLayerEffectivelyLocked,
   useEditorStore,
@@ -433,8 +434,14 @@ export function useDrawPointer({
     if (tool === "marquee") {
       commitFloatingSelection();
       e.currentTarget.setPointerCapture(e.pointerId);
-      const cx = Math.max(0, Math.min(state.canvasWidth - 1, px));
-      const cy = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      const rawX = Math.max(0, Math.min(state.canvasWidth - 1, px));
+      const rawY = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: rawX, y: rawY }, state.guides)
+          : { x: rawX, y: rawY };
+      const cx = Math.max(0, Math.min(state.canvasWidth - 1, snapped.x));
+      const cy = Math.max(0, Math.min(state.canvasHeight - 1, snapped.y));
       strokeRef.current = {
         kind: "marquee",
         tool,
@@ -868,6 +875,10 @@ export function useDrawPointer({
 
     if (tool === "line" || tool === "rect" || tool === "ellipse") {
       e.currentTarget.setPointerCapture(e.pointerId);
+      const startPt =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
       strokeRef.current = {
         kind: "shape",
         tool,
@@ -883,9 +894,9 @@ export function useDrawPointer({
         paintedSet: new Set(),
         visitedPixels: new Set(),
         usePixelPerfect: false,
-        startX: px,
-        startY: py,
-        lastPt: { x: px, y: py },
+        startX: startPt.x,
+        startY: startPt.y,
+        lastPt: { x: startPt.x, y: startPt.y },
         origOffsetX: 0,
         origOffsetY: 0,
         origMask: null,
@@ -894,10 +905,10 @@ export function useDrawPointer({
       pixelEngine.clearOverlay();
       const previewPts = getShapePoints(
         tool,
-        px,
-        py,
-        px,
-        py,
+        startPt.x,
+        startPt.y,
+        startPt.x,
+        startPt.y,
         state.shapeFilled,
         e.shiftKey,
         state.showIsoGrid
@@ -952,8 +963,14 @@ export function useDrawPointer({
     const { x: px, y: py } = getPixelCoords(e);
 
     if (stroke.kind === "marquee") {
-      const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, px));
-      const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      const rawX = Math.max(0, Math.min(state.canvasWidth - 1, px));
+      const rawY = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: rawX, y: rawY }, state.guides)
+          : { x: rawX, y: rawY };
+      const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, snapped.x));
+      const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, snapped.y));
       const end = e.shiftKey
         ? constrainSquareBounds(stroke.startX, stroke.startY, clampedX, clampedY)
         : { x: clampedX, y: clampedY };
@@ -1207,12 +1224,16 @@ export function useDrawPointer({
 
     // Live shape preview on overlayBuffer
     pixelEngine.clearOverlay();
+    const shapeEnd =
+      state.snapToGuides && state.guides.length > 0
+        ? snapPointToGuides({ x: px, y: py }, state.guides)
+        : { x: px, y: py };
     const pts = getShapePoints(
       stroke.tool,
       stroke.startX,
       stroke.startY,
-      px,
-      py,
+      shapeEnd.x,
+      shapeEnd.y,
       state.shapeFilled,
       e.shiftKey,
       state.showIsoGrid
@@ -1273,8 +1294,14 @@ export function useDrawPointer({
 
     if (stroke.kind === "marquee") {
       setDragPreview(null);
-      const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, px));
-      const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      const rawX = Math.max(0, Math.min(state.canvasWidth - 1, px));
+      const rawY = Math.max(0, Math.min(state.canvasHeight - 1, py));
+      const snapped =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: rawX, y: rawY }, state.guides)
+          : { x: rawX, y: rawY };
+      const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, snapped.x));
+      const clampedY = Math.max(0, Math.min(state.canvasHeight - 1, snapped.y));
       const end = e.shiftKey
         ? constrainSquareBounds(stroke.startX, stroke.startY, clampedX, clampedY)
         : { x: clampedX, y: clampedY };
@@ -1430,12 +1457,16 @@ export function useDrawPointer({
         stroke.frameIndex,
         label
       );
+      const shapeEnd =
+        state.snapToGuides && state.guides.length > 0
+          ? snapPointToGuides({ x: px, y: py }, state.guides)
+          : { x: px, y: py };
       const pts = getShapePoints(
         stroke.tool,
         stroke.startX,
         stroke.startY,
-        px,
-        py,
+        shapeEnd.x,
+        shapeEnd.y,
         state.shapeFilled,
         e.shiftKey,
         state.showIsoGrid

@@ -16,6 +16,8 @@ uniform sampler2D u_overlayTex;
 uniform sampler2D u_onionTex;
 uniform float u_showOnion;
 uniform float u_checkSize;
+uniform vec3 u_bgColorA;
+uniform vec3 u_bgColorB;
 
 out vec4 outColor;
 
@@ -29,7 +31,7 @@ vec4 over(vec4 fg, vec4 bg) {
 void main() {
   vec2 tile = floor(gl_FragCoord.xy / u_checkSize);
   float checker = mod(tile.x + tile.y, 2.0);
-  vec3 bgRgb = mix(vec3(0.125, 0.125, 0.150), vec3(0.165, 0.165, 0.200), checker);
+  vec3 bgRgb = mix(u_bgColorA, u_bgColorB, checker);
   vec4 result = vec4(bgRgb, 1.0);
 
   vec2 texUv = vec2(v_uv.x, 1.0 - v_uv.y);
@@ -45,6 +47,45 @@ void main() {
   outColor = result;
 }
 `;
+
+export interface RendererBackdrop {
+  colorA: [number, number, number];
+  colorB: [number, number, number];
+}
+
+function parseHexRgb(hex: string): [number, number, number] {
+  const clean = hex.replace(/^#/, "");
+  if (clean.length === 6) {
+    const r = parseInt(clean.slice(0, 2), 16);
+    const g = parseInt(clean.slice(2, 4), 16);
+    const b = parseInt(clean.slice(4, 6), 16);
+    if (!Number.isNaN(r) && !Number.isNaN(g) && !Number.isNaN(b)) {
+      return [r, g, b];
+    }
+  }
+  return [32, 32, 32];
+}
+
+export function resolveRendererBackdrop(
+  backdrop: "checkerDark" | "checkerLight" | "solidDark" | "solidMid" | "custom",
+  customColor: string
+): RendererBackdrop {
+  switch (backdrop) {
+    case "checkerLight":
+      return { colorA: [204, 204, 204], colorB: [236, 236, 236] };
+    case "solidDark":
+      return { colorA: [20, 20, 20], colorB: [20, 20, 20] };
+    case "solidMid":
+      return { colorA: [74, 74, 74], colorB: [74, 74, 74] };
+    case "custom": {
+      const rgb = parseHexRgb(customColor);
+      return { colorA: rgb, colorB: rgb };
+    }
+    case "checkerDark":
+    default:
+      return { colorA: [32, 32, 38], colorB: [42, 42, 51] };
+  }
+}
 
 function compileShader(
   gl: WebGL2RenderingContext,
@@ -89,7 +130,13 @@ export class WebGL2Renderer {
   private onionTex: WebGLTexture | null = null;
   private checkSizeLoc: WebGLUniformLocation | null = null;
   private showOnionLoc: WebGLUniformLocation | null = null;
+  private bgColorALoc: WebGLUniformLocation | null = null;
+  private bgColorBLoc: WebGLUniformLocation | null = null;
   private showOnion = false;
+  private backdrop: RendererBackdrop = {
+    colorA: [32, 32, 38],
+    colorB: [42, 42, 51],
+  };
   private dpr = 1;
 
   // Fallback state
@@ -167,6 +214,8 @@ export class WebGL2Renderer {
     gl.uniform1i(gl.getUniformLocation(program, "u_onionTex"), 2);
     this.checkSizeLoc = gl.getUniformLocation(program, "u_checkSize");
     this.showOnionLoc = gl.getUniformLocation(program, "u_showOnion");
+    this.bgColorALoc = gl.getUniformLocation(program, "u_bgColorA");
+    this.bgColorBLoc = gl.getUniformLocation(program, "u_bgColorB");
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   }
 
@@ -256,6 +305,10 @@ export class WebGL2Renderer {
     this.showOnion = show;
   }
 
+  setBackdrop(backdrop: RendererBackdrop): void {
+    this.backdrop = backdrop;
+  }
+
   render(docWidth: number, docHeight: number): void {
     if (this.gl && this.program && this.vao) {
       const gl = this.gl;
@@ -265,6 +318,14 @@ export class WebGL2Renderer {
       }
       if (this.showOnionLoc) {
         gl.uniform1f(this.showOnionLoc, this.showOnion ? 1.0 : 0.0);
+      }
+      const [ar, ag, ab] = this.backdrop.colorA;
+      const [br, bg, bb] = this.backdrop.colorB;
+      if (this.bgColorALoc) {
+        gl.uniform3f(this.bgColorALoc, ar / 255, ag / 255, ab / 255);
+      }
+      if (this.bgColorBLoc) {
+        gl.uniform3f(this.bgColorBLoc, br / 255, bg / 255, bb / 255);
       }
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.frameTex);
@@ -283,12 +344,21 @@ export class WebGL2Renderer {
       const ch = this.canvas.height;
       ctx.clearRect(0, 0, cw, ch);
 
-      const sq = Math.max(4, Math.round(8 * this.dpr));
-      for (let y = 0; y < ch; y += sq) {
-        for (let x = 0; x < cw; x += sq) {
-          const even = ((x / sq) + (y / sq)) % 2 === 0;
-          ctx.fillStyle = even ? "#202026" : "#2a2a33";
-          ctx.fillRect(x, y, sq, sq);
+      const [ar, ag, ab] = this.backdrop.colorA;
+      const [br, bg, bb] = this.backdrop.colorB;
+      const colorAStr = `rgb(${ar}, ${ag}, ${ab})`;
+      const colorBStr = `rgb(${br}, ${bg}, ${bb})`;
+      if (ar === br && ag === bg && ab === bb) {
+        ctx.fillStyle = colorAStr;
+        ctx.fillRect(0, 0, cw, ch);
+      } else {
+        const sq = Math.max(4, Math.round(8 * this.dpr));
+        for (let y = 0; y < ch; y += sq) {
+          for (let x = 0; x < cw; x += sq) {
+            const even = (x / sq + y / sq) % 2 === 0;
+            ctx.fillStyle = even ? colorAStr : colorBStr;
+            ctx.fillRect(x, y, sq, sq);
+          }
         }
       }
 

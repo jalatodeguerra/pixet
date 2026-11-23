@@ -6,11 +6,39 @@ import type { TileTool } from "../components/tiles/tileTools";
 import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
 import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
 import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
+import type { GuideAxis, GuideLine } from "../engine/tools/guides";
 import type { InkMode } from "../engine/tools/ink";
 
-export type { BrushShape, CustomBrushData, InkMode, LayerMapRole, TileTool };
+export type {
+  BrushShape,
+  CustomBrushData,
+  GuideAxis,
+  GuideLine,
+  InkMode,
+  LayerMapRole,
+  TileTool,
+};
 
 export type RightClickMode = "secondaryColor" | "erase" | "eyedropper";
+export type CanvasBackdrop =
+  | "checkerDark"
+  | "checkerLight"
+  | "solidDark"
+  | "solidMid"
+  | "custom";
+
+export type ReferenceImageState = {
+  dataUrl: string;
+  width: number;
+  height: number;
+  visible: boolean;
+  opacity: number;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  behindCanvas: boolean;
+  locked: boolean;
+};
 
 export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
 export type TileMode = "map" | "tile";
@@ -142,6 +170,22 @@ interface EditorState {
   showGrid: boolean;
   seamlessWrap: boolean;
   showTileGrid: boolean;
+  viewFlipH: boolean;
+  viewFlipV: boolean;
+  viewGrayscale: boolean;
+  viewSilhouette: boolean;
+  canvasBackdrop: CanvasBackdrop;
+  canvasBackdropColor: string;
+  showRulers: boolean;
+  guides: GuideLine[];
+  snapToGuides: boolean;
+  showCustomGrid: boolean;
+  customGridW: number;
+  customGridH: number;
+  customGridOffsetX: number;
+  customGridOffsetY: number;
+  referenceImage: ReferenceImageState | null;
+  commandPaletteOpen: boolean;
   activeTileId: number;
   tileWidth: number;
   tileHeight: number;
@@ -286,6 +330,24 @@ interface EditorState {
   toggleShowGrid: () => void;
   toggleSeamlessWrap: () => void;
   toggleShowTileGrid: () => void;
+  toggleViewFlipH: () => void;
+  toggleViewFlipV: () => void;
+  toggleViewGrayscale: () => void;
+  toggleViewSilhouette: () => void;
+  setCanvasBackdrop: (b: CanvasBackdrop) => void;
+  setCanvasBackdropColor: (c: string) => void;
+  toggleShowRulers: () => void;
+  toggleSnapToGuides: () => void;
+  addGuide: (axis: GuideAxis, pos: number) => void;
+  moveGuide: (id: string, pos: number) => void;
+  removeGuide: (id: string) => void;
+  clearGuides: () => void;
+  toggleShowCustomGrid: () => void;
+  setCustomGridSize: (w: number, h: number) => void;
+  setCustomGridOffset: (ox: number, oy: number) => void;
+  setReferenceImage: (img: ReferenceImageState | null) => void;
+  updateReferenceImage: (patch: Partial<ReferenceImageState>) => void;
+  setCommandPaletteOpen: (open: boolean) => void;
   setActiveTileId: (id: number) => void;
   setTileSize: (w: number, h: number) => void;
   bumpTilesetVersion: () => void;
@@ -466,6 +528,7 @@ interface EditorState {
 let layerCounter = 4;
 let frameIdCounter = 5;
 let tagIdCounter = 1;
+let guideIdCounter = 1;
 
 function getPlaybackBounds(
   framesLength: number,
@@ -502,6 +565,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   showGrid: true,
   seamlessWrap: false,
   showTileGrid: true,
+  viewFlipH: false,
+  viewFlipV: false,
+  viewGrayscale: false,
+  viewSilhouette: false,
+  canvasBackdrop: "checkerDark",
+  canvasBackdropColor: "#202020",
+  showRulers: false,
+  guides: [],
+  snapToGuides: true,
+  showCustomGrid: false,
+  customGridW: 8,
+  customGridH: 8,
+  customGridOffsetX: 0,
+  customGridOffsetY: 0,
+  referenceImage: null,
+  commandPaletteOpen: false,
   activeTileId: 1,
   tileWidth: 16,
   tileHeight: 16,
@@ -689,6 +768,51 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleShowGrid: () => set((s) => ({ showGrid: !s.showGrid })),
   toggleSeamlessWrap: () => set((s) => ({ seamlessWrap: !s.seamlessWrap })),
   toggleShowTileGrid: () => set((s) => ({ showTileGrid: !s.showTileGrid })),
+  toggleViewFlipH: () => set((s) => ({ viewFlipH: !s.viewFlipH })),
+  toggleViewFlipV: () => set((s) => ({ viewFlipV: !s.viewFlipV })),
+  toggleViewGrayscale: () => set((s) => ({ viewGrayscale: !s.viewGrayscale })),
+  toggleViewSilhouette: () =>
+    set((s) => ({ viewSilhouette: !s.viewSilhouette })),
+  setCanvasBackdrop: (canvasBackdrop) => set({ canvasBackdrop }),
+  setCanvasBackdropColor: (canvasBackdropColor) => set({ canvasBackdropColor }),
+  toggleShowRulers: () => set((s) => ({ showRulers: !s.showRulers })),
+  toggleSnapToGuides: () => set((s) => ({ snapToGuides: !s.snapToGuides })),
+  addGuide: (axis, pos) =>
+    set((s) => ({
+      guides: [
+        ...s.guides,
+        { id: `guide-${guideIdCounter++}`, axis, pos: Math.round(pos) },
+      ],
+    })),
+  moveGuide: (id, pos) =>
+    set((s) => ({
+      guides: s.guides.map((g) =>
+        g.id === id ? { ...g, pos: Math.round(pos) } : g
+      ),
+    })),
+  removeGuide: (id) =>
+    set((s) => ({ guides: s.guides.filter((g) => g.id !== id) })),
+  clearGuides: () => set({ guides: [] }),
+  toggleShowCustomGrid: () =>
+    set((s) => ({ showCustomGrid: !s.showCustomGrid })),
+  setCustomGridSize: (w, h) =>
+    set({
+      customGridW: Math.max(1, Math.min(256, Math.round(w))),
+      customGridH: Math.max(1, Math.min(256, Math.round(h))),
+    }),
+  setCustomGridOffset: (ox, oy) =>
+    set({
+      customGridOffsetX: Math.round(ox),
+      customGridOffsetY: Math.round(oy),
+    }),
+  setReferenceImage: (referenceImage) => set({ referenceImage }),
+  updateReferenceImage: (patch) =>
+    set((s) =>
+      s.referenceImage
+        ? { referenceImage: { ...s.referenceImage, ...patch } }
+        : s
+    ),
+  setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   setActiveTileId: (activeTileId) => set({ activeTileId: Math.max(0, activeTileId) }),
   setTileSize: (tileWidth, tileHeight) => set({ tileWidth, tileHeight }),
   bumpTilesetVersion: () => set((s) => ({ tilesetVersion: s.tilesetVersion + 1 })),
