@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, GripVertical, Pause, Play, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  GripVertical,
+  Pause,
+  Play,
+  RotateCcw,
+  X,
+} from "lucide-react";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { useEditorStore } from "../store/editorStore";
 import { PALETTE_PRESETS } from "../utils/paletteParser";
+
+type PreviewBackdrop = "checker" | "dark" | "light";
 
 export function FloatingPreview() {
   const show = useEditorStore((s) => s.showFloatingPreview);
@@ -44,15 +54,27 @@ export function FloatingPreview() {
     left: null,
     top: 12,
   });
+  const [backdrop, setBackdrop] = useState<PreviewBackdrop>("checker");
+  const [splitCompare, setSplitCompare] = useState(false);
+  const [customZoom, setCustomZoom] = useState<number | null>(null);
+  const [stagePan, setStagePan] = useState({ x: 0, y: 0 });
 
   const panelRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvas2xRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{
     startX: number;
     startY: number;
     origLeft: number;
     origTop: number;
   } | null>(null);
+  const stagePanDragRef = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  }>({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
 
   const drawPreview = useCallback(() => {
     const canvas = canvasRef.current;
@@ -104,6 +126,14 @@ export function FloatingPreview() {
       pixelEngine.height
     );
     ctx.putImageData(img, 0, 0);
+
+    const canvas2x = canvas2xRef.current;
+    if (canvas2x) {
+      const ctx2 = canvas2x.getContext("2d");
+      if (ctx2) {
+        ctx2.putImageData(img, 0, 0);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -112,6 +142,7 @@ export function FloatingPreview() {
   }, [
     show,
     collapsed,
+    splitCompare,
     canvasWidth,
     canvasHeight,
     currentFrame,
@@ -146,6 +177,15 @@ export function FloatingPreview() {
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
+      const panDrag = stagePanDragRef.current;
+      if (panDrag.active) {
+        setStagePan({
+          x: panDrag.origX + (e.clientX - panDrag.startX),
+          y: panDrag.origY + (e.clientY - panDrag.startY),
+        });
+        return;
+      }
+
       const drag = dragRef.current;
       const panel = panelRef.current;
       const parent = panel?.parentElement;
@@ -166,6 +206,7 @@ export function FloatingPreview() {
 
     const onMouseUp = () => {
       dragRef.current = null;
+      stagePanDragRef.current.active = false;
     };
 
     window.addEventListener("mousemove", onMouseMove);
@@ -180,7 +221,7 @@ export function FloatingPreview() {
 
   const startDrag = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest("button, select")) return;
+    if ((e.target as HTMLElement).closest("button, select, .preview-stage")) return;
     e.stopPropagation();
     const panel = panelRef.current;
     const parent = panel?.parentElement;
@@ -194,6 +235,46 @@ export function FloatingPreview() {
       origLeft: currentLeft,
       origTop: pos.top,
     };
+  };
+
+  const effectiveScale = customZoom ?? previewScale;
+  const hasViewTransform =
+    customZoom !== null || stagePan.x !== 0 || stagePan.y !== 0;
+
+  const cycleBackdrop = () => {
+    setBackdrop((prev) =>
+      prev === "checker" ? "dark" : prev === "dark" ? "light" : "checker"
+    );
+  };
+
+  const backdropLabel =
+    backdrop === "checker" ? "Chk" : backdrop === "dark" ? "Drk" : "Lgt";
+
+  const handleStageWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (splitCompare) return;
+    const base = customZoom ?? previewScale;
+    const delta = e.deltaY < 0 ? 0.5 : -0.5;
+    const next = Math.max(0.5, Math.min(8, Math.round((base + delta) * 2) / 2));
+    setCustomZoom(next);
+  };
+
+  const handleStageMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    e.stopPropagation();
+    stagePanDragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: stagePan.x,
+      origY: stagePan.y,
+    };
+  };
+
+  const resetPreviewView = () => {
+    setCustomZoom(null);
+    setStagePan({ x: 0, y: 0 });
   };
 
   return (
@@ -247,28 +328,69 @@ export function FloatingPreview() {
           </select>
           <button
             type="button"
-            className={`toggle-chip ${previewScale === 1 ? "active" : ""}`}
+            className={`toggle-chip ${!splitCompare && effectiveScale === 1 ? "active" : ""}`}
             style={{ padding: "1px 4px", fontSize: 10 }}
-            onClick={() => setPreviewScale(1)}
+            onClick={() => {
+              setSplitCompare(false);
+              setCustomZoom(null);
+              setPreviewScale(1);
+            }}
           >
             1×
           </button>
           <button
             type="button"
-            className={`toggle-chip ${previewScale === 2 ? "active" : ""}`}
+            className={`toggle-chip ${!splitCompare && effectiveScale === 2 ? "active" : ""}`}
             style={{ padding: "1px 4px", fontSize: 10 }}
-            onClick={() => setPreviewScale(2)}
+            onClick={() => {
+              setSplitCompare(false);
+              setCustomZoom(null);
+              setPreviewScale(2);
+            }}
           >
             2×
           </button>
           <button
             type="button"
-            className={`toggle-chip ${previewScale === 4 ? "active" : ""}`}
+            className={`toggle-chip ${!splitCompare && effectiveScale === 4 ? "active" : ""}`}
             style={{ padding: "1px 4px", fontSize: 10 }}
-            onClick={() => setPreviewScale(4)}
+            onClick={() => {
+              setSplitCompare(false);
+              setCustomZoom(null);
+              setPreviewScale(4);
+            }}
           >
             4×
           </button>
+          <button
+            type="button"
+            className={`toggle-chip ${splitCompare ? "active" : ""}`}
+            style={{ padding: "1px 4px", fontSize: 10 }}
+            title="Side-by-side 1× + 2× comparison"
+            onClick={() => setSplitCompare((v) => !v)}
+          >
+            1+2×
+          </button>
+          <button
+            type="button"
+            className="toggle-chip"
+            style={{ padding: "1px 4px", fontSize: 10 }}
+            title={`Backdrop: ${backdrop} (click to cycle Checker / Dark / Light)`}
+            onClick={cycleBackdrop}
+          >
+            {backdropLabel}
+          </button>
+          {hasViewTransform && (
+            <button
+              type="button"
+              className="icon-action-btn"
+              style={{ width: 20, height: 20 }}
+              title="Reset Preview Zoom & Pan"
+              onClick={resetPreviewView}
+            >
+              <RotateCcw size={10} />
+            </button>
+          )}
           <button
             type="button"
             className="icon-action-btn"
@@ -292,17 +414,59 @@ export function FloatingPreview() {
 
       {!collapsed && (
         <div className="floating-preview-body">
-          <div className="preview-stage">
-            <canvas
-              ref={canvasRef}
-              width={canvasWidth}
-              height={canvasHeight}
-              className="preview-canvas"
-              style={{
-                width: canvasWidth * previewScale,
-                height: canvasHeight * previewScale,
-              }}
-            />
+          <div
+            className={`preview-stage draw-preview-bg-${backdrop}`}
+            onWheel={handleStageWheel}
+            onMouseDown={handleStageMouseDown}
+            title="Wheel to zoom · Drag to pan"
+          >
+            {splitCompare ? (
+              <div
+                className="draw-preview-split"
+                style={{
+                  transform: `translate(${stagePan.x}px, ${stagePan.y}px)`,
+                }}
+              >
+                <div className="draw-preview-split-col">
+                  <span className="draw-preview-split-label">1×</span>
+                  <canvas
+                    ref={canvasRef}
+                    width={canvasWidth}
+                    height={canvasHeight}
+                    className="preview-canvas"
+                    style={{
+                      width: canvasWidth,
+                      height: canvasHeight,
+                    }}
+                  />
+                </div>
+                <div className="draw-preview-split-col">
+                  <span className="draw-preview-split-label">2×</span>
+                  <canvas
+                    ref={canvas2xRef}
+                    width={canvasWidth}
+                    height={canvasHeight}
+                    className="preview-canvas"
+                    style={{
+                      width: canvasWidth * 2,
+                      height: canvasHeight * 2,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <canvas
+                ref={canvasRef}
+                width={canvasWidth}
+                height={canvasHeight}
+                className="preview-canvas"
+                style={{
+                  width: canvasWidth * effectiveScale,
+                  height: canvasHeight * effectiveScale,
+                  transform: `translate(${stagePan.x}px, ${stagePan.y}px)`,
+                }}
+              />
+            )}
           </div>
         </div>
       )}

@@ -15,6 +15,7 @@ uniform sampler2D u_frameTex;
 uniform sampler2D u_overlayTex;
 uniform sampler2D u_onionTex;
 uniform float u_showOnion;
+uniform float u_onionInFront;
 uniform float u_checkSize;
 uniform vec3 u_bgColorA;
 uniform vec3 u_bgColorB;
@@ -35,14 +36,18 @@ void main() {
   vec4 result = vec4(bgRgb, 1.0);
 
   vec2 texUv = vec2(v_uv.x, 1.0 - v_uv.y);
-  if (u_showOnion > 0.5) {
-    vec4 onionPx = texture(u_onionTex, texUv);
-    result = over(onionPx, result);
-  }
   vec4 framePx = texture(u_frameTex, texUv);
   vec4 overlayPx = texture(u_overlayTex, texUv);
 
+  if (u_showOnion > 0.5 && u_onionInFront < 0.5) {
+    vec4 onionPx = texture(u_onionTex, texUv);
+    result = over(onionPx, result);
+  }
   result = over(framePx, result);
+  if (u_showOnion > 0.5 && u_onionInFront >= 0.5) {
+    vec4 onionPx = texture(u_onionTex, texUv);
+    result = over(onionPx, result);
+  }
   result = over(overlayPx, result);
   outColor = result;
 }
@@ -130,9 +135,11 @@ export class WebGL2Renderer {
   private onionTex: WebGLTexture | null = null;
   private checkSizeLoc: WebGLUniformLocation | null = null;
   private showOnionLoc: WebGLUniformLocation | null = null;
+  private onionInFrontLoc: WebGLUniformLocation | null = null;
   private bgColorALoc: WebGLUniformLocation | null = null;
   private bgColorBLoc: WebGLUniformLocation | null = null;
   private showOnion = false;
+  private onionInFront = false;
   private backdrop: RendererBackdrop = {
     colorA: [32, 32, 38],
     colorB: [42, 42, 51],
@@ -214,6 +221,7 @@ export class WebGL2Renderer {
     gl.uniform1i(gl.getUniformLocation(program, "u_onionTex"), 2);
     this.checkSizeLoc = gl.getUniformLocation(program, "u_checkSize");
     this.showOnionLoc = gl.getUniformLocation(program, "u_showOnion");
+    this.onionInFrontLoc = gl.getUniformLocation(program, "u_onionInFront");
     this.bgColorALoc = gl.getUniformLocation(program, "u_bgColorA");
     this.bgColorBLoc = gl.getUniformLocation(program, "u_bgColorB");
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -305,6 +313,10 @@ export class WebGL2Renderer {
     this.showOnion = show;
   }
 
+  setOnionInFront(inFront: boolean): void {
+    this.onionInFront = inFront;
+  }
+
   setBackdrop(backdrop: RendererBackdrop): void {
     this.backdrop = backdrop;
   }
@@ -318,6 +330,9 @@ export class WebGL2Renderer {
       }
       if (this.showOnionLoc) {
         gl.uniform1f(this.showOnionLoc, this.showOnion ? 1.0 : 0.0);
+      }
+      if (this.onionInFrontLoc) {
+        gl.uniform1f(this.onionInFrontLoc, this.onionInFront ? 1.0 : 0.0);
       }
       const [ar, ag, ab] = this.backdrop.colorA;
       const [br, bg, bb] = this.backdrop.colorB;
@@ -376,10 +391,13 @@ export class WebGL2Renderer {
         ctx.drawImage(this.scratchCanvas, 0, 0, cw, ch);
       };
 
-      if (this.showOnion) {
+      if (this.showOnion && !this.onionInFront) {
         drawLayer(this.onionData);
       }
       drawLayer(this.frameData);
+      if (this.showOnion && this.onionInFront) {
+        drawLayer(this.onionData);
+      }
       drawLayer(this.overlayData);
     }
   }

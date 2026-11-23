@@ -110,6 +110,15 @@ import {
   snapRgbaToPalette,
   sortPaletteColors,
 } from "../src/engine/tools/paletteOps.ts";
+import {
+  computeNextPlaybackFrame,
+  resolveOnionSkinFrames,
+} from "../src/engine/tools/animationHelpers.ts";
+import {
+  bulkDeleteSelectedCelsAction,
+  bulkSetFrameDurationAction,
+  reverseFramesAction,
+} from "../src/engine/document/timelineActions.ts";
 
 function makeCfg(overrides: Partial<BrushConfig> = {}): BrushConfig {
   return {
@@ -2684,6 +2693,263 @@ test("D6-UI: layerActions mergeDown, mergeVisible, flattenImage, clearActiveCel 
   // Hidden layer is excluded from flattened output
   assert.deepEqual(pixelEngine.getCel(st.layers[0].id, 0)?.getPixel(0, 1), [0, 0, 0, 0]);
 });
+
+test("D7 animationHelpers: computeNextPlaybackFrame forward, reverse, pingpong, single-frame, and non-loop stop", () => {
+  // Single-frame range
+  assert.deepEqual(computeNextPlaybackFrame(2, 2, 2, "forward", 1, true), {
+    nextFrame: 2,
+    nextPingPongDir: 1,
+    stop: false,
+  });
+  assert.deepEqual(computeNextPlaybackFrame(2, 2, 2, "pingpong", 1, false), {
+    nextFrame: 2,
+    nextPingPongDir: 1,
+    stop: true,
+  });
+
+  // Forward loop & non-loop stop
+  assert.deepEqual(computeNextPlaybackFrame(1, 1, 3, "forward", 1, true), {
+    nextFrame: 2,
+    nextPingPongDir: 1,
+    stop: false,
+  });
+  assert.deepEqual(computeNextPlaybackFrame(3, 1, 3, "forward", 1, true), {
+    nextFrame: 1,
+    nextPingPongDir: 1,
+    stop: false,
+  });
+  assert.deepEqual(computeNextPlaybackFrame(3, 1, 3, "forward", 1, false), {
+    nextFrame: 3,
+    nextPingPongDir: 1,
+    stop: true,
+  });
+
+  // Reverse loop & non-loop stop
+  assert.deepEqual(computeNextPlaybackFrame(3, 1, 3, "reverse", -1, true), {
+    nextFrame: 2,
+    nextPingPongDir: -1,
+    stop: false,
+  });
+  assert.deepEqual(computeNextPlaybackFrame(1, 1, 3, "reverse", -1, true), {
+    nextFrame: 3,
+    nextPingPongDir: -1,
+    stop: false,
+  });
+  assert.deepEqual(computeNextPlaybackFrame(1, 1, 3, "reverse", -1, false), {
+    nextFrame: 1,
+    nextPingPongDir: -1,
+    stop: true,
+  });
+
+  // Ping-pong over 0..3: 0 -> 1 -> 2 -> 3 -> 2 -> 1 -> 0 -> 1 ... without duplicating endpoints
+  const seq: number[] = [0];
+  let cur = 0;
+  let dir: 1 | -1 = 1;
+  for (let i = 0; i < 8; i++) {
+    const step = computeNextPlaybackFrame(cur, 0, 3, "pingpong", dir, true);
+    assert.equal(step.stop, false);
+    cur = step.nextFrame;
+    dir = step.nextPingPongDir;
+    seq.push(cur);
+  }
+  assert.deepEqual(seq, [0, 1, 2, 3, 2, 1, 0, 1, 2]);
+
+  // Ping-pong non-loop stops cleanly back at start
+  let nonLoopCur = 0;
+  let nonLoopDir: 1 | -1 = 1;
+  const nonLoopSeq: number[] = [0];
+  let stopped = false;
+  for (let i = 0; i < 10; i++) {
+    const step = computeNextPlaybackFrame(
+      nonLoopCur,
+      0,
+      2,
+      "pingpong",
+      nonLoopDir,
+      false
+    );
+    nonLoopCur = step.nextFrame;
+    nonLoopDir = step.nextPingPongDir;
+    nonLoopSeq.push(nonLoopCur);
+    if (step.stop) {
+      stopped = true;
+      break;
+    }
+  }
+  assert.equal(stopped, true);
+  assert.deepEqual(nonLoopSeq, [0, 1, 2, 1, 0]);
+});
+
+test("D7 animationHelpers: resolveOnionSkinFrames linear falloff and loopWrap", () => {
+  // Without loopWrap at frame 0 (no prev frames)
+  const noWrapStart = resolveOnionSkinFrames(0, 4, 2, 2, false, 0.4);
+  assert.equal(noWrapStart.length, 2);
+  assert.deepEqual(
+    noWrapStart.map((e) => [e.frame, e.kind]),
+    [
+      [2, "next"],
+      [1, "next"],
+    ]
+  );
+  assert.ok(Math.abs(noWrapStart[0].opacity - 0.4 * (1 - 1 / 2.5)) < 1e-6);
+  assert.ok(Math.abs(noWrapStart[1].opacity - 0.4) < 1e-6);
+
+  // With loopWrap at frame 0 of 4: prev 2 wraps to frames 2, 3; next 2 -> 2, 1
+  const wrapStart = resolveOnionSkinFrames(0, 4, 2, 2, true, 0.35);
+  assert.deepEqual(
+    wrapStart.map((e) => [e.frame, e.kind]),
+    [
+      [2, "prev"],
+      [3, "prev"],
+      [2, "next"],
+      [1, "next"],
+    ]
+  );
+
+  // With loopWrap at last frame (3 of 4): next 2 wraps to 1, 0; skips frame === current on 2-frame loop
+  const wrapEnd = resolveOnionSkinFrames(3, 4, 1, 2, true, 0.35);
+  assert.deepEqual(
+    wrapEnd.map((e) => [e.frame, e.kind]),
+    [
+      [2, "prev"],
+      [1, "next"],
+      [0, "next"],
+    ]
+  );
+
+  // When totalFrames === 2 and prevCount === 2 with loopWrap, step 2 wraps to current and is skipped
+  const skipSelf = resolveOnionSkinFrames(1, 2, 2, 1, true, 0.5);
+  assert.deepEqual(
+    skipSelf.map((e) => [e.frame, e.kind]),
+    [
+      [0, "prev"],
+      [0, "next"],
+    ]
+  );
+
+  // PixelEngine compositeOnionSkin original-color vs tinted & loopWrap
+  pixelEngine.resetForDocument(2, 1);
+  pixelEngine.getOrCreateCel("l1", 0).setPixel(0, 0, 20, 220, 40, 255);
+  pixelEngine.getOrCreateCel("l1", 1).setPixel(0, 0, 255, 255, 255, 255);
+  pixelEngine.getOrCreateCel("l1", 2).setPixel(0, 0, 40, 200, 240, 255);
+  const compLayers = [
+    {
+      id: "l1",
+      kind: "raster",
+      visible: true,
+      opacity: 100,
+      blendMode: "Normal" as BlendMode,
+      parentId: null,
+    },
+  ];
+  const origOnion = pixelEngine.compositeOnionSkin(
+    compLayers,
+    0,
+    3,
+    1,
+    0,
+    0.5,
+    { tint: false, baseOpacity: 0.5, loopWrap: true }
+  );
+  // Wraps to frame 2 with original green/cyan color (40, 200, 240) at ~50% alpha
+  assert.equal(origOnion[0], 40);
+  assert.equal(origOnion[1], 200);
+  assert.equal(origOnion[2], 240);
+  assert.equal(origOnion[3], 128);
+});
+
+test("D7 timelineActions: reverseFramesAction & bulkDeleteSelectedCelsAction (single-step undo)", () => {
+  pixelEngine.resetForDocument(2, 2);
+  useEditorStore.setState({
+    layers: [
+      {
+        id: "l1",
+        name: "Layer 1",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        cels: { 0: true, 1: true, 2: true },
+      },
+      {
+        id: "l2",
+        name: "Layer 2",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: null,
+        cels: { 0: true, 1: true, 2: true },
+      },
+    ],
+    frames: [
+      { id: "f0", index: 0, durationMs: 80 },
+      { id: "f1", index: 1, durationMs: 120 },
+      { id: "f2", index: 2, durationMs: 200 },
+    ],
+    currentFrame: 0,
+    activeLayerId: "l1",
+    selectedLayerIds: ["l1"],
+    tags: [],
+    activeTagId: null,
+    selectedCels: [],
+  });
+
+  pixelEngine.getOrCreateCel("l1", 0).setPixel(0, 0, 10, 0, 0, 255);
+  pixelEngine.getOrCreateCel("l1", 1).setPixel(0, 0, 20, 0, 0, 255);
+  pixelEngine.getOrCreateCel("l1", 2).setPixel(0, 0, 30, 0, 0, 255);
+  pixelEngine.getOrCreateCel("l2", 0).setPixel(1, 1, 0, 100, 0, 255);
+  pixelEngine.getOrCreateCel("l2", 1).setPixel(1, 1, 0, 200, 0, 255);
+
+  // Reverse frames 0..2
+  assert.equal(reverseFramesAction(0, 2), true);
+  let st = useEditorStore.getState();
+  assert.deepEqual(
+    st.frames.map((f) => f.durationMs),
+    [200, 120, 80]
+  );
+  assert.equal(st.currentFrame, 2);
+  assert.deepEqual(pixelEngine.getCel("l1", 0)?.getPixel(0, 0), [30, 0, 0, 255]);
+  assert.deepEqual(pixelEngine.getCel("l1", 2)?.getPixel(0, 0), [10, 0, 0, 255]);
+
+  // Bulk set frame duration
+  bulkSetFrameDurationAction([0, 2], 150);
+  assert.deepEqual(
+    useEditorStore.getState().frames.map((f) => f.durationMs),
+    [150, 120, 150]
+  );
+
+  // Multi-cel bulk delete with single-step undo/redo
+  useEditorStore.getState().setSelectedCels([
+    { layerId: "l1", frame: 0 },
+    { layerId: "l1", frame: 2 },
+    { layerId: "l2", frame: 1 },
+  ]);
+  assert.equal(bulkDeleteSelectedCelsAction(), true);
+  assert.equal(pixelEngine.getCel("l1", 0)?.isEmpty(), true);
+  assert.equal(pixelEngine.getCel("l1", 2)?.isEmpty(), true);
+  assert.equal(pixelEngine.getCel("l2", 1)?.isEmpty(), true);
+
+  // Single undo restores all 3 cels at once
+  assert.equal(useEditorStore.getState().canUndo, true);
+  performUndo();
+  assert.deepEqual(pixelEngine.getCel("l1", 0)?.getPixel(0, 0), [30, 0, 0, 255]);
+  assert.deepEqual(pixelEngine.getCel("l1", 2)?.getPixel(0, 0), [10, 0, 0, 255]);
+  assert.deepEqual(pixelEngine.getCel("l2", 1)?.getPixel(1, 1), [0, 200, 0, 255]);
+  assert.equal(useEditorStore.getState().canUndo, false);
+
+  // Single redo clears all 3 cels again
+  performRedo();
+  assert.equal(pixelEngine.getCel("l1", 0)?.isEmpty(), true);
+  assert.equal(pixelEngine.getCel("l1", 2)?.isEmpty(), true);
+  assert.equal(pixelEngine.getCel("l2", 1)?.isEmpty(), true);
+});
+
 
 
 

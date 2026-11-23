@@ -3677,3 +3677,107 @@
   line-height: 1;
 }
 
+/* D7 Timeline & Floating Preview Polish */
+.draw-cel-thumb-canvas {
+  width: 22px;
+  height: 22px;
+  image-rendering: pixelated;
+  display: block;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-root);
+}
+
+.cel-cell.draw-cel-selected {
+  outline: 1px solid #4c8bf5;
+  outline-offset: -1px;
+  background: var(--accent-soft);
+}
+
+.draw-cel-bulk-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+}
+
+.draw-onion-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 45;
+  min-width: 196px;
+  padding: 7px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.draw-onion-pop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.draw-tag-dir-btn {
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-secondary);
+  background: var(--bg-root);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0px;
+}
+
+.draw-tag-dir-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.tag-pill.active .draw-tag-dir-btn {
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.24);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.draw-preview-bg-dark {
+  background-color: #141414;
+  background-image: none;
+}
+
+.draw-preview-bg-light {
+  background-color: #dcdcdc;
+  background-image: none;
+}
+
+.draw-preview-split {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 12px;
+}
+
+.draw-preview-split-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.draw-preview-split-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-secondary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  padding: 0 4px;
+}
+
+

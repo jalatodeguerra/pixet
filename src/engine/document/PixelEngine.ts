@@ -56,6 +56,14 @@ import type {
   FloatingSelection,
   SelectionMask,
 } from "../tools/selection.ts";
+import { resolveOnionSkinFrames } from "../tools/animationHelpers.ts";
+
+export interface OnionSkinOptions {
+  tint?: boolean;
+  baseOpacity?: number;
+  inFront?: boolean;
+  loopWrap?: boolean;
+}
 
 export interface LayerCompositingInfo {
   id: string;
@@ -118,6 +126,27 @@ function blendTintedScratchOver(
     dst[i] = Math.round((tintR * sa + dst[i] * da * (1 - sa)) / outA);
     dst[i + 1] = Math.round((tintG * sa + dst[i + 1] * da * (1 - sa)) / outA);
     dst[i + 2] = Math.round((tintB * sa + dst[i + 2] * da * (1 - sa)) / outA);
+    dst[i + 3] = Math.round(outA * 255);
+  }
+}
+
+function blendOriginalScratchOver(
+  dst: Uint8ClampedArray,
+  scratch: Uint8ClampedArray,
+  alphaScale: number
+): void {
+  for (let i = 0; i < scratch.length; i += 4) {
+    const rawA = scratch[i + 3];
+    if (rawA === 0) continue;
+
+    const sa = (rawA / 255) * alphaScale;
+    const da = dst[i + 3] / 255;
+    const outA = sa + da * (1 - sa);
+    if (outA <= 0) continue;
+
+    dst[i] = Math.round((scratch[i] * sa + dst[i] * da * (1 - sa)) / outA);
+    dst[i + 1] = Math.round((scratch[i + 1] * sa + dst[i + 1] * da * (1 - sa)) / outA);
+    dst[i + 2] = Math.round((scratch[i + 2] * sa + dst[i + 2] * da * (1 - sa)) / outA);
     dst[i + 3] = Math.round(outA * 255);
   }
 }
@@ -706,6 +735,22 @@ export class PixelEngine {
     const map = new Map<number, number>();
     for (let newIdx = 0; newIdx < perm.length; newIdx++) {
       map.set(perm[newIdx], newIdx);
+    }
+    this.remapFrameIndices(map);
+  }
+
+  reverseFrameRange(fromFrame: number, toFrame: number, totalFrames: number): void {
+    const lo = Math.max(0, Math.min(totalFrames - 1, Math.min(fromFrame, toFrame)));
+    const hi = Math.max(0, Math.min(totalFrames - 1, Math.max(fromFrame, toFrame)));
+    if (lo >= hi) return;
+
+    const map = new Map<number, number>();
+    for (let i = 0; i < totalFrames; i++) {
+      if (i >= lo && i <= hi) {
+        map.set(i, hi - (i - lo));
+      } else {
+        map.set(i, i);
+      }
     }
     this.remapFrameIndices(map);
   }
@@ -1379,36 +1424,52 @@ export class PixelEngine {
     totalFrames: number,
     prevCount: number,
     nextCount: number,
-    opacity: number
+    opacity: number,
+    onionOpts?: OnionSkinOptions
   ): Uint8ClampedArray {
     this.onionBuffer.fill(0);
 
-    for (let d = prevCount; d >= 1; d--) {
-      const f = currentFrame - d;
-      if (f < 0 || f >= totalFrames) continue;
-      this.compositeLayersInto(this.onionScratch, layers, f, false);
-      blendTintedScratchOver(
-        this.onionBuffer,
-        this.onionScratch,
-        235,
-        85,
-        110,
-        opacity / d
-      );
-    }
+    const tint = onionOpts?.tint !== false;
+    const baseOpacity = onionOpts?.baseOpacity ?? opacity;
+    const loopWrap = Boolean(onionOpts?.loopWrap);
+    const entries = resolveOnionSkinFrames(
+      currentFrame,
+      totalFrames,
+      prevCount,
+      nextCount,
+      loopWrap,
+      baseOpacity
+    );
 
-    for (let d = nextCount; d >= 1; d--) {
-      const f = currentFrame + d;
-      if (f < 0 || f >= totalFrames) continue;
-      this.compositeLayersInto(this.onionScratch, layers, f, false);
-      blendTintedScratchOver(
-        this.onionBuffer,
-        this.onionScratch,
-        80,
-        175,
-        255,
-        opacity / d
-      );
+    for (const entry of entries) {
+      this.compositeLayersInto(this.onionScratch, layers, entry.frame, false);
+      if (tint) {
+        if (entry.kind === "prev") {
+          blendTintedScratchOver(
+            this.onionBuffer,
+            this.onionScratch,
+            235,
+            85,
+            110,
+            entry.opacity
+          );
+        } else {
+          blendTintedScratchOver(
+            this.onionBuffer,
+            this.onionScratch,
+            80,
+            175,
+            255,
+            entry.opacity
+          );
+        }
+      } else {
+        blendOriginalScratchOver(
+          this.onionBuffer,
+          this.onionScratch,
+          entry.opacity
+        );
+      }
     }
 
     return this.onionBuffer;

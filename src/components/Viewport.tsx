@@ -69,6 +69,10 @@ export function Viewport() {
   const onionPrevFrames = useEditorStore((s) => s.onionPrevFrames);
   const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
   const onionOpacity = useEditorStore((s) => s.onionOpacity);
+  const onionSkinTint = useEditorStore((s) => s.onionSkinTint);
+  const onionSkinOpacity = useEditorStore((s) => s.onionSkinOpacity);
+  const onionSkinInFront = useEditorStore((s) => s.onionSkinInFront);
+  const onionSkinLoopWrap = useEditorStore((s) => s.onionSkinLoopWrap);
   const rigTool = useEditorStore((s) => s.rigTool);
   const rigMode = useEditorStore((s) => s.rigMode);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
@@ -179,18 +183,27 @@ export function Viewport() {
         resolveRendererBackdrop(state.canvasBackdrop, state.canvasBackdropColor)
       );
       if (state.onionSkin) {
+        const baseOpacity = state.onionSkinOpacity / 100;
         const onion = pixelEngine.compositeOnionSkin(
           state.layers,
           state.currentFrame,
           state.frames.length,
           state.onionPrevFrames,
           state.onionNextFrames,
-          state.onionOpacity
+          baseOpacity,
+          {
+            tint: state.onionSkinTint,
+            baseOpacity,
+            inFront: state.onionSkinInFront,
+            loopWrap: state.onionSkinLoopWrap,
+          }
         );
         renderer.uploadOnion(pixelEngine.width, pixelEngine.height, onion);
+        renderer.setOnionInFront(state.onionSkinInFront);
         renderer.setShowOnion(true);
       } else {
         renderer.setShowOnion(false);
+        renderer.setOnionInFront(false);
       }
       const targetPalette =
         PALETTE_PRESETS.find((p) => p.name === state.paletteLutPresetName)
@@ -385,6 +398,10 @@ export function Viewport() {
     onionPrevFrames,
     onionNextFrames,
     onionOpacity,
+    onionSkinTint,
+    onionSkinOpacity,
+    onionSkinInFront,
+    onionSkinLoopWrap,
     workspaceMode,
     viewFlipH,
     viewFlipV,

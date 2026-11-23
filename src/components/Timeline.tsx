@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  ArrowLeftRight,
   ChevronDown,
   ChevronRight,
   ChevronUp,
   Copy,
+  Grid,
   Layers,
   Link2,
   Pause,
@@ -25,12 +27,16 @@ import {
 } from "../engine/document/selectionActions";
 import {
   addEmptyFrameAction,
+  bulkDeleteSelectedCelsAction,
+  bulkSetFrameDurationAction,
   deleteCurrentFrameAction,
   duplicateCurrentFrameAction,
   reorderFrameAction,
+  reverseFramesAction,
   toggleLinkCelAction,
 } from "../engine/document/timelineActions";
 import { pixelEngine } from "../engine/document/PixelEngine";
+import type { TagDirection } from "../engine/tools/animationHelpers";
 import {
   getBoneInfluenceColor,
   type EasingMode,
@@ -47,6 +53,62 @@ import { mutateRig } from "../engine/rig/rigActions";
 import { useEditorStore } from "../store/editorStore";
 import { CurveEditor } from "./rig/CurveEditor";
 
+function CelThumbnail({
+  layerId,
+  frameIndex,
+  width,
+  height,
+}: {
+  layerId: string;
+  frameIndex: number;
+  width: number;
+  height: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const renderThumb = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.clearRect(0, 0, width, height);
+      const cel = pixelEngine.getCel(layerId, frameIndex);
+      if (!cel || cel.isEmpty()) return;
+      const img = new ImageData(
+        new Uint8ClampedArray(cel.data),
+        cel.width,
+        cel.height
+      );
+      ctx.putImageData(img, 0, 0);
+    };
+
+    renderThumb();
+    return pixelEngine.subscribe(renderThumb);
+  }, [layerId, frameIndex, width, height]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={width}
+      height={height}
+      className="draw-cel-thumb-canvas"
+    />
+  );
+}
+
+function nextTagDirection(dir?: TagDirection): TagDirection {
+  if (dir === "reverse") return "pingpong";
+  if (dir === "pingpong") return "forward";
+  return "reverse";
+}
+
+function tagDirectionBadge(dir?: TagDirection): string {
+  if (dir === "reverse") return "Rev";
+  if (dir === "pingpong") return "PP";
+  return "Fwd";
+}
+
 export function Timeline() {
   const frames = useEditorStore((s) => s.frames);
   const currentFrame = useEditorStore((s) => s.currentFrame);
@@ -57,6 +119,14 @@ export function Timeline() {
   const onionSkin = useEditorStore((s) => s.onionSkin);
   const onionPrevFrames = useEditorStore((s) => s.onionPrevFrames);
   const onionNextFrames = useEditorStore((s) => s.onionNextFrames);
+  const onionSkinTint = useEditorStore((s) => s.onionSkinTint);
+  const onionSkinOpacity = useEditorStore((s) => s.onionSkinOpacity);
+  const onionSkinInFront = useEditorStore((s) => s.onionSkinInFront);
+  const onionSkinLoopWrap = useEditorStore((s) => s.onionSkinLoopWrap);
+  const timelineShowThumbs = useEditorStore((s) => s.timelineShowThumbs);
+  const selectedCels = useEditorStore((s) => s.selectedCels);
+  const canvasWidth = useEditorStore((s) => s.canvasWidth);
+  const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const tags = useEditorStore((s) => s.tags);
   const activeTagId = useEditorStore((s) => s.activeTagId);
   const layers = useEditorStore((s) => s.layers);
@@ -82,9 +152,23 @@ export function Timeline() {
   const toggleOnionSkin = useEditorStore((s) => s.toggleOnionSkin);
   const setOnionPrevFrames = useEditorStore((s) => s.setOnionPrevFrames);
   const setOnionNextFrames = useEditorStore((s) => s.setOnionNextFrames);
+  const toggleOnionSkinTint = useEditorStore((s) => s.toggleOnionSkinTint);
+  const setOnionSkinOpacity = useEditorStore((s) => s.setOnionSkinOpacity);
+  const toggleOnionSkinInFront = useEditorStore(
+    (s) => s.toggleOnionSkinInFront
+  );
+  const toggleOnionSkinLoopWrap = useEditorStore(
+    (s) => s.toggleOnionSkinLoopWrap
+  );
+  const toggleTimelineShowThumbs = useEditorStore(
+    (s) => s.toggleTimelineShowThumbs
+  );
+  const setSelectedCels = useEditorStore((s) => s.setSelectedCels);
+  const clearSelectedCels = useEditorStore((s) => s.clearSelectedCels);
   const setActiveTagId = useEditorStore((s) => s.setActiveTagId);
   const setFrameDuration = useEditorStore((s) => s.setFrameDuration);
   const addTag = useEditorStore((s) => s.addTag);
+  const setTagDirection = useEditorStore((s) => s.setTagDirection);
   const deleteTag = useEditorStore((s) => s.deleteTag);
   const selectLayer = useEditorStore((s) => s.selectLayer);
   const toggleTimelineCollapsed = useEditorStore(
@@ -100,10 +184,17 @@ export function Timeline() {
   const [copiedKeys, setCopiedKeys] = useState<CopiedRigKeyframe[]>([]);
   const [retimeDragFrom, setRetimeDragFrom] = useState<number | null>(null);
   const [showTagForm, setShowTagForm] = useState(false);
+  const [showOnionPopover, setShowOnionPopover] = useState(false);
+  const [celAnchor, setCelAnchor] = useState<{
+    layerId: string;
+    frame: number;
+  } | null>(null);
+  const [bulkDurationMs, setBulkDurationMs] = useState(100);
   const [tagName, setTagName] = useState("run");
   const [tagFrom, setTagFrom] = useState(1);
   const [tagTo, setTagTo] = useState(frames.length);
   const [tagColor, setTagColor] = useState("#4cc38a");
+  const [tagDirection, setTagFormDirection] = useState<TagDirection>("forward");
 
   const activeLayer = layers.find((l) => l.id === activeLayerId);
   const isActiveCelLinked = Boolean(activeLayer?.linkedCels?.[currentFrame]);
@@ -111,9 +202,13 @@ export function Timeline() {
 
   const handleCreateTag = (e: React.FormEvent) => {
     e.preventDefault();
-    addTag(tagName, tagFrom - 1, tagTo - 1, tagColor);
+    addTag(tagName, tagFrom - 1, tagTo - 1, tagColor, tagDirection);
     setShowTagForm(false);
   };
+
+  const selectedFrameIndices = Array.from(
+    new Set(selectedCels.map((c) => c.frame))
+  );
 
   return (
     <section
@@ -221,6 +316,17 @@ export function Timeline() {
             <Copy size={12} />
           </button>
 
+          <button
+            type="button"
+            className="icon-action-btn"
+            style={{ width: 24, height: 24 }}
+            title="Reverse Frames (Active Tag or All)"
+            disabled={frames.length <= 1}
+            onClick={() => reverseFramesAction()}
+          >
+            <ArrowLeftRight size={12} />
+          </button>
+
           {workspaceMode === "rig" && rigMode === "animate" && (
             <>
               <div className="option-divider" />
@@ -267,45 +373,182 @@ export function Timeline() {
             <Link2 size={13} />
           </button>
 
-          <div className="option-divider" />
-
           <button
             type="button"
-            className={`toggle-chip ${onionSkin ? "active" : ""}`}
-            onClick={toggleOnionSkin}
-            title="Toggle GPU Onion Skinning"
+            className={`toggle-chip ${timelineShowThumbs ? "active" : ""}`}
+            style={{ padding: "2px 6px" }}
+            title="Toggle Cel Thumbnails"
+            onClick={toggleTimelineShowThumbs}
           >
-            <Layers size={12} />
-            <span>Onion</span>
+            <Grid size={11} />
+            <span>Thumbs</span>
           </button>
 
-          {onionSkin && (
-            <div className="onion-controls">
-              <span title="Previous frames">Prev</span>
-              <input
-                type="number"
-                className="onion-mini-input"
-                min={0}
-                max={3}
-                value={onionPrevFrames}
-                onChange={(e) => setOnionPrevFrames(Number(e.target.value))}
-              />
-              <span title="Next frames">Next</span>
-              <input
-                type="number"
-                className="onion-mini-input"
-                min={0}
-                max={3}
-                value={onionNextFrames}
-                onChange={(e) => setOnionNextFrames(Number(e.target.value))}
-              />
-            </div>
+          <div className="option-divider" />
+
+          <div style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <button
+              type="button"
+              className={`toggle-chip ${onionSkin ? "active" : ""}`}
+              onClick={toggleOnionSkin}
+              title="Toggle GPU Onion Skinning"
+            >
+              <Layers size={12} />
+              <span>Onion</span>
+            </button>
+
+            {onionSkin && (
+              <div className="onion-controls">
+                <span title="Previous frames">Prev</span>
+                <input
+                  type="number"
+                  className="onion-mini-input"
+                  min={0}
+                  max={3}
+                  value={onionPrevFrames}
+                  onChange={(e) => setOnionPrevFrames(Number(e.target.value))}
+                />
+                <span title="Next frames">Next</span>
+                <input
+                  type="number"
+                  className="onion-mini-input"
+                  min={0}
+                  max={3}
+                  value={onionNextFrames}
+                  onChange={(e) => setOnionNextFrames(Number(e.target.value))}
+                />
+                <button
+                  type="button"
+                  className={`toggle-chip ${showOnionPopover ? "active" : ""}`}
+                  style={{ padding: "1px 5px", fontSize: 10 }}
+                  title="Onion Skin v2 Options"
+                  onClick={() => setShowOnionPopover((v) => !v)}
+                >
+                  Opts
+                </button>
+              </div>
+            )}
+
+            {onionSkin && showOnionPopover && (
+              <div className="draw-onion-popover">
+                <div className="draw-onion-pop-row">
+                  <span>Color</span>
+                  <button
+                    type="button"
+                    className={`toggle-chip ${onionSkinTint ? "active" : ""}`}
+                    style={{ padding: "1px 6px", fontSize: 10 }}
+                    onClick={toggleOnionSkinTint}
+                  >
+                    {onionSkinTint ? "Tint (R/B)" : "Original"}
+                  </button>
+                </div>
+                <div className="draw-onion-pop-row">
+                  <span>Opacity</span>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <input
+                      type="range"
+                      min={10}
+                      max={80}
+                      value={onionSkinOpacity}
+                      onChange={(e) =>
+                        setOnionSkinOpacity(Number(e.target.value))
+                      }
+                      style={{ width: 68, accentColor: "var(--accent)" }}
+                    />
+                    <span className="mono-value" style={{ fontSize: 10, width: 28 }}>
+                      {onionSkinOpacity}%
+                    </span>
+                  </div>
+                </div>
+                <div className="draw-onion-pop-row">
+                  <span>Order</span>
+                  <button
+                    type="button"
+                    className={`toggle-chip ${onionSkinInFront ? "active" : ""}`}
+                    style={{ padding: "1px 6px", fontSize: 10 }}
+                    onClick={toggleOnionSkinInFront}
+                  >
+                    {onionSkinInFront ? "In Front" : "Behind"}
+                  </button>
+                </div>
+                <div className="draw-onion-pop-row">
+                  <span>Wrap</span>
+                  <button
+                    type="button"
+                    className={`toggle-chip ${onionSkinLoopWrap ? "active" : ""}`}
+                    style={{ padding: "1px 6px", fontSize: 10 }}
+                    onClick={toggleOnionSkinLoopWrap}
+                  >
+                    {onionSkinLoopWrap ? "Loop On" : "Loop Off"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {selectedCels.length > 0 && (
+            <>
+              <div className="option-divider" />
+              <div className="draw-cel-bulk-bar">
+                <span className="mono-value" style={{ fontSize: 10 }}>
+                  {selectedCels.length} sel
+                </span>
+                <button
+                  type="button"
+                  className="toggle-chip"
+                  style={{ padding: "1px 6px", fontSize: 10 }}
+                  title="Clear pixels in all selected cels (single undo)"
+                  onClick={bulkDeleteSelectedCelsAction}
+                >
+                  Clear Selected
+                </button>
+                <label className="fps-badge" title="Bulk duration (ms)">
+                  <input
+                    type="number"
+                    className="fps-input"
+                    style={{ width: 38 }}
+                    min={16}
+                    max={5000}
+                    step={10}
+                    value={bulkDurationMs}
+                    onChange={(e) => setBulkDurationMs(Number(e.target.value))}
+                  />
+                  <span style={{ color: "var(--text-muted)", fontSize: 10 }}>
+                    ms
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  className="toggle-chip"
+                  style={{ padding: "1px 6px", fontSize: 10 }}
+                  title="Set duration on selected frames"
+                  onClick={() =>
+                    bulkSetFrameDurationAction(
+                      selectedFrameIndices,
+                      bulkDurationMs
+                    )
+                  }
+                >
+                  Duration
+                </button>
+                <button
+                  type="button"
+                  className="icon-action-btn"
+                  style={{ width: 18, height: 18 }}
+                  title="Clear Cel Selection"
+                  onClick={clearSelectedCels}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            </>
           )}
         </div>
 
         <div className="tags-strip" style={{ position: "relative" }}>
           {tags.map((tag) => {
             const isTagActive = activeTagId === tag.id;
+            const dir = tag.direction ?? "forward";
             return (
               <div
                 key={tag.id}
@@ -322,6 +565,14 @@ export function Timeline() {
                     style={{ backgroundColor: isTagActive ? "#fff" : tag.color }}
                   />
                   <span>{tag.name}</span>
+                </button>
+                <button
+                  type="button"
+                  className="draw-tag-dir-btn"
+                  title={`Playback direction: ${dir} (click to cycle Fwd / Rev / Ping-Pong)`}
+                  onClick={() => setTagDirection(tag.id, nextTagDirection(dir))}
+                >
+                  {tagDirectionBadge(dir)}
                 </button>
                 <button
                   type="button"
@@ -381,6 +632,18 @@ export function Timeline() {
                 onChange={(e) => setTagTo(Number(e.target.value))}
                 title="To frame"
               />
+              <select
+                className="tag-form-input"
+                value={tagDirection}
+                onChange={(e) =>
+                  setTagFormDirection(e.target.value as TagDirection)
+                }
+                title="Tag Playback Direction"
+              >
+                <option value="forward">Fwd</option>
+                <option value="reverse">Rev</option>
+                <option value="pingpong">Ping-Pong</option>
+              </select>
               <input
                 type="color"
                 value={tagColor}
@@ -978,7 +1241,7 @@ export function Timeline() {
                 </div>
               ))}
 
-          {layers.map((layer) => {
+          {layers.map((layer, layerIdx) => {
             const isLayerActive = layer.id === activeLayerId;
             return (
               <div
@@ -999,13 +1262,53 @@ export function Timeline() {
                   const hasCel = Boolean(layer.cels[frame.index]);
                   const isLinked = Boolean(layer.linkedCels?.[frame.index]);
                   const activeCol = frame.index === currentFrame;
+                  const isCelSelected = selectedCels.some(
+                    (c) => c.layerId === layer.id && c.frame === frame.index
+                  );
                   return (
                     <button
                       key={`${layer.id}-${frame.id}`}
                       type="button"
-                      className={`cel-cell ${activeCol ? "active-col" : ""}`}
-                      title={`${layer.name} · Frame ${frame.index + 1}${isLinked ? " (Linked)" : ""}`}
-                      onClick={() => {
+                      className={`cel-cell ${activeCol ? "active-col" : ""} ${isCelSelected ? "draw-cel-selected" : ""}`}
+                      title={`${layer.name} · Frame ${frame.index + 1}${isLinked ? " (Linked)" : ""} (Shift+Click to select range)`}
+                      onClick={(e) => {
+                        if (e.shiftKey) {
+                          const anchor = celAnchor ?? {
+                            layerId: activeLayerId,
+                            frame: currentFrame,
+                          };
+                          const anchorLayerIdx = layers.findIndex(
+                            (l) => l.id === anchor.layerId
+                          );
+                          const loLayer =
+                            anchorLayerIdx >= 0
+                              ? Math.min(anchorLayerIdx, layerIdx)
+                              : layerIdx;
+                          const hiLayer =
+                            anchorLayerIdx >= 0
+                              ? Math.max(anchorLayerIdx, layerIdx)
+                              : layerIdx;
+                          const loFrame = Math.min(anchor.frame, frame.index);
+                          const hiFrame = Math.max(anchor.frame, frame.index);
+                          const range: Array<{ layerId: string; frame: number }> =
+                            [];
+                          for (let li = loLayer; li <= hiLayer; li++) {
+                            const rowLayer = layers[li];
+                            if (!rowLayer || rowLayer.kind === "group") continue;
+                            for (let fi = loFrame; fi <= hiFrame; fi++) {
+                              range.push({ layerId: rowLayer.id, frame: fi });
+                            }
+                          }
+                          setSelectedCels(range);
+                        } else {
+                          setCelAnchor({
+                            layerId: layer.id,
+                            frame: frame.index,
+                          });
+                          if (selectedCels.length > 0) {
+                            clearSelectedCels();
+                          }
+                        }
                         selectLayer(layer.id);
                         setCurrentFrame(frame.index);
                       }}
@@ -1042,9 +1345,22 @@ export function Timeline() {
                       {layer.kind !== "group" && (
                         <>
                           {isLinked && <span className="cel-link-bridge" />}
-                          <span
-                            className={`cel-dot ${isLinked ? "linked" : hasCel ? "" : "empty"}`}
-                          />
+                          {timelineShowThumbs && layer.kind === "raster" ? (
+                            hasCel || isLinked ? (
+                              <CelThumbnail
+                                layerId={layer.id}
+                                frameIndex={frame.index}
+                                width={canvasWidth}
+                                height={canvasHeight}
+                              />
+                            ) : (
+                              <span className="cel-dot empty" />
+                            )
+                          ) : (
+                            <span
+                              className={`cel-dot ${isLinked ? "linked" : hasCel ? "" : "empty"}`}
+                            />
+                          )}
                         </>
                       )}
                     </button>

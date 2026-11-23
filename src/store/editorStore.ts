@@ -12,6 +12,10 @@ import type { GradientMode } from "../engine/tools/gradient";
 import type { GuideAxis, GuideLine } from "../engine/tools/guides";
 import type { InkMode } from "../engine/tools/ink";
 import type { TransformAlgorithm, TransformState } from "../engine/tools/transform";
+import {
+  computeNextPlaybackFrame,
+  type TagDirection,
+} from "../engine/tools/animationHelpers.ts";
 
 export type {
   BlendMode,
@@ -23,6 +27,7 @@ export type {
   GuideLine,
   InkMode,
   LayerMapRole,
+  TagDirection,
   TileTool,
   TransformAlgorithm,
   TransformState,
@@ -128,6 +133,7 @@ export interface AnimationTag {
   fromFrame: number;
   toFrame: number;
   color: string;
+  direction?: TagDirection;
 }
 
 export interface CursorPoint {
@@ -347,6 +353,13 @@ interface EditorState {
   onionPrevFrames: number;
   onionNextFrames: number;
   onionOpacity: number;
+  onionSkinTint: boolean;
+  onionSkinOpacity: number;
+  onionSkinInFront: boolean;
+  onionSkinLoopWrap: boolean;
+  timelineShowThumbs: boolean;
+  selectedCels: Array<{ layerId: string; frame: number }>;
+  playbackPingPongDir: 1 | -1;
   tags: AnimationTag[];
   activeTagId: string | null;
 
@@ -514,12 +527,26 @@ interface EditorState {
   setOnionPrevFrames: (count: number) => void;
   setOnionNextFrames: (count: number) => void;
   setOnionOpacity: (opacity: number) => void;
+  toggleOnionSkinTint: () => void;
+  setOnionSkinOpacity: (opacity: number) => void;
+  toggleOnionSkinInFront: () => void;
+  toggleOnionSkinLoopWrap: () => void;
+  toggleTimelineShowThumbs: () => void;
+  setSelectedCels: (cels: Array<{ layerId: string; frame: number }>) => void;
+  clearSelectedCels: () => void;
   setActiveTagId: (tagId: string | null) => void;
   setFrameDuration: (frameIndex: number, durationMs: number) => void;
   insertFrameMetadata: (atIndex: number, durationMs?: number) => void;
   deleteFrameMetadata: (frameIndex: number) => void;
   moveFrameMetadata: (fromIndex: number, toIndex: number) => void;
-  addTag: (name: string, fromFrame: number, toFrame: number, color: string) => void;
+  addTag: (
+    name: string,
+    fromFrame: number,
+    toFrame: number,
+    color: string,
+    direction?: TagDirection
+  ) => void;
+  setTagDirection: (id: string, direction: TagDirection) => void;
   deleteTag: (id: string) => void;
   syncCelMetadata: (
     resolver: (
@@ -882,6 +909,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   onionPrevFrames: 1,
   onionNextFrames: 1,
   onionOpacity: 0.35,
+  onionSkinTint: true,
+  onionSkinOpacity: 35,
+  onionSkinInFront: false,
+  onionSkinLoopWrap: false,
+  timelineShowThumbs: false,
+  selectedCels: [],
+  playbackPingPongDir: 1,
   tags: [
     {
       id: "tag-idle",
@@ -889,6 +923,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       fromFrame: 0,
       toFrame: 3,
       color: "#5b8cff",
+      direction: "forward",
     },
   ],
   activeTagId: null,
@@ -1627,15 +1662,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         s.tags,
         s.activeTagId
       );
-      if (s.currentFrame < start) {
-        return { currentFrame: start };
-      }
-      if (s.currentFrame >= end) {
-        return s.loopPlayback
-          ? { currentFrame: start }
-          : { isPlaying: false, currentFrame: end };
-      }
-      return { currentFrame: s.currentFrame + 1 };
+      const activeTag = s.activeTagId
+        ? s.tags.find((t) => t.id === s.activeTagId)
+        : undefined;
+      const direction: TagDirection = activeTag?.direction ?? "forward";
+      const step = computeNextPlaybackFrame(
+        s.currentFrame,
+        start,
+        end,
+        direction,
+        s.playbackPingPongDir,
+        s.loopPlayback
+      );
+      return {
+        currentFrame: step.nextFrame,
+        playbackPingPongDir: step.nextPingPongDir,
+        isPlaying: step.stop ? false : s.isPlaying,
+      };
     }),
   togglePlaying: () => set((s) => ({ isPlaying: !s.isPlaying })),
   setIsPlaying: (isPlaying) => set({ isPlaying }),
@@ -1654,18 +1697,48 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ onionPrevFrames: Math.max(0, Math.min(3, Math.round(count))) }),
   setOnionNextFrames: (count) =>
     set({ onionNextFrames: Math.max(0, Math.min(3, Math.round(count))) }),
-  setOnionOpacity: (opacity) =>
-    set({ onionOpacity: Math.max(0.1, Math.min(0.8, opacity)) }),
+  setOnionOpacity: (opacity) => {
+    const clamped = Math.max(0.1, Math.min(0.8, opacity));
+    set({
+      onionOpacity: clamped,
+      onionSkinOpacity: Math.round(clamped * 100),
+    });
+  },
+  toggleOnionSkinTint: () =>
+    set((s) => ({ onionSkinTint: !s.onionSkinTint })),
+  setOnionSkinOpacity: (opacity) => {
+    const clamped = Math.max(10, Math.min(80, Math.round(opacity) || 10));
+    set({
+      onionSkinOpacity: clamped,
+      onionOpacity: clamped / 100,
+    });
+  },
+  toggleOnionSkinInFront: () =>
+    set((s) => ({ onionSkinInFront: !s.onionSkinInFront })),
+  toggleOnionSkinLoopWrap: () =>
+    set((s) => ({ onionSkinLoopWrap: !s.onionSkinLoopWrap })),
+  toggleTimelineShowThumbs: () =>
+    set((s) => ({ timelineShowThumbs: !s.timelineShowThumbs })),
+  setSelectedCels: (selectedCels) => set({ selectedCels }),
+  clearSelectedCels: () => set({ selectedCels: [] }),
   setActiveTagId: (activeTagId) =>
     set((s) => {
-      if (!activeTagId) return { activeTagId: null };
+      if (!activeTagId) return { activeTagId: null, playbackPingPongDir: 1 };
       const tag = s.tags.find((t) => t.id === activeTagId);
-      if (!tag) return { activeTagId: null };
+      if (!tag) return { activeTagId: null, playbackPingPongDir: 1 };
+      const dir = tag.direction ?? "forward";
+      const initialDir: 1 | -1 = dir === "reverse" ? -1 : 1;
       const clampedFrame =
         s.currentFrame < tag.fromFrame || s.currentFrame > tag.toFrame
-          ? tag.fromFrame
+          ? dir === "reverse"
+            ? tag.toFrame
+            : tag.fromFrame
           : s.currentFrame;
-      return { activeTagId, currentFrame: clampedFrame };
+      return {
+        activeTagId,
+        currentFrame: clampedFrame,
+        playbackPingPongDir: initialDir,
+      };
     }),
   setFrameDuration: (frameIndex, durationMs) =>
     set((s) => {
@@ -1704,6 +1777,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         frames: reindexed,
         tags: nextTags,
         currentFrame: clampedAt,
+        selectedCels: [],
       };
     }),
   deleteFrameMetadata: (frameIndex) =>
@@ -1741,6 +1815,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         tags: nextTags,
         activeTagId: nextActiveTagId,
         currentFrame: Math.min(s.currentFrame, maxIdx),
+        selectedCels: [],
       };
     }),
   moveFrameMetadata: (fromIndex, toIndex) =>
@@ -1761,9 +1836,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         frames: reindexed,
         currentFrame: toIndex,
+        selectedCels: [],
       };
     }),
-  addTag: (name, fromFrame, toFrame, color) =>
+  addTag: (name, fromFrame, toFrame, color, direction = "forward") =>
     set((s) => {
       const trimmed = name.trim();
       if (!trimmed) return s;
@@ -1776,13 +1852,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         fromFrame: lo,
         toFrame: hi,
         color,
+        direction,
       };
       return {
         tags: [...s.tags, newTag],
         activeTagId: newTag.id,
-        currentFrame: lo,
+        currentFrame: direction === "reverse" ? hi : lo,
+        playbackPingPongDir: direction === "reverse" ? -1 : 1,
       };
     }),
+  setTagDirection: (id, direction) =>
+    set((s) => ({
+      tags: s.tags.map((t) => (t.id === id ? { ...t, direction } : t)),
+      playbackPingPongDir:
+        s.activeTagId === id ? (direction === "reverse" ? -1 : 1) : s.playbackPingPongDir,
+    })),
   deleteTag: (id) =>
     set((s) => ({
       tags: s.tags.filter((t) => t.id !== id),
@@ -1961,6 +2045,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       currentFrame: 0,
       tags: payload.tags,
       activeTagId: null,
+      playbackPingPongDir: 1,
+      selectedCels: [],
       isPlaying: false,
       canUndo: false,
       canRedo: false,
