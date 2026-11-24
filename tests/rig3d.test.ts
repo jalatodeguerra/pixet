@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   RigState,
+  warpLayerByBone,
+  warpLayerByBone3D,
   type RigOrbit3D,
+  type RigRenderOptions,
 } from "../src/engine/rig/RigEngine.ts";
 import {
   applyPose,
@@ -11,6 +14,11 @@ import {
   pasteKeyframes,
   pasteMirroredPose,
 } from "../src/engine/rig/animationTools.ts";
+import { PixelBuffer } from "../src/engine/document/PixelBuffer.ts";
+import {
+  PixelEngine,
+  type LayerCompositingInfo,
+} from "../src/engine/document/PixelEngine.ts";
 
 function assertClose(actual: number, expected: number, eps = 1e-5, msg?: string): void {
   assert.ok(
@@ -427,3 +435,311 @@ test("R3D-3: virtual orbit rotates entire skeleton around origin without mutatin
   assert.equal(after.z, 0);
   assert.equal(after.facingZ, 1);
 });
+
+function fillRect(
+  buf: PixelBuffer,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  rgba: [number, number, number, number]
+): void {
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      buf.setPixel(x, y, rgba[0], rgba[1], rgba[2], rgba[3]);
+    }
+  }
+}
+
+function getPixelRgba(
+  data: Uint8ClampedArray,
+  width: number,
+  x: number,
+  y: number
+): [number, number, number, number] {
+  const i = (y * width + x) * 4;
+  return [data[i], data[i + 1], data[i + 2], data[i + 3]];
+}
+
+function measureOpaqueSpanX(buf: PixelBuffer): number {
+  let minX = buf.width;
+  let maxX = -1;
+  for (let y = 0; y < buf.height; y++) {
+    for (let x = 0; x < buf.width; x++) {
+      if (buf.data[(y * buf.width + x) * 4 + 3] > 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+  }
+  return maxX >= minX ? maxX - minX + 1 : 0;
+}
+
+test("R3D-4: warpLayerByBone3D flat 2D fast path matches warpLayerByBone bit-for-bit", () => {
+  const rig = new RigState();
+  const bone = rig.addBone({
+    name: "Arm",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 8,
+    rotationDeg: 0,
+  });
+
+  const src = new PixelBuffer(32, 32);
+  fillRect(src, 12, 12, 20, 20, [220, 60, 40, 255]);
+
+  rig.setPoseOverride(bone.id, { localX: 19, localY: 14, rotationDeg: 35 }, 0);
+  const rest = rig.computeWorldTransforms(0, "rest", false).get(bone.id)!;
+  const posed = rig.computeWorldTransforms(0, "pose", true).get(bone.id)!;
+
+  const opts: RigRenderOptions = { pixelSnap: true, rotSprite: false };
+  const out2d = warpLayerByBone(src, rest, posed, opts);
+  const out3d = warpLayerByBone3D(src, rest, posed, opts, {
+    extrudeDepth: 0,
+    depthProfile: "slab",
+    backSource: null,
+  });
+
+  assert.deepEqual(out3d.data, out2d.data);
+});
+
+test("R3D-4: warpLayerByBone3D foreshortens on yaw and renders backSource when rotated 180°", () => {
+  const rig = new RigState();
+  const bone = rig.addBone({
+    name: "Shield",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 8,
+    rotationDeg: 0,
+  });
+
+  const front = new PixelBuffer(32, 32);
+  fillRect(front, 8, 10, 24, 22, [240, 40, 40, 255]);
+
+  const back = new PixelBuffer(32, 32);
+  fillRect(back, 8, 10, 24, 22, [40, 90, 240, 255]);
+
+  const rest = rig.computeWorldTransforms(0, "rest", false).get(bone.id)!;
+  const opts: RigRenderOptions = { pixelSnap: true, rotSprite: false, perspective3d: 0 };
+
+  // 60° yaw foreshortens horizontal span roughly by cos(60°) = 0.5
+  rig.setPoseOverride(bone.id, { yawDeg: 60 }, 0);
+  const posed60 = rig.computeWorldTransforms(0, "pose", true).get(bone.id)!;
+  const warped60 = warpLayerByBone3D(front, rest, posed60, opts, {
+    extrudeDepth: 0,
+    backSource: back,
+  });
+  const baseWidth = measureOpaqueSpanX(front);
+  const yawWidth = measureOpaqueSpanX(warped60);
+  assert.ok(
+    yawWidth > 0 && yawWidth < baseWidth - 4,
+    `Expected foreshortened width (${yawWidth}) to be much smaller than original (${baseWidth})`
+  );
+
+  // 180° yaw flips facingZ < 0 and displays backSource color (blue) at center
+  rig.setPoseOverride(bone.id, { yawDeg: 180 }, 0);
+  const posed180 = rig.computeWorldTransforms(0, "pose", true).get(bone.id)!;
+  assert.ok(posed180.facingZ < 0);
+  const warped180 = warpLayerByBone3D(front, rest, posed180, opts, {
+    extrudeDepth: 0,
+    backSource: back,
+  });
+  const centerPx = getPixelRgba(warped180.data, 32, 16, 16);
+  assert.equal(centerPx[3], 255);
+  assert.ok(centerPx[2] > 200 && centerPx[0] < 80, `Expected blue backSource pixel, got [${centerPx.join(",")}]`);
+});
+
+test("R3D-4: compositeRigFrame dynamic Z-sorting swaps overlapping bound bone layers and respects backLayerId", () => {
+  const engine = new PixelEngine(32, 32);
+  const layerFront = "layer-front";
+  const layerBack = "layer-back";
+  const layerCardBack = "layer-card-back";
+
+  const celRed = engine.getOrCreateCel(layerFront, 0);
+  fillRect(celRed, 12, 12, 20, 20, [255, 0, 0, 255]);
+
+  const celBlue = engine.getOrCreateCel(layerBack, 0);
+  fillRect(celBlue, 12, 12, 20, 20, [0, 0, 255, 255]);
+
+  const celGreen = engine.getOrCreateCel(layerCardBack, 0);
+  fillRect(celGreen, 12, 12, 20, 20, [0, 220, 0, 255]);
+
+  // In layers[], index 0 is top of layer stack (drawn last in 2D)
+  const layers: LayerCompositingInfo[] = [
+    { id: layerFront, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+    { id: layerBack, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+    { id: layerCardBack, kind: "raster", visible: false, opacity: 100, blendMode: "Normal" },
+  ];
+
+  const boneRed = engine.rig.addBone({
+    name: "RedBone",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 4,
+    rotationDeg: 0,
+    boundLayerId: layerFront,
+    localZ: 5,
+    backLayerId: layerCardBack,
+  });
+  const boneBlue = engine.rig.addBone({
+    name: "BlueBone",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 4,
+    rotationDeg: 0,
+    boundLayerId: layerBack,
+    localZ: -5,
+  });
+
+  const opts: RigRenderOptions = { pixelSnap: true, rotSprite: false, autoZSort: true };
+
+  // Red at z=+5 is closer than Blue at z=-5 -> Red on top
+  const out1 = engine.compositeRigFrame(layers, 0, opts);
+  assert.deepEqual(getPixelRgba(out1, 32, 16, 16), [255, 0, 0, 255]);
+
+  // Move Blue in front (z=+10) and Red behind (z=-10) -> Blue swaps on top!
+  engine.rig.setPoseOverride(boneRed.id, { localZ: -10 }, 0);
+  engine.rig.setPoseOverride(boneBlue.id, { localZ: 10 }, 0);
+  const out2 = engine.compositeRigFrame(layers, 0, opts);
+  assert.deepEqual(getPixelRgba(out2, 32, 16, 16), [0, 0, 255, 255]);
+
+  // Disabling autoZSort restores original layer stack order (Red on top)
+  const outNoSort = engine.compositeRigFrame(layers, 0, { ...opts, autoZSort: false });
+  assert.deepEqual(getPixelRgba(outNoSort, 32, 16, 16), [255, 0, 0, 255]);
+
+  // Flip Red bone 180° yaw while keeping it in front -> green backLayerId renders on top
+  engine.rig.setPoseOverride(boneRed.id, { localZ: 10, yawDeg: 180 }, 0);
+  engine.rig.setPoseOverride(boneBlue.id, { localZ: -10 }, 0);
+  const outFlipped = engine.compositeRigFrame(layers, 0, { ...opts, perspective3d: 0 });
+  const pxFlipped = getPixelRgba(outFlipped, 32, 16, 16);
+  assert.equal(pxFlipped[3], 255);
+  assert.ok(pxFlipped[1] > 180 && pxFlipped[0] < 50 && pxFlipped[2] < 50, `Expected green backLayerId, got [${pxFlipped.join(",")}]`);
+});
+
+test("R3D-4: compositeRigFrame with rootOrbit swaps depth order at 180° yaw without mutating rig state", () => {
+  const engine = new PixelEngine(32, 32);
+  const layerA = "limb-a";
+  const layerB = "limb-b";
+
+  // Both limbs overlap at (16, 16) in screen space, separated in Z
+  fillRect(engine.getOrCreateCel(layerA, 0), 13, 13, 19, 19, [255, 40, 40, 255]);
+  fillRect(engine.getOrCreateCel(layerB, 0), 13, 13, 19, 19, [40, 80, 255, 255]);
+
+  const layers: LayerCompositingInfo[] = [
+    { id: layerA, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+    { id: layerB, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+  ];
+
+  const root = engine.rig.addBone({
+    name: "Torso",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 4,
+    rotationDeg: 0,
+  });
+  engine.rig.addBone({
+    name: "LimbA",
+    parentId: root.id,
+    localX: 0,
+    localY: 0,
+    length: 4,
+    rotationDeg: 0,
+    localZ: 6,
+    boundLayerId: layerA,
+  });
+  engine.rig.addBone({
+    name: "LimbB",
+    parentId: root.id,
+    localX: 0,
+    localY: 0,
+    length: 4,
+    rotationDeg: 0,
+    localZ: -6,
+    boundLayerId: layerB,
+  });
+
+  // At 0° orbit: LimbA (z=+6, red) is on top
+  const out0 = engine.compositeRigFrame(layers, 0, {
+    pixelSnap: true,
+    rotSprite: false,
+    autoZSort: true,
+    perspective3d: 0,
+    rootOrbit: { yawDeg: 0, pitchDeg: 0, rollDeg: 0, originX: 16, originY: 16 },
+  });
+  const px0 = getPixelRgba(out0, 32, 16, 16);
+  assert.ok(px0[0] > 200 && px0[2] < 80, `Expected red LimbA at 0° orbit, got [${px0.join(",")}]`);
+
+  // At 180° yaw orbit: LimbB rotates to z=+6 and LimbA to z=-6 -> blue LimbB swaps on top!
+  const out180 = engine.compositeRigFrame(layers, 0, {
+    pixelSnap: true,
+    rotSprite: false,
+    autoZSort: true,
+    perspective3d: 0,
+    rootOrbit: { yawDeg: 180, pitchDeg: 0, rollDeg: 0, originX: 16, originY: 16 },
+  });
+  const px180 = getPixelRgba(out180, 32, 16, 16);
+  assert.ok(px180[2] > 200 && px180[0] < 80, `Expected blue LimbB at 180° orbit, got [${px180.join(",")}]`);
+
+  // Rig state must remain unmutated
+  assert.equal(engine.rig.bones[0].yawDeg ?? 0, 0);
+  const afterOrbit = engine.compositeRigFrame(layers, 0, {
+    pixelSnap: true,
+    rotSprite: false,
+    autoZSort: true,
+    perspective3d: 0,
+  });
+  const pxAfter = getPixelRgba(afterOrbit, 32, 16, 16);
+  assert.ok(pxAfter[0] > 200 && pxAfter[2] < 80, `Expected red LimbA restored after orbit, got [${pxAfter.join(",")}]`);
+});
+
+test("R3D-4: pure 2D rig compositing (all z=0) preserves exact layer draw order", () => {
+  const engine = new PixelEngine(32, 32);
+  const layerTop = "layer-top";
+  const layerBottom = "layer-bottom";
+
+  fillRect(engine.getOrCreateCel(layerTop, 0), 10, 10, 22, 22, [240, 200, 20, 255]);
+  fillRect(engine.getOrCreateCel(layerBottom, 0), 10, 10, 22, 22, [80, 40, 200, 255]);
+
+  const layers: LayerCompositingInfo[] = [
+    { id: layerTop, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+    { id: layerBottom, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+  ];
+
+  const b1 = engine.rig.addBone({
+    name: "TopBone",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 6,
+    rotationDeg: 0,
+    boundLayerId: layerTop,
+  });
+  engine.rig.addBone({
+    name: "BottomBone",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 6,
+    rotationDeg: 0,
+    boundLayerId: layerBottom,
+  });
+
+  engine.rig.setPoseOverride(b1.id, { rotationDeg: 25 }, 0);
+
+  const withAutoSort = new Uint8ClampedArray(
+    engine.compositeRigFrame(layers, 0, { pixelSnap: true, rotSprite: false, autoZSort: true })
+  );
+  const withoutAutoSort = new Uint8ClampedArray(
+    engine.compositeRigFrame(layers, 0, { pixelSnap: true, rotSprite: false, autoZSort: false })
+  );
+
+  assert.deepEqual(withAutoSort, withoutAutoSort);
+  // Top layer (yellow) remains on top of bottom layer (purple)
+  assert.deepEqual(getPixelRgba(withAutoSort, 32, 16, 16), [240, 200, 20, 255]);
+});
+

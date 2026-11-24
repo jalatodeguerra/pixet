@@ -39,8 +39,9 @@ import {
   mat3Identity,
   mat3Mul,
   mat3MulVec,
+  mat3Transpose,
 } from "../tools/math3d.ts";
-import type { DepthProfile } from "../tools/rotate3d.ts";
+import { render25DSprite, type DepthProfile } from "../tools/rotate3d.ts";
 
 export type EasingMode =
   | "linear"
@@ -255,6 +256,18 @@ export interface RigRenderOptions {
   mode?: "rest" | "pose";
   /** R6 post-deformation pixel cleanup (optional). */
   cleanup?: PixelCleanupOptions;
+  /** Dynamically sort bone layers/slots by world Z depth (default true). */
+  autoZSort?: boolean;
+  /** Perspective strength for 2.5D bone rasterization (0..1, default 0.2). */
+  perspective3d?: number;
+  /** Enable directional lighting on 3D-rotated bones (default false). */
+  directionalLighting?: boolean;
+  /** Directional light azimuth in degrees (default -35). */
+  lightAzimuthDeg?: number;
+  /** Directional light elevation in degrees (default 45). */
+  lightElevationDeg?: number;
+  /** Optional virtual root 3D orbit applied without mutating rig state (default null). */
+  rootOrbit?: RigOrbit3D | null;
 }
 
 export interface BoneMask {
@@ -613,6 +626,113 @@ export function warpLayerByBone(
         outData[dIdx + 2] = best[2];
         outData[dIdx + 3] = best[3];
       }
+    }
+  }
+
+  out.markAllDirty();
+  return out;
+}
+
+export interface BoneWarp3DExtras {
+  extrudeDepth?: number;
+  depthProfile?: DepthProfile;
+  backSource?: PixelBuffer | null;
+}
+
+/**
+ * Warps a raster cel `src` from `rest` bone space into `posed` bone space,
+ * using 2.5D ray-marched rasterization when the bone has 3D tilt, extrusion,
+ * or faces away from the viewer. Delegates directly to `warpLayerByBone` for
+ * flat 2D transforms (zero overhead, bit-identical fast path).
+ */
+export function warpLayerByBone3D(
+  src: PixelBuffer,
+  rest: BoneWorldTransform,
+  posed: BoneWorldTransform,
+  opts: RigRenderOptions,
+  extras?: BoneWarp3DExtras
+): PixelBuffer {
+  const rDelta = mat3Mul(posed.worldMatrix, mat3Transpose(rest.worldMatrix));
+  const { yawDeg, pitchDeg, rollDeg } = mat3ExtractEulerDeg(rDelta);
+  const extrudeDepth = Math.max(0, extras?.extrudeDepth ?? 0);
+
+  if (
+    Math.abs(yawDeg) < 0.05 &&
+    Math.abs(pitchDeg) < 0.05 &&
+    extrudeDepth <= 0 &&
+    posed.facingZ >= 0
+  ) {
+    return warpLayerByBone(src, rest, posed, opts);
+  }
+
+  const rx = opts.pixelSnap ? Math.round(rest.x) : rest.x;
+  const ry = opts.pixelSnap ? Math.round(rest.y) : rest.y;
+  const px = opts.pixelSnap ? Math.round(posed.x) : posed.x;
+  const py = opts.pixelSnap ? Math.round(posed.y) : posed.y;
+
+  const relScaleX =
+    Math.abs(rest.worldScaleX) > 1e-6
+      ? posed.worldScaleX / rest.worldScaleX
+      : posed.worldScaleX;
+  const relScaleY =
+    Math.abs(rest.worldScaleY) > 1e-6
+      ? posed.worldScaleY / rest.worldScaleY
+      : posed.worldScaleY;
+
+  const rendered = render25DSprite(src, {
+    yawDeg,
+    pitchDeg,
+    rollDeg,
+    extrudeDepth,
+    depthProfile: extras?.depthProfile ?? "slab",
+    perspective: opts.perspective3d ?? 0.2,
+    shadeDepth: true,
+    supersample: false,
+    outlineColor: null,
+    pivotX: rx,
+    pivotY: ry,
+    directionalLighting: opts.directionalLighting ?? false,
+    lightAzimuthDeg: opts.lightAzimuthDeg,
+    lightElevationDeg: opts.lightElevationDeg,
+    backSource: extras?.backSource ?? null,
+    mirrorBack: !extras?.backSource,
+  });
+
+  const noTranslate = Math.abs(px - rx) < 1e-4 && Math.abs(py - ry) < 1e-4;
+  const noScale =
+    Math.abs(relScaleX - 1) <= 1e-3 && Math.abs(relScaleY - 1) <= 1e-3;
+  if (noTranslate && noScale) {
+    return rendered;
+  }
+
+  const w = src.width;
+  const h = src.height;
+  const out = new PixelBuffer(w, h);
+  if (Math.abs(relScaleX) < 1e-6 || Math.abs(relScaleY) < 1e-6) {
+    return out;
+  }
+
+  const invScaleX = 1 / relScaleX;
+  const invScaleY = 1 / relScaleY;
+  const renData = rendered.data;
+  const outData = out.data;
+
+  for (let dy = 0; dy < h; dy++) {
+    const sy = Math.round(ry + (dy - py) * invScaleY);
+    if (sy < 0 || sy >= h) continue;
+    const sRow = sy * w;
+    const dRow = dy * w;
+    for (let dx = 0; dx < w; dx++) {
+      const sx = Math.round(rx + (dx - px) * invScaleX);
+      if (sx < 0 || sx >= w) continue;
+      const sIdx = (sRow + sx) * 4;
+      const a = renData[sIdx + 3];
+      if (a === 0) continue;
+      const dIdx = (dRow + dx) * 4;
+      outData[dIdx] = renData[sIdx];
+      outData[dIdx + 1] = renData[sIdx + 1];
+      outData[dIdx + 2] = renData[sIdx + 2];
+      outData[dIdx + 3] = a;
     }
   }
 

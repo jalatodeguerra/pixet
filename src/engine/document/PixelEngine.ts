@@ -30,9 +30,10 @@ import {
   TilesetRegistry,
 } from "../tiles/TilemapEngine.ts";
 import {
+  type Bone,
   type RigRenderOptions,
   RigState,
-  warpLayerByBone,
+  warpLayerByBone3D,
 } from "../rig/RigEngine.ts";
 import {
   applyPixelCleanup,
@@ -1020,17 +1021,46 @@ export class PixelEngine {
       byId.set(l.id, l);
     }
 
+    const rootOrbit = opts.rootOrbit ?? null;
     const restMap = this.rig.computeWorldTransforms(frameIndex, "rest", false);
     const poseMap =
       opts.mode === "rest"
-        ? restMap
-        : this.rig.computeWorldTransforms(frameIndex, "pose", useOverrides);
+        ? rootOrbit
+          ? this.rig.computeWorldTransforms(frameIndex, "rest", false, rootOrbit)
+          : restMap
+        : this.rig.computeWorldTransforms(
+            frameIndex,
+            "pose",
+            useOverrides,
+            rootOrbit
+          );
+
+    const boneById = new Map<string, Bone>();
     const layerToBoneId = new Map<string, string>();
     for (const bone of this.rig.bones) {
+      boneById.set(bone.id, bone);
       if (bone.boundLayerId) {
         layerToBoneId.set(bone.boundLayerId, bone.id);
       }
     }
+
+    const resolveBackSource = (bone: Bone | undefined): PixelBuffer | null => {
+      const backId = bone?.backLayerId;
+      if (!backId) return null;
+      let backCel = this.getCel(backId, frameIndex);
+      if ((!backCel || backCel.isEmpty()) && frameIndex > 0) {
+        const fallback = this.getCel(backId, 0);
+        if (fallback && !fallback.isEmpty()) {
+          backCel = fallback;
+        }
+      }
+      return backCel && !backCel.isEmpty() ? backCel : null;
+    };
+
+    const orbitKey = rootOrbit
+      ? `${rootOrbit.yawDeg},${rootOrbit.pitchDeg},${rootOrbit.rollDeg},${rootOrbit.originX},${rootOrbit.originY}`
+      : "0";
+    const render3dKey = `${opts.perspective3d ?? 0.2}|${opts.directionalLighting ? 1 : 0}|${opts.lightAzimuthDeg ?? -35}|${opts.lightElevationDeg ?? 45}|${orbitKey}`;
 
     // R6 soft skinning + mesh deformation share the same bone transforms.
     const weights = this.rig.getBoneWeights();
@@ -1038,6 +1068,27 @@ export class PixelEngine {
     const activeClip = this.rig.getActiveClip();
     const rigRevision = this.rig.revisionId;
     const slotLayerIds = this.rig.getSlotLayerIds();
+
+    type RigDrawItem =
+      | {
+          kind: "buffer";
+          buffer: PixelBuffer;
+          opacity: number;
+          blendMode: BlendModeName;
+          z: number;
+          order: number;
+        }
+      | {
+          kind: "tilemap";
+          tilemap: TilemapData;
+          opacity: number;
+          blendMode: BlendModeName;
+          z: number;
+          order: number;
+        };
+
+    const drawItems: RigDrawItem[] = [];
+    let drawOrder = 0;
 
     for (let li = layers.length - 1; li >= 0; li--) {
       const layer = layers[li];
@@ -1049,29 +1100,14 @@ export class PixelEngine {
       if (layer.kind === "tilemap") {
         const tm = this.getTilemap(layer.id, frameIndex);
         if (tm) {
-          if (this.tileProjection === "isometric") {
-            renderIsometricTilemapToBuffer(
-              tm,
-              this.tilesetRegistry,
-              dst,
-              this.width,
-              this.height,
-              effective.opacity,
-              layer.blendMode,
-              this.tileAnimationElapsedMs
-            );
-          } else {
-            renderTilemapToBuffer(
-              tm,
-              this.tilesetRegistry,
-              dst,
-              this.width,
-              this.height,
-              effective.opacity,
-              layer.blendMode,
-              this.tileAnimationElapsedMs
-            );
-          }
+          drawItems.push({
+            kind: "tilemap",
+            tilemap: tm,
+            opacity: effective.opacity,
+            blendMode: layer.blendMode,
+            z: 0,
+            order: drawOrder++,
+          });
         }
         continue;
       }
@@ -1093,7 +1129,7 @@ export class PixelEngine {
           ? weights
           : null;
       const mesh = this.rig.getMeshForLayer(layer.id);
-      const deformKey = `${layer.id}|${frameIndex}|${rigRevision}|${sourceCel.revision}|${opts.mode ?? "pose"}|${useOverrides ? 1 : 0}|${opts.pixelSnap ? 1 : 0}|${opts.rotSprite ? 1 : 0}`;
+      const deformKey = `${layer.id}|${frameIndex}|${rigRevision}|${sourceCel.revision}|${opts.mode ?? "pose"}|${useOverrides ? 1 : 0}|${opts.pixelSnap ? 1 : 0}|${opts.rotSprite ? 1 : 0}|${render3dKey}`;
 
       // R6 mesh deformation (FFD + skin weights) via inverse triangles.
       if (mesh) {
@@ -1108,37 +1144,33 @@ export class PixelEngine {
               pixelSnap: opts.pixelSnap,
             })
         );
-        compositeSourceOnto(
-          dst,
-          this.width,
-          this.height,
-          warped,
-          0,
-          0,
-          effective.opacity,
-          layer.blendMode
-        );
+        drawItems.push({
+          kind: "buffer",
+          buffer: warped,
+          opacity: effective.opacity,
+          blendMode: layer.blendMode,
+          z: 0,
+          order: drawOrder++,
+        });
         continue;
       }
 
       // R6 soft weights use LBS (inverse-mapped lattice, hole-free sampling).
-      // Hard weights keep the fast per-bone warpLayerByBone path below.
+      // Hard weights keep the fast per-bone warpLayerByBone3D path below.
       if (celWeights && !weightsAreHard(celWeights)) {
         const warped = this.getRigDeformedBuffer(`${deformKey}|lbs`, () =>
           skinLayerPixels(sourceCel, celWeights, boneTransforms, {
             pixelSnap: opts.pixelSnap,
           })
         );
-        compositeSourceOnto(
-          dst,
-          this.width,
-          this.height,
-          warped,
-          0,
-          0,
-          effective.opacity,
-          layer.blendMode
-        );
+        drawItems.push({
+          kind: "buffer",
+          buffer: warped,
+          opacity: effective.opacity,
+          blendMode: layer.blendMode,
+          z: 0,
+          order: drawOrder++,
+        });
         continue;
       }
 
@@ -1161,7 +1193,7 @@ export class PixelEngine {
           }
         }
 
-        // Composite unmasked pixels stationary first
+        // Collect unmasked pixels stationary at z = 0
         const unmasked = new PixelBuffer(cel.width, cel.height);
         for (let i = 0; i < pxCount; i++) {
           if (anyMasked[i] > 0) continue;
@@ -1173,19 +1205,17 @@ export class PixelEngine {
           unmasked.data[pIdx + 3] = cel.data[pIdx + 3];
         }
         if (!unmasked.isEmpty()) {
-          compositeSourceOnto(
-            dst,
-            this.width,
-            this.height,
-            unmasked,
-            0,
-            0,
-            effective.opacity,
-            layer.blendMode
-          );
+          drawItems.push({
+            kind: "buffer",
+            buffer: unmasked,
+            opacity: effective.opacity,
+            blendMode: layer.blendMode,
+            z: 0,
+            order: drawOrder++,
+          });
         }
 
-        // Composite each bone's masked pixels warped by that bone
+        // Collect each bone's masked pixels warped by that bone
         for (const b of matchingMaskedBones) {
           const m = this.rig.getBoneMask(b.id)!;
           const slice = new PixelBuffer(cel.width, cel.height);
@@ -1205,47 +1235,63 @@ export class PixelEngine {
 
           const rest = restMap.get(b.id);
           const posed = poseMap.get(b.id);
+          const backSource = resolveBackSource(b);
           const warped =
-            rest && posed ? warpLayerByBone(slice, rest, posed, opts) : slice;
-          compositeSourceOnto(
-            dst,
-            this.width,
-            this.height,
-            warped,
-            0,
-            0,
-            effective.opacity,
-            layer.blendMode
-          );
+            rest && posed
+              ? warpLayerByBone3D(slice, rest, posed, opts, {
+                  extrudeDepth: b.extrudeDepth,
+                  depthProfile: b.depthProfile,
+                  backSource,
+                })
+              : slice;
+          const z = posed ? (posed.z + posed.tipZ) * 0.5 : 0;
+          drawItems.push({
+            kind: "buffer",
+            buffer: warped,
+            opacity: effective.opacity,
+            blendMode: layer.blendMode,
+            z,
+            order: drawOrder++,
+          });
         }
         continue;
       }
 
       let sourceBuf = cel;
+      let itemZ = 0;
       if (boneId) {
+        const bone = boneById.get(boneId);
         const rest = restMap.get(boneId);
         const posed = poseMap.get(boneId);
         if (rest && posed) {
+          const backSource = resolveBackSource(bone);
+          const backKey = backSource
+            ? `${bone?.backLayerId ?? ""}:${backSource.revision}`
+            : "none";
           sourceBuf = this.getRigDeformedBuffer(
-            `${deformKey}|warp:${boneId}`,
-            () => warpLayerByBone(sourceCel, rest, posed, opts)
+            `${deformKey}|warp:${boneId}|back:${backKey}`,
+            () =>
+              warpLayerByBone3D(sourceCel, rest, posed, opts, {
+                extrudeDepth: bone?.extrudeDepth,
+                depthProfile: bone?.depthProfile,
+                backSource,
+              })
           );
+          itemZ = (posed.z + posed.tipZ) * 0.5;
         }
       }
 
-      compositeSourceOnto(
-        dst,
-        this.width,
-        this.height,
-        sourceBuf,
-        0,
-        0,
-        effective.opacity,
-        layer.blendMode
-      );
+      drawItems.push({
+        kind: "buffer",
+        buffer: sourceBuf,
+        opacity: effective.opacity,
+        blendMode: layer.blendMode,
+        z: itemZ,
+        order: drawOrder++,
+      });
     }
 
-    // R5 Sprite swapping: composite slots in draw order.
+    // R5 Sprite swapping: collect slots in draw order.
     for (const slot of this.rig.slots) {
       const att = this.rig.resolveSlotAttachment(
         slot,
@@ -1263,25 +1309,87 @@ export class PixelEngine {
         : { visible: true, opacity: 1 };
       if (!attEff.visible || attEff.opacity <= 0) continue;
 
+      const bone = boneById.get(slot.boneId);
       const rest = restMap.get(slot.boneId);
       const posed = poseMap.get(slot.boneId);
-      const warped =
-        rest && posed
-          ? this.getRigDeformedBuffer(
-              `slot:${slot.id}|${att.name}|${frameIndex}|${rigRevision}|${sourceCel.revision}|${opts.mode ?? "pose"}|${useOverrides ? 1 : 0}|${opts.pixelSnap ? 1 : 0}|${opts.rotSprite ? 1 : 0}`,
-              () => warpLayerByBone(sourceCel, rest, posed, opts)
-            )
-          : sourceCel;
-      compositeSourceOnto(
-        dst,
-        this.width,
-        this.height,
-        warped,
-        0,
-        0,
-        attEff.opacity,
-        attLayer?.blendMode ?? "Normal"
-      );
+      let warped = sourceCel;
+      let slotZ = 0;
+      if (rest && posed) {
+        const backSource = resolveBackSource(bone);
+        const backKey = backSource
+          ? `${bone?.backLayerId ?? ""}:${backSource.revision}`
+          : "none";
+        warped = this.getRigDeformedBuffer(
+          `slot:${slot.id}|${att.name}|${frameIndex}|${rigRevision}|${sourceCel.revision}|${opts.mode ?? "pose"}|${useOverrides ? 1 : 0}|${opts.pixelSnap ? 1 : 0}|${opts.rotSprite ? 1 : 0}|${render3dKey}|back:${backKey}`,
+          () =>
+            warpLayerByBone3D(sourceCel, rest, posed, opts, {
+              extrudeDepth: bone?.extrudeDepth,
+              depthProfile: bone?.depthProfile,
+              backSource,
+            })
+        );
+        slotZ = (posed.z + posed.tipZ) * 0.5;
+      }
+
+      drawItems.push({
+        kind: "buffer",
+        buffer: warped,
+        opacity: attEff.opacity,
+        blendMode: attLayer?.blendMode ?? "Normal",
+        z: slotZ,
+        order: drawOrder++,
+      });
+    }
+
+    // Dynamic Z-sorting (far-to-near: smaller/more-negative z draws first).
+    // When all items have z ≈ 0, skip sorting to preserve exact 2D draw order.
+    if (
+      opts.autoZSort !== false &&
+      drawItems.some((item) => Math.abs(item.z) > 1e-4)
+    ) {
+      drawItems.sort((a, b) => {
+        const dz = a.z - b.z;
+        return Math.abs(dz) > 1e-6 ? dz : a.order - b.order;
+      });
+    }
+
+    for (const item of drawItems) {
+      if (item.kind === "tilemap") {
+        if (this.tileProjection === "isometric") {
+          renderIsometricTilemapToBuffer(
+            item.tilemap,
+            this.tilesetRegistry,
+            dst,
+            this.width,
+            this.height,
+            item.opacity,
+            item.blendMode,
+            this.tileAnimationElapsedMs
+          );
+        } else {
+          renderTilemapToBuffer(
+            item.tilemap,
+            this.tilesetRegistry,
+            dst,
+            this.width,
+            this.height,
+            item.opacity,
+            item.blendMode,
+            this.tileAnimationElapsedMs
+          );
+        }
+      } else {
+        compositeSourceOnto(
+          dst,
+          this.width,
+          this.height,
+          item.buffer,
+          0,
+          0,
+          item.opacity,
+          item.blendMode
+        );
+      }
     }
 
     const cleanup = opts.cleanup;
