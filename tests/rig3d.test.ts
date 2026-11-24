@@ -19,6 +19,7 @@ import {
   PixelEngine,
   type LayerCompositingInfo,
 } from "../src/engine/document/PixelEngine.ts";
+import { bakeRigTurntable } from "../src/engine/rig/export/bake.ts";
 
 function assertClose(actual: number, expected: number, eps = 1e-5, msg?: string): void {
   assert.ok(
@@ -742,4 +743,163 @@ test("R3D-4: pure 2D rig compositing (all z=0) preserves exact layer draw order"
   // Top layer (yellow) remains on top of bottom layer (purple)
   assert.deepEqual(getPixelRgba(withAutoSort, 32, 16, 16), [240, 200, 20, 255]);
 });
+
+test("R3D-6: bakeRigTurntable pose mode renders 4 distinct non-empty directions and preserves rig state", () => {
+  const engine = new PixelEngine(32, 32);
+  const layerFront = "turntable-front";
+  const layerBack = "turntable-back";
+
+  fillRect(engine.getOrCreateCel(layerFront, 0), 11, 11, 21, 21, [240, 50, 50, 255]);
+  fillRect(engine.getOrCreateCel(layerBack, 0), 11, 11, 21, 21, [40, 90, 245, 255]);
+
+  const layers: LayerCompositingInfo[] = [
+    { id: layerFront, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+    { id: layerBack, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+  ];
+
+  const root = engine.rig.addBone({
+    name: "Root",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 4,
+    rotationDeg: 0,
+  });
+  engine.rig.addBone({
+    name: "FrontShield",
+    parentId: root.id,
+    localX: 0,
+    localY: 0,
+    length: 4,
+    rotationDeg: 0,
+    localZ: 5,
+    extrudeDepth: 2,
+    boundLayerId: layerFront,
+  });
+  engine.rig.addBone({
+    name: "BackCloak",
+    parentId: root.id,
+    localX: 0,
+    localY: 0,
+    length: 4,
+    rotationDeg: 0,
+    localZ: -5,
+    extrudeDepth: 2,
+    boundLayerId: layerBack,
+  });
+
+  const prevClipId = engine.rig.activeClipId;
+  const result = bakeRigTurntable(engine, layers, {
+    mode: "pose",
+    directions: 4,
+    startYawDeg: 0,
+    sweepDeg: 360,
+    pitchDeg: 0,
+    rollDeg: 0,
+    sourceFrame: 0,
+    renderOptions: {
+      pixelSnap: true,
+      rotSprite: false,
+      mode: "pose",
+      autoZSort: true,
+      perspective3d: 0.2,
+    },
+    originX: 16,
+    originY: 16,
+  });
+
+  assert.equal(result.frames.length, 4);
+  assert.equal(result.tags.length, 0);
+
+  for (let i = 0; i < result.frames.length; i++) {
+    assert.equal(result.frames[i].width, 32);
+    assert.equal(result.frames[i].height, 32);
+    assert.equal(result.frames[i].isEmpty(), false, `Frame ${i} should not be empty`);
+  }
+
+  // Frame 0 (0° yaw) has FrontShield (red) in front; Frame 2 (180° yaw) swaps BackCloak (blue) in front
+  const px0 = getPixelRgba(result.frames[0].data, 32, 16, 16);
+  const px180 = getPixelRgba(result.frames[2].data, 32, 16, 16);
+  assert.ok(px0[0] > 200 && px0[2] < 80, `Expected red at 0° yaw, got [${px0.join(",")}]`);
+  assert.ok(px180[2] > 200 && px180[0] < 80, `Expected blue at 180° yaw, got [${px180.join(",")}]`);
+
+  // Distinct outputs across 0°, 90°, 180°
+  assert.notDeepEqual(result.frames[0].data, result.frames[1].data);
+  assert.notDeepEqual(result.frames[0].data, result.frames[2].data);
+
+  // Rig state remains unmutated
+  assert.equal(engine.rig.activeClipId, prevClipId);
+  assert.equal(engine.rig.bones[0].yawDeg ?? 0, 0);
+});
+
+test("R3D-6: bakeRigTurntable multidir mode bakes 4 directions x 3-frame clip with contiguous tags and restores active clip", () => {
+  const engine = new PixelEngine(32, 32);
+  const layerBody = "multidir-body";
+  fillRect(engine.getOrCreateCel(layerBody, 0), 12, 10, 20, 22, [60, 210, 120, 255]);
+
+  const layers: LayerCompositingInfo[] = [
+    { id: layerBody, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+  ];
+
+  const root = engine.rig.addBone({
+    name: "Body",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 8,
+    rotationDeg: 0,
+    extrudeDepth: 2,
+    boundLayerId: layerBody,
+  });
+
+  const initialClipId = engine.rig.activeClipId;
+  const walkClip = engine.rig.addClip("Walk", 3);
+  engine.rig.setActiveClip(walkClip.id);
+  engine.rig.setPoseOverride(root.id, { localY: 14, rotationDeg: -10 }, 0);
+  engine.rig.setKeyframe(root.id, 0, "linear");
+  engine.rig.setPoseOverride(root.id, { localY: 16, rotationDeg: 0 }, 1);
+  engine.rig.setKeyframe(root.id, 1, "linear");
+  engine.rig.setPoseOverride(root.id, { localY: 18, rotationDeg: 10 }, 2);
+  engine.rig.setKeyframe(root.id, 2, "linear");
+  engine.rig.clearPoseOverrides();
+
+  // Switch back to initial clip so we can verify clipId override + restoration
+  engine.rig.setActiveClip(initialClipId);
+
+  const result = bakeRigTurntable(engine, layers, {
+    mode: "multidir",
+    directions: 4,
+    clipId: walkClip.id,
+    renderOptions: {
+      pixelSnap: true,
+      rotSprite: false,
+      mode: "pose",
+      autoZSort: true,
+      perspective3d: 0.2,
+    },
+  });
+
+  // Active clip must be restored
+  assert.equal(engine.rig.activeClipId, initialClipId);
+
+  // 4 directions * 3 frames = 12 frames
+  assert.equal(result.frames.length, 12);
+  for (let i = 0; i < result.frames.length; i++) {
+    assert.equal(result.frames[i].isEmpty(), false, `Multidir frame ${i} should not be empty`);
+  }
+
+  // 4 contiguous directional tags covering 0..11
+  assert.equal(result.tags.length, 4);
+  const expectedNames = ["Walk_S", "Walk_E", "Walk_N", "Walk_W"];
+  for (let d = 0; d < 4; d++) {
+    assert.equal(result.tags[d].name, expectedNames[d]);
+    assert.equal(result.tags[d].fromFrame, d * 3);
+    assert.equal(result.tags[d].toFrame, d * 3 + 2);
+    assert.ok(result.tags[d].color.startsWith("#"));
+  }
+
+  // Keyframed animation produces distinct frames within the first direction
+  assert.notDeepEqual(result.frames[0].data, result.frames[2].data);
+});
+
 
