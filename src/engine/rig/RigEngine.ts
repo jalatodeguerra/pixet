@@ -31,6 +31,16 @@ import {
   type WeightGradientOptions,
   type WeightSelectionMask,
 } from "./weightTools.ts";
+import {
+  type Mat3,
+  mat3ExtractEulerDeg,
+  mat3FacingZ,
+  mat3FromEulerDeg,
+  mat3Identity,
+  mat3Mul,
+  mat3MulVec,
+} from "../tools/math3d.ts";
+import type { DepthProfile } from "../tools/rotate3d.ts";
 
 export type EasingMode =
   | "linear"
@@ -41,6 +51,14 @@ export type EasingMode =
   | "bezier";
 
 export type CubicBezierHandles = [number, number, number, number];
+
+export interface RigOrbit3D {
+  yawDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
+  originX: number;
+  originY: number;
+}
 
 export interface Bone {
   id: string;
@@ -69,6 +87,18 @@ export interface Bone {
   envelopeRadius?: number;
   /** Locks this bone's painted weights against overwrite during auto-weighting & painting. */
   weightLocked?: boolean;
+  /** Local 3D yaw rotation in degrees (around Y axis), defaults to 0. */
+  yawDeg?: number;
+  /** Local 3D pitch rotation in degrees (around X axis), defaults to 0. */
+  pitchDeg?: number;
+  /** Local Z offset in pixels, defaults to 0. */
+  localZ?: number;
+  /** Per-bone 2.5D extrusion thickness in pixels, defaults to 0. */
+  extrudeDepth?: number;
+  /** Per-bone 2.5D depth profile, defaults to "slab". */
+  depthProfile?: DepthProfile;
+  /** Optional raster layer ID shown on the back face when rotated > 90°. */
+  backLayerId?: string | null;
 }
 
 export interface BonePose {
@@ -78,15 +108,24 @@ export interface BonePose {
   scaleX: number;
   scaleY: number;
   attachment: string | null;
+  yawDeg: number;
+  pitchDeg: number;
+  localZ: number;
 }
 
 export interface BoneWorldTransform {
   id: string;
   x: number;
   y: number;
+  z: number;
   tipX: number;
   tipY: number;
+  tipZ: number;
   worldRotationDeg: number;
+  worldYawDeg: number;
+  worldPitchDeg: number;
+  worldMatrix: Mat3;
+  facingZ: number;
   length: number;
   worldScaleX: number;
   worldScaleY: number;
@@ -104,6 +143,9 @@ export interface BoneKeyframe {
   attachment?: string | null;
   /** Cubic-bezier handles for easing "bezier". */
   curve?: CubicBezierHandles;
+  yawDeg?: number;
+  pitchDeg?: number;
+  localZ?: number;
 }
 
 export interface ConstraintTargetKeyframe {
@@ -177,6 +219,9 @@ export interface RigPoseBone {
   localY: number;
   scaleX?: number;
   scaleY?: number;
+  yawDeg?: number;
+  pitchDeg?: number;
+  localZ?: number;
 }
 
 export interface RigPose {
@@ -257,6 +302,8 @@ export interface RigEvaluateOptions {
   useOverrides?: boolean;
   /** Apply enabled constraints in list order (default true). */
   applyConstraints?: boolean;
+  /** Optional virtual root 3D orbit applied after FK & constraints without mutating bone state. */
+  orbit?: RigOrbit3D | null;
 }
 
 export const BONE_INFLUENCE_COLORS: readonly RGBA[] = [
@@ -579,7 +626,17 @@ interface LocalBonePose {
   rotationDeg: number;
   scaleX: number;
   scaleY: number;
+  yawDeg: number;
+  pitchDeg: number;
+  localZ: number;
 }
+
+const VALID_DEPTH_PROFILES = new Set<DepthProfile>([
+  "slab",
+  "bevel",
+  "pillow",
+  "heightmap",
+]);
 
 function bindPoseOf(bone: Bone): BonePose {
   return {
@@ -589,7 +646,45 @@ function bindPoseOf(bone: Bone): BonePose {
     scaleX: bone.scaleX ?? 1,
     scaleY: bone.scaleY ?? 1,
     attachment: null,
+    yawDeg: bone.yawDeg ?? 0,
+    pitchDeg: bone.pitchDeg ?? 0,
+    localZ: bone.localZ ?? 0,
   };
+}
+
+function applyOrbitToTransforms(
+  transforms: Map<string, BoneWorldTransform>,
+  orbit: RigOrbit3D
+): Map<string, BoneWorldTransform> {
+  if (orbit.yawDeg === 0 && orbit.pitchDeg === 0 && orbit.rollDeg === 0) {
+    return transforms;
+  }
+  const rOrbit = mat3FromEulerDeg(orbit.yawDeg, orbit.pitchDeg, orbit.rollDeg);
+  const ox = orbit.originX;
+  const oy = orbit.originY;
+  const out = new Map<string, BoneWorldTransform>();
+
+  for (const [id, t] of transforms.entries()) {
+    const [rx, ry, rz] = mat3MulVec(rOrbit, t.x - ox, t.y - oy, t.z);
+    const [rtx, rty, rtz] = mat3MulVec(rOrbit, t.tipX - ox, t.tipY - oy, t.tipZ);
+    const worldMatrix = mat3Mul(rOrbit, t.worldMatrix);
+    const euler = mat3ExtractEulerDeg(worldMatrix);
+    out.set(id, {
+      ...t,
+      x: ox + rx,
+      y: oy + ry,
+      z: rz,
+      tipX: ox + rtx,
+      tipY: oy + rty,
+      tipZ: rtz,
+      worldRotationDeg: euler.rollDeg,
+      worldYawDeg: euler.yawDeg,
+      worldPitchDeg: euler.pitchDeg,
+      worldMatrix,
+      facingZ: mat3FacingZ(worldMatrix),
+    });
+  }
+  return out;
 }
 
 function clampLocalAngle(bone: Bone, angle: number): number {
@@ -1086,6 +1181,12 @@ export class RigState {
     maxAngleDeg?: number;
     envelopeRadius?: number;
     weightLocked?: boolean;
+    yawDeg?: number;
+    pitchDeg?: number;
+    localZ?: number;
+    extrudeDepth?: number;
+    depthProfile?: DepthProfile;
+    backLayerId?: string | null;
   }): Bone {
     const num = this.nextBoneNum++;
     const bone: Bone = {
@@ -1110,6 +1211,22 @@ export class RigState {
     }
     if (partial.weightLocked !== undefined) {
       bone.weightLocked = partial.weightLocked;
+    }
+    if (partial.yawDeg !== undefined) {
+      bone.yawDeg = normalizeAngleDeg(partial.yawDeg);
+    }
+    if (partial.pitchDeg !== undefined) {
+      bone.pitchDeg = normalizeAngleDeg(partial.pitchDeg);
+    }
+    if (partial.localZ !== undefined) bone.localZ = partial.localZ;
+    if (partial.extrudeDepth !== undefined) {
+      bone.extrudeDepth = Math.max(0, partial.extrudeDepth);
+    }
+    if (partial.depthProfile !== undefined) {
+      bone.depthProfile = partial.depthProfile;
+    }
+    if (partial.backLayerId !== undefined) {
+      bone.backLayerId = partial.backLayerId;
     }
     this.bones.push(bone);
     this.invalidateEvaluation();
@@ -1153,6 +1270,30 @@ export class RigState {
     if ("weightLocked" in patch) {
       if (patch.weightLocked === undefined) delete bone.weightLocked;
       else bone.weightLocked = patch.weightLocked;
+    }
+    if ("yawDeg" in patch) {
+      if (patch.yawDeg === undefined) delete bone.yawDeg;
+      else bone.yawDeg = normalizeAngleDeg(patch.yawDeg);
+    }
+    if ("pitchDeg" in patch) {
+      if (patch.pitchDeg === undefined) delete bone.pitchDeg;
+      else bone.pitchDeg = normalizeAngleDeg(patch.pitchDeg);
+    }
+    if ("localZ" in patch) {
+      if (patch.localZ === undefined) delete bone.localZ;
+      else bone.localZ = patch.localZ;
+    }
+    if ("extrudeDepth" in patch) {
+      if (patch.extrudeDepth === undefined) delete bone.extrudeDepth;
+      else bone.extrudeDepth = Math.max(0, patch.extrudeDepth);
+    }
+    if ("depthProfile" in patch) {
+      if (patch.depthProfile === undefined) delete bone.depthProfile;
+      else bone.depthProfile = patch.depthProfile;
+    }
+    if ("backLayerId" in patch) {
+      if (patch.backLayerId === undefined) delete bone.backLayerId;
+      else bone.backLayerId = patch.backLayerId;
     }
     this.invalidateEvaluation();
   }
@@ -1860,6 +2001,9 @@ export class RigState {
         scaleX: 1,
         scaleY: 1,
         attachment: null,
+        yawDeg: 0,
+        pitchDeg: 0,
+        localZ: 0,
       };
     }
 
@@ -1884,6 +2028,9 @@ export class RigState {
       scaleX: key.scaleX ?? bind.scaleX,
       scaleY: key.scaleY ?? bind.scaleY,
       attachment: this.attachmentAtFrame(track, key.frame),
+      yawDeg: key.yawDeg ?? bind.yawDeg,
+      pitchDeg: key.pitchDeg ?? bind.pitchDeg,
+      localZ: key.localZ ?? bind.localZ,
     });
 
     if (frame <= track[0].frame) {
@@ -1917,6 +2064,21 @@ export class RigState {
             t
           ),
           attachment: this.attachmentAtFrame(track, frame),
+          yawDeg: lerpAngleDeg(
+            k0.yawDeg ?? bind.yawDeg,
+            k1.yawDeg ?? bind.yawDeg,
+            t
+          ),
+          pitchDeg: lerpAngleDeg(
+            k0.pitchDeg ?? bind.pitchDeg,
+            k1.pitchDeg ?? bind.pitchDeg,
+            t
+          ),
+          localZ: lerp(
+            k0.localZ ?? bind.localZ,
+            k1.localZ ?? bind.localZ,
+            t
+          ),
         };
       }
     }
@@ -1940,6 +2102,10 @@ export class RigState {
       if (!bone) return null;
       visiting.add(boneId);
 
+      if (bone.parentId && !result.has(bone.parentId)) {
+        resolve(bone.parentId);
+      }
+
       const transform = this.computeWorldTransform(bone, locals, result);
       visiting.delete(boneId);
       if (transform) result.set(boneId, transform);
@@ -1961,14 +2127,22 @@ export class RigState {
     const local = locals.get(bone.id);
     if (!local) return null;
 
-    let worldX = local.localX;
-    let worldY = local.localY;
-    let worldRotationDeg = local.rotationDeg;
-    let worldScaleX = local.scaleX;
-    let worldScaleY = local.scaleY;
+    const parent = bone.parentId ? resolved.get(bone.parentId) : undefined;
+    const isParent2D =
+      !parent ||
+      (parent.worldYawDeg === 0 &&
+        parent.worldPitchDeg === 0 &&
+        parent.z === 0);
+    const isLocal2D =
+      local.yawDeg === 0 && local.pitchDeg === 0 && local.localZ === 0;
 
-    if (bone.parentId) {
-      const parent = resolved.get(bone.parentId);
+    if (isParent2D && isLocal2D) {
+      let worldX = local.localX;
+      let worldY = local.localY;
+      let worldRotationDeg = local.rotationDeg;
+      let worldScaleX = local.scaleX;
+      let worldScaleY = local.scaleY;
+
       if (parent) {
         const pRad = (parent.worldRotationDeg * Math.PI) / 180;
         const cos = Math.cos(pRad);
@@ -1983,19 +2157,87 @@ export class RigState {
         worldScaleX = parent.worldScaleX * local.scaleX;
         worldScaleY = parent.worldScaleY * local.scaleY;
       }
+
+      const wRad = (worldRotationDeg * Math.PI) / 180;
+      const tipX = worldX + Math.cos(wRad) * bone.length * worldScaleX;
+      const tipY = worldY + Math.sin(wRad) * bone.length * worldScaleX;
+      const worldMatrix =
+        worldRotationDeg === 0
+          ? mat3Identity()
+          : mat3FromEulerDeg(0, 0, worldRotationDeg);
+
+      return {
+        id: bone.id,
+        x: worldX,
+        y: worldY,
+        z: 0,
+        tipX,
+        tipY,
+        tipZ: 0,
+        worldRotationDeg,
+        worldYawDeg: 0,
+        worldPitchDeg: 0,
+        worldMatrix,
+        facingZ: 1,
+        length: bone.length,
+        worldScaleX,
+        worldScaleY,
+      };
     }
 
-    const wRad = (worldRotationDeg * Math.PI) / 180;
-    const tipX = worldX + Math.cos(wRad) * bone.length * worldScaleX;
-    const tipY = worldY + Math.sin(wRad) * bone.length * worldScaleX;
+    const rLocal = mat3FromEulerDeg(
+      local.yawDeg,
+      local.pitchDeg,
+      local.rotationDeg
+    );
+    const worldMatrix = parent ? mat3Mul(parent.worldMatrix, rLocal) : rLocal;
+
+    let worldX = local.localX;
+    let worldY = local.localY;
+    let worldZ = local.localZ;
+    let worldScaleX = local.scaleX;
+    let worldScaleY = local.scaleY;
+
+    if (parent) {
+      const [ox, oy, oz] = mat3MulVec(
+        parent.worldMatrix,
+        local.localX * parent.worldScaleX,
+        local.localY * parent.worldScaleY,
+        local.localZ
+      );
+      worldX = parent.x + ox;
+      worldY = parent.y + oy;
+      worldZ = parent.z + oz;
+      worldScaleX = parent.worldScaleX * local.scaleX;
+      worldScaleY = parent.worldScaleY * local.scaleY;
+    }
+
+    const [tx, ty, tz] = mat3MulVec(
+      worldMatrix,
+      bone.length * worldScaleX,
+      0,
+      0
+    );
+    const tipX = worldX + tx;
+    const tipY = worldY + ty;
+    const tipZ = worldZ + tz;
+
+    const euler = mat3ExtractEulerDeg(worldMatrix);
+    const facingZ = mat3FacingZ(worldMatrix);
 
     return {
       id: bone.id,
       x: worldX,
       y: worldY,
+      z: worldZ,
       tipX,
       tipY,
-      worldRotationDeg,
+      tipZ,
+      worldRotationDeg: euler.rollDeg,
+      worldYawDeg: euler.yawDeg,
+      worldPitchDeg: euler.pitchDeg,
+      worldMatrix,
+      facingZ,
       length: bone.length,
       worldScaleX,
       worldScaleY,
@@ -2473,12 +2715,15 @@ export class RigState {
         rotationDeg: pose.rotationDeg,
         scaleX: pose.scaleX,
         scaleY: pose.scaleY,
+        yawDeg: pose.yawDeg,
+        pitchDeg: pose.pitchDeg,
+        localZ: pose.localZ,
       });
     }
 
     const result = this.computeFk(locals);
     if (!applyConstraints || this.constraints.length === 0) {
-      return result;
+      return opts.orbit ? applyOrbitToTransforms(result, opts.orbit) : result;
     }
 
     const childrenByParent = this.buildChildrenMap();
@@ -2505,13 +2750,14 @@ export class RigState {
       }
     }
 
-    return result;
+    return opts.orbit ? applyOrbitToTransforms(result, opts.orbit) : result;
   }
 
   computeWorldTransforms(
     frame: number,
     mode: "rest" | "pose",
-    useOverrides = true
+    useOverrides = true,
+    orbit: RigOrbit3D | null = null
   ): Map<string, BoneWorldTransform> {
     if (mode === "rest") {
       const locals = new Map<string, LocalBonePose>();
@@ -2523,11 +2769,17 @@ export class RigState {
           rotationDeg: bind.rotationDeg,
           scaleX: bind.scaleX,
           scaleY: bind.scaleY,
+          yawDeg: bind.yawDeg,
+          pitchDeg: bind.pitchDeg,
+          localZ: bind.localZ,
         });
       }
-      return this.computeFk(locals);
+      const restTransforms = this.computeFk(locals);
+      return orbit
+        ? applyOrbitToTransforms(restTransforms, orbit)
+        : restTransforms;
     }
-    return this.evaluate(frame, { useOverrides });
+    return this.evaluate(frame, { useOverrides, orbit });
   }
 
   setPoseOverride(
@@ -2547,6 +2799,15 @@ export class RigState {
       scaleY: patch.scaleY ?? current.scaleY,
       attachment:
         patch.attachment !== undefined ? patch.attachment : current.attachment,
+      yawDeg:
+        patch.yawDeg !== undefined
+          ? normalizeAngleDeg(patch.yawDeg)
+          : current.yawDeg,
+      pitchDeg:
+        patch.pitchDeg !== undefined
+          ? normalizeAngleDeg(patch.pitchDeg)
+          : current.pitchDeg,
+      localZ: patch.localZ ?? current.localZ,
     });
     this.invalidateEvaluation();
   }
@@ -2578,6 +2839,9 @@ export class RigState {
       scaleX: pose.scaleX,
       scaleY: pose.scaleY,
       attachment: pose.attachment,
+      yawDeg: normalizeAngleDeg(pose.yawDeg),
+      pitchDeg: normalizeAngleDeg(pose.pitchDeg),
+      localZ: pose.localZ,
     };
     if (curve) nextKey.curve = curve;
 
@@ -2646,6 +2910,13 @@ export class RigState {
     if (touched.attachment !== undefined) {
       nextKey.attachment = touched.attachment;
     }
+    if (touched.yawDeg !== undefined) {
+      nextKey.yawDeg = normalizeAngleDeg(touched.yawDeg);
+    }
+    if (touched.pitchDeg !== undefined) {
+      nextKey.pitchDeg = normalizeAngleDeg(touched.pitchDeg);
+    }
+    if (touched.localZ !== undefined) nextKey.localZ = touched.localZ;
 
     const existingIdx = track.findIndex((k) => k.frame === frame);
     if (existingIdx >= 0) track[existingIdx] = nextKey;
@@ -2852,7 +3123,31 @@ export class RigState {
     const raw = snap as Record<string, unknown>;
 
     if (Array.isArray(raw.bones)) {
-      this.bones = (raw.bones as Bone[]).map((b) => ({ ...b }));
+      this.bones = (raw.bones as Bone[]).map((b) => ({
+        ...b,
+        yawDeg:
+          typeof b.yawDeg === "number" && Number.isFinite(b.yawDeg)
+            ? normalizeAngleDeg(b.yawDeg)
+            : 0,
+        pitchDeg:
+          typeof b.pitchDeg === "number" && Number.isFinite(b.pitchDeg)
+            ? normalizeAngleDeg(b.pitchDeg)
+            : 0,
+        localZ:
+          typeof b.localZ === "number" && Number.isFinite(b.localZ)
+            ? b.localZ
+            : 0,
+        extrudeDepth:
+          typeof b.extrudeDepth === "number" && Number.isFinite(b.extrudeDepth)
+            ? Math.max(0, b.extrudeDepth)
+            : 0,
+        depthProfile:
+          typeof b.depthProfile === "string" &&
+          VALID_DEPTH_PROFILES.has(b.depthProfile as DepthProfile)
+            ? (b.depthProfile as DepthProfile)
+            : "slab",
+        backLayerId: typeof b.backLayerId === "string" ? b.backLayerId : null,
+      }));
       let maxNum = this.bones.length;
       for (const b of this.bones) {
         const m = /(\d+)$/.exec(b.id);
@@ -2872,7 +3167,33 @@ export class RigState {
           tracks: Object.fromEntries(
             Object.entries(c.tracks ?? {}).map(([k, arr]) => [
               k,
-              Array.isArray(arr) ? arr.map((kf) => ({ ...kf })) : [],
+              Array.isArray(arr)
+                ? arr.map((kf) => {
+                    const cloned: BoneKeyframe = { ...kf };
+                    if (
+                      cloned.yawDeg !== undefined &&
+                      (!Number.isFinite(cloned.yawDeg) ||
+                        typeof cloned.yawDeg !== "number")
+                    ) {
+                      cloned.yawDeg = 0;
+                    }
+                    if (
+                      cloned.pitchDeg !== undefined &&
+                      (!Number.isFinite(cloned.pitchDeg) ||
+                        typeof cloned.pitchDeg !== "number")
+                    ) {
+                      cloned.pitchDeg = 0;
+                    }
+                    if (
+                      cloned.localZ !== undefined &&
+                      (!Number.isFinite(cloned.localZ) ||
+                        typeof cloned.localZ !== "number")
+                    ) {
+                      cloned.localZ = 0;
+                    }
+                    return cloned;
+                  })
+                : [],
             ])
           ),
         };

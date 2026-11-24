@@ -191,6 +191,9 @@ export function capturePose(
       localY: pose.localY,
       scaleX: pose.scaleX,
       scaleY: pose.scaleY,
+      yawDeg: pose.yawDeg,
+      pitchDeg: pose.pitchDeg,
+      localZ: pose.localZ,
     };
   }
   return {
@@ -221,6 +224,9 @@ export function applyPose(
     const nextY = lerp(cur.localY, target.localY, t);
     const nextSx = lerp(cur.scaleX, target.scaleX ?? 1, t);
     const nextSy = lerp(cur.scaleY, target.scaleY ?? 1, t);
+    const nextYaw = lerpAngleDeg(cur.yawDeg, target.yawDeg ?? 0, t);
+    const nextPitch = lerpAngleDeg(cur.pitchDeg, target.pitchDeg ?? 0, t);
+    const nextZ = lerp(cur.localZ, target.localZ ?? 0, t);
     rig.setPoseOverride(
       boneId,
       {
@@ -229,6 +235,9 @@ export function applyPose(
         localY: nextY,
         scaleX: nextSx,
         scaleY: nextSy,
+        yawDeg: nextYaw,
+        pitchDeg: nextPitch,
+        localZ: nextZ,
       },
       frame
     );
@@ -289,6 +298,9 @@ export function pasteMirroredPose(
         rotationDeg: mirroredRot,
         scaleX: srcPose.scaleX ?? 1,
         scaleY: srcPose.scaleY ?? 1,
+        yawDeg: normalizeAngleDeg(-(srcPose.yawDeg ?? 0)),
+        pitchDeg: normalizeAngleDeg(srcPose.pitchDeg ?? 0),
+        localZ: srcPose.localZ ?? 0,
       },
       frame
     );
