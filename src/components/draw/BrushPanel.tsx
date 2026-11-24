@@ -1,7 +1,4 @@
-import { useState } from "react";
 import {
-  ChevronDown,
-  ChevronRight,
   FlipHorizontal2,
   FlipVertical2,
   Paintbrush,
@@ -19,6 +16,7 @@ import {
   type InkMode,
   type RightClickMode,
 } from "../../store/editorStore";
+import { DockablePanelSection } from "../DockablePanelSection";
 
 const BRUSH_SHAPES: Array<{ id: BrushShape; label: string }> = [
   { id: "circle", label: "Circle" },
@@ -64,8 +62,6 @@ export function BrushPanel() {
     (s) => s.removeSavedCustomBrush
   );
 
-  const [open, setOpen] = useState(false);
-
   const shapeOptions = customBrush
     ? [...BRUSH_SHAPES, { id: "custom" as const, label: "Custom" }]
     : BRUSH_SHAPES;
@@ -82,28 +78,20 @@ export function BrushPanel() {
   };
 
   return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <Paintbrush size={11} />
-          <span>Brush &amp; Ink</span>
-        </button>
+    <DockablePanelSection
+      id="brush"
+      title="Brush & Ink"
+      icon={<Paintbrush size={11} />}
+      defaultOpen={false}
+      actions={
         <span
           className="mono-value"
           style={{ fontSize: 10, color: "var(--text-muted)" }}
         >
           {brushSize}px · {brushOpacity}%
         </span>
-      </div>
-
-      {open && (
-        <div className="panel-body">
+      }
+    >
           <div className="draw-field-group">
             <span className="draw-field-label">Shape</span>
             <div className="draw-chip-grid">
@@ -280,8 +268,6 @@ export function BrushPanel() {
               ))}
             </select>
           </label>
-        </div>
-      )}
-    </section>
+    </DockablePanelSection>
   );
 }

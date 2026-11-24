@@ -47,13 +47,17 @@ import {
 import { pickImageFileForImport } from "../engine/io/imageImport";
 import { syncRigHistoryFlags } from "../engine/rig/rigActions";
 import {
+  BUILT_IN_PRESET_META,
+  serializeWorkspaceLayouts,
+} from "../engine/ui/workspaceLayout";
+import {
   useEditorStore,
   WorkspaceMode,
   RigMode,
   TileMode,
 } from "../store/editorStore";
 
-type MenuKey = "File" | "Edit" | "View" | "Sprite";
+type MenuKey = "File" | "Edit" | "View" | "Sprite" | "Layout";
 
 interface MenuItem {
   label: string;
@@ -125,6 +129,26 @@ export function TopBar() {
   const setCanvasSizeModalOpen = useEditorStore((s) => s.setCanvasSizeModalOpen);
   const dockAllPanels = useEditorStore((s) => s.dockAllPanels);
   const resetPanelLayout = useEditorStore((s) => s.resetPanelLayout);
+  const workspaceLayouts = useEditorStore((s) => s.workspaceLayouts);
+  const applyBuiltInLayoutPreset = useEditorStore(
+    (s) => s.applyBuiltInLayoutPreset
+  );
+  const saveCustomLayoutPreset = useEditorStore(
+    (s) => s.saveCustomLayoutPreset
+  );
+  const applyCustomLayoutPreset = useEditorStore(
+    (s) => s.applyCustomLayoutPreset
+  );
+  const deleteCustomLayoutPreset = useEditorStore(
+    (s) => s.deleteCustomLayoutPreset
+  );
+  const resetWorkspaceLayout = useEditorStore((s) => s.resetWorkspaceLayout);
+  const importWorkspaceLayoutsJson = useEditorStore(
+    (s) => s.importWorkspaceLayoutsJson
+  );
+  const toggleMaximizeArea = useEditorStore((s) => s.toggleMaximizeArea);
+  const toggleToolRailVisible = useEditorStore((s) => s.toggleToolRailVisible);
+  const setToolRailSide = useEditorStore((s) => s.setToolRailSide);
   const setFilterModalOpen = useEditorStore((s) => s.setFilterModalOpen);
   const setKeybindingsModalOpen = useEditorStore((s) => s.setKeybindingsModalOpen);
 
@@ -243,6 +267,113 @@ export function TopBar() {
       { label: "Auto-Crop / Trim", action: () => { autoCropSpriteAction(); setOpenMenu(null); } },
       { label: "3D Rotate & Turntable...", shortcut: "Ctrl+3", action: () => { setOpenMenu(null); setRotate3dModalOpen(true); } },
       { label: "Canvas Size...", action: () => { setOpenMenu(null); setCanvasSizeModalOpen(true); } },
+    ],
+    Layout: [
+      ...BUILT_IN_PRESET_META.map((preset) => ({
+        label: `Preset: ${preset.name}`,
+        action: () => {
+          applyBuiltInLayoutPreset(preset.id);
+          setOpenMenu(null);
+        },
+      })),
+      ...workspaceLayouts.customPresets.flatMap((preset) => [
+        {
+          label: `Custom: ${preset.name}`,
+          action: () => {
+            applyCustomLayoutPreset(preset.id);
+            setOpenMenu(null);
+          },
+        },
+        {
+          label: `Delete "${preset.name}"`,
+          action: () => {
+            deleteCustomLayoutPreset(preset.id);
+            setOpenMenu(null);
+          },
+        },
+      ]),
+      {
+        label: "Save Current Layout As...",
+        action: () => {
+          setOpenMenu(null);
+          const name = window.prompt("Layout preset name:");
+          if (name && name.trim()) {
+            saveCustomLayoutPreset(name.trim());
+          }
+        },
+      },
+      {
+        label: "Maximize / Restore Area",
+        shortcut: "Ctrl+Space",
+        action: () => {
+          toggleMaximizeArea();
+          setOpenMenu(null);
+        },
+      },
+      {
+        label: workspaceLayouts.toolRailVisible
+          ? "Hide Tool Rail"
+          : "Show Tool Rail",
+        shortcut: "Ctrl+Shift+T",
+        action: () => {
+          toggleToolRailVisible();
+          setOpenMenu(null);
+        },
+      },
+      {
+        label:
+          workspaceLayouts.toolRailSide === "left"
+            ? "Move Tool Rail to Right"
+            : "Move Tool Rail to Left",
+        action: () => {
+          setToolRailSide(
+            workspaceLayouts.toolRailSide === "left" ? "right" : "left"
+          );
+          setOpenMenu(null);
+        },
+      },
+      {
+        label: "Dock All Floating Panels",
+        action: () => {
+          dockAllPanels();
+          setOpenMenu(null);
+        },
+      },
+      {
+        label: "Reset Workspace Layout",
+        action: () => {
+          resetWorkspaceLayout();
+          setOpenMenu(null);
+        },
+      },
+      {
+        label: "Export Layouts JSON...",
+        action: () => {
+          setOpenMenu(null);
+          const json = serializeWorkspaceLayouts(
+            useEditorStore.getState().workspaceLayouts
+          );
+          if (navigator.clipboard?.writeText) {
+            void navigator.clipboard.writeText(json).then(
+              () => setStatusMessage("Copied workspace layouts JSON to clipboard"),
+              () => setStatusMessage("Exported layouts JSON (clipboard blocked)")
+            );
+          } else {
+            window.prompt("Copy workspace layouts JSON:", json);
+          }
+        },
+      },
+      {
+        label: "Import Layouts JSON...",
+        action: () => {
+          setOpenMenu(null);
+          const raw = window.prompt("Paste workspace layouts JSON:");
+          if (!raw) return;
+          if (!importWorkspaceLayoutsJson(raw)) {
+            setStatusMessage("Invalid workspace layouts JSON");
+          }
+        },
+      },
     ],
   };
 

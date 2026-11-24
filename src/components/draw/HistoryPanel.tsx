@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, History, Redo2, Undo2 } from "lucide-react";
+import { History, Redo2, Undo2 } from "lucide-react";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import {
   getHistorySnapshot,
@@ -8,11 +8,11 @@ import {
   performUndo,
 } from "../../engine/document/historyActions";
 import { useEditorStore } from "../../store/editorStore";
+import { DockablePanelSection } from "../DockablePanelSection";
 
 export function HistoryPanel() {
   const canUndo = useEditorStore((s) => s.canUndo);
   const canRedo = useEditorStore((s) => s.canRedo);
-  const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState(() => getHistorySnapshot());
 
   useEffect(() => {
@@ -21,24 +21,18 @@ export function HistoryPanel() {
     };
     sync();
     return pixelEngine.subscribe(sync);
-  }, [canUndo, canRedo, open]);
+  }, [canUndo, canRedo]);
 
   const { entries, currentIndex } = snapshot;
 
   return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <button
-          type="button"
-          className="panel-collapse-btn"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <History size={11} />
-          <span>History</span>
-        </button>
-        <div className="panel-header-actions">
+    <DockablePanelSection
+      id="history"
+      title="History"
+      icon={<History size={11} />}
+      defaultOpen={false}
+      actions={
+        <>
           <button
             type="button"
             className="icon-action-btn"
@@ -59,11 +53,9 @@ export function HistoryPanel() {
           >
             <Redo2 size={12} />
           </button>
-        </div>
-      </div>
-
-      {open && (
-        <div className="panel-body">
+        </>
+      }
+    >
           <div className="draw-history-list" role="listbox" aria-label="Edit History">
             <button
               type="button"
@@ -96,8 +88,6 @@ export function HistoryPanel() {
               );
             })}
           </div>
-        </div>
-      )}
-    </section>
+    </DockablePanelSection>
   );
 }

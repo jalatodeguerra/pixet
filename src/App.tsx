@@ -9,15 +9,12 @@ import { KeybindingsModal } from "./components/draw/KeybindingsModal";
 import { RigExportModal } from "./components/rig/RigExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { NewSpriteModal } from "./components/NewSpriteModal";
-import { RightSidebar } from "./components/RightSidebar";
 import { Rotate3DModal } from "./components/Rotate3DModal";
 import { StatusBar } from "./components/StatusBar";
-import { Timeline } from "./components/Timeline";
 import { ImportTilesetModal } from "./components/tiles/ImportTilesetModal";
 import { ToolOptionsBar } from "./components/ToolOptionsBar";
-import { ToolRail } from "./components/ToolRail";
 import { TopBar } from "./components/TopBar";
-import { Viewport } from "./components/Viewport";
+import { WorkspaceLayoutRoot } from "./components/layout/WorkspaceLayoutRoot";
 import {
   formatEventToChord,
   resolveActionForChord,
@@ -60,7 +57,6 @@ import {
   RIG_TOOL_SHORTCUTS,
   rigToolDisabledReason,
 } from "./components/rig/rigTools";
-import { TilesetBrowserPanel } from "./components/tiles/TilesetBrowserPanel";
 import {
   copyTileSelectionToClipboard,
   deleteTileSelectionCells,
@@ -74,13 +70,6 @@ import {
 } from "./engine/tiles/mapTools";
 
 export function App() {
-  const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
-  const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
-  const timelineHeight = useEditorStore((s) => s.timelineHeight);
-  const workspaceMode = useEditorStore((s) => s.workspaceMode);
-  const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
-  const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
-  const setTimelineHeight = useEditorStore((s) => s.setTimelineHeight);
   const isPlaying = useEditorStore((s) => s.isPlaying);
   const fps = useEditorStore((s) => s.fps);
   const frames = useEditorStore((s) => s.frames);
@@ -89,8 +78,6 @@ export function App() {
   const statusMessage = useEditorStore((s) => s.statusMessage);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
-  const [draggingRight, setDraggingRight] = useState(false);
-  const [draggingTimeline, setDraggingTimeline] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const dragDepthRef = useRef(0);
 
@@ -220,6 +207,16 @@ export function App() {
 
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         const ctrlKey = e.key.toLowerCase();
+        if (e.code === "Space") {
+          e.preventDefault();
+          useEditorStore.getState().toggleMaximizeArea();
+          return;
+        }
+        if (ctrlKey === "t" && e.shiftKey) {
+          e.preventDefault();
+          useEditorStore.getState().toggleToolRailVisible();
+          return;
+        }
         if (e.key === "Backspace") {
           const st = useEditorStore.getState();
           if (st.hasSelection && !st.freeTransformActive) {
@@ -559,33 +556,6 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Drag resize handlers
-  useEffect(() => {
-    if (!draggingRight && !draggingTimeline) return;
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (draggingRight) {
-        setRightPanelWidth(window.innerWidth - e.clientX);
-      }
-      if (draggingTimeline) {
-        // Status bar is 24px at bottom
-        setTimelineHeight(window.innerHeight - 24 - e.clientY);
-      }
-    };
-
-    const onMouseUp = () => {
-      setDraggingRight(false);
-      setDraggingTimeline(false);
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [draggingRight, draggingTimeline, setRightPanelWidth, setTimelineHeight]);
-
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     if (!Array.from(e.dataTransfer.types).includes("Files")) return;
     e.preventDefault();
@@ -644,41 +614,7 @@ export function App() {
       <ToolOptionsBar />
 
       <main className="workspace-main">
-        <div className="workspace-middle">
-          {!panelsCollapsed && <ToolRail />}
-          <Viewport />
-          {!panelsCollapsed && (
-            <>
-              <div
-                className={`resizer-vertical ${draggingRight ? "dragging" : ""}`}
-                onMouseDown={() => setDraggingRight(true)}
-              />
-              <RightSidebar />
-            </>
-          )}
-          <div id="floating-panels-root" className="floating-panels-root" />
-        </div>
-
-        {!panelsCollapsed && (
-          <>
-            {!timelineCollapsed && (
-              <div
-                className={`resizer-horizontal ${draggingTimeline ? "dragging" : ""}`}
-                onMouseDown={() => setDraggingTimeline(true)}
-              />
-            )}
-            {workspaceMode === "tiles" && tilesetBrowserDocked ? (
-              <div
-                className="tiles-docked-browser"
-                style={{ height: timelineHeight }}
-              >
-                <TilesetBrowserPanel docked />
-              </div>
-            ) : (
-              <Timeline />
-            )}
-          </>
-        )}
+        <WorkspaceLayoutRoot />
       </main>
 
       <StatusBar />

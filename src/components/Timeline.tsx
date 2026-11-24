@@ -109,7 +109,7 @@ function tagDirectionBadge(dir?: TagDirection): string {
   return "Fwd";
 }
 
-export function Timeline() {
+export function Timeline({ fluid = false }: { fluid?: boolean } = {}) {
   const frames = useEditorStore((s) => s.frames);
   const currentFrame = useEditorStore((s) => s.currentFrame);
   const isPlaying = useEditorStore((s) => s.isPlaying);
@@ -210,28 +210,32 @@ export function Timeline() {
     new Set(selectedCels.map((c) => c.frame))
   );
 
+  const effectiveCollapsed = !fluid && timelineCollapsed;
+
   return (
     <section
-      className="timeline-dock"
-      style={{ height: timelineCollapsed ? 30 : timelineHeight }}
+      className={`timeline-dock ${fluid ? "is-fluid" : ""}`}
+      style={fluid ? undefined : { height: effectiveCollapsed ? 30 : timelineHeight }}
       aria-label="Animation Timeline"
     >
       <div className="timeline-toolbar">
         <div className="timeline-controls">
-          <button
-            type="button"
-            className="panel-collapse-btn"
-            style={{ marginRight: 4 }}
-            title={timelineCollapsed ? "Expand Timeline" : "Collapse Timeline"}
-            onClick={toggleTimelineCollapsed}
-          >
-            {timelineCollapsed ? (
-              <ChevronUp size={12} />
-            ) : (
-              <ChevronDown size={12} />
-            )}
-            <span>Timeline</span>
-          </button>
+          {!fluid && (
+            <button
+              type="button"
+              className="panel-collapse-btn"
+              style={{ marginRight: 4 }}
+              title={effectiveCollapsed ? "Expand Timeline" : "Collapse Timeline"}
+              onClick={toggleTimelineCollapsed}
+            >
+              {effectiveCollapsed ? (
+                <ChevronUp size={12} />
+              ) : (
+                <ChevronDown size={12} />
+              )}
+              <span>Timeline</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -660,23 +664,25 @@ export function Timeline() {
             </form>
           )}
 
-          <button
-            type="button"
-            className="icon-action-btn"
-            style={{ width: 24, height: 24 }}
-            title={timelineCollapsed ? "Expand Timeline" : "Collapse Timeline"}
-            onClick={toggleTimelineCollapsed}
-          >
-            {timelineCollapsed ? (
-              <ChevronUp size={14} />
-            ) : (
-              <ChevronDown size={14} />
-            )}
-          </button>
+          {!fluid && (
+            <button
+              type="button"
+              className="icon-action-btn"
+              style={{ width: 24, height: 24 }}
+              title={effectiveCollapsed ? "Expand Timeline" : "Collapse Timeline"}
+              onClick={toggleTimelineCollapsed}
+            >
+              {effectiveCollapsed ? (
+                <ChevronUp size={14} />
+              ) : (
+                <ChevronDown size={14} />
+              )}
+            </button>
+          )}
         </div>
       </div>
 
-      {!timelineCollapsed &&
+      {!effectiveCollapsed &&
         workspaceMode === "rig" &&
         rigMode === "animate" &&
         rigTimelineView === "curves" && (
@@ -685,7 +691,7 @@ export function Timeline() {
           </div>
         )}
 
-      {!timelineCollapsed &&
+      {!effectiveCollapsed &&
         !(
           workspaceMode === "rig" &&
           rigMode === "animate" &&
