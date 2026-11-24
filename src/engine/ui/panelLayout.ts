@@ -2,9 +2,6 @@ export type PanelWorkspace = "draw" | "tiles" | "rig" | "data";
 
 export type PanelId =
   | "color-palette"
-  | "brush"
-  | "reference"
-  | "history"
   | "layers"
   | "game-data"
   | "tiles-browser"
@@ -23,9 +20,6 @@ export type PanelId =
 
 export const PANEL_WORKSPACE_MAP: Record<PanelId, PanelWorkspace> = {
   "color-palette": "draw",
-  brush: "draw",
-  reference: "draw",
-  history: "draw",
   layers: "draw",
   "game-data": "data",
   "tiles-browser": "tiles",
@@ -44,7 +38,7 @@ export const PANEL_WORKSPACE_MAP: Record<PanelId, PanelWorkspace> = {
 };
 
 export const DEFAULT_DOCKED_ORDER: Record<PanelWorkspace, PanelId[]> = {
-  draw: ["color-palette", "brush", "reference", "history", "layers"],
+  draw: ["color-palette", "layers"],
   tiles: [
     "tiles-browser",
     "tiles-props",

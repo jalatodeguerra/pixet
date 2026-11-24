@@ -15,10 +15,6 @@ import {
   type PanelId,
 } from "../engine/ui/panelLayout";
 import { useEditorStore } from "../store/editorStore";
-import {
-  useCurrentAreaId,
-  useLayoutInteraction,
-} from "./layout/LayoutContext";
 
 export interface DockablePanelSectionProps {
   id: PanelId;
@@ -72,8 +68,6 @@ export function DockablePanelSection({
   children,
 }: DockablePanelSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
-  const layout = useLayoutInteraction();
-  const currentAreaId = useCurrentAreaId();
 
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const detachedPanels = useEditorStore((s) => s.detachedPanels);
@@ -157,10 +151,6 @@ export function DockablePanelSection({
 
   const handleDockedDragStart = (e: React.MouseEvent<HTMLElement>) => {
     if (e.button !== 0) return;
-    if (layout) {
-      layout.startPanelDrag(id, currentAreaId, e);
-      return;
-    }
     e.preventDefault();
     e.stopPropagation();
 
@@ -408,18 +398,14 @@ export function DockablePanelSection({
       className="panel-section"
       data-panel-id={id}
       style={{
-        ...(!layout && dockedOrderIdx >= 0 ? { order: dockedOrderIdx } : undefined),
+        ...(dockedOrderIdx >= 0 ? { order: dockedOrderIdx } : undefined),
         ...style,
       }}
     >
       <div className="panel-header">
         <span
           className="panel-drag-handle"
-          title={
-            layout
-              ? "Drag to reorder or dock into any area"
-              : "Drag to reorder or pull left to detach"
-          }
+          title="Drag to reorder or pull left to detach"
           onMouseDown={handleDockedDragStart}
         >
           <GripVertical size={11} />

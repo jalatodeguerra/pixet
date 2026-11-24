@@ -1,5 +1,7 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   Eye,
   EyeOff,
   Image as ImageIcon,
@@ -8,7 +10,6 @@ import {
   Upload,
 } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
-import { DockablePanelSection } from "../DockablePanelSection";
 
 export function ReferencePanel() {
   const referenceImage = useEditorStore((s) => s.referenceImage);
@@ -16,6 +17,7 @@ export function ReferencePanel() {
   const updateReferenceImage = useEditorStore((s) => s.updateReferenceImage);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
+  const [open, setOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleLoadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -45,6 +47,7 @@ export function ReferencePanel() {
           behindCanvas: true,
           locked: true,
         });
+        setOpen(true);
         setStatusMessage(
           `Loaded reference (${img.naturalWidth}×${img.naturalHeight})`
         );
@@ -61,22 +64,30 @@ export function ReferencePanel() {
   };
 
   return (
-    <DockablePanelSection
-      id="reference"
-      title="Reference"
-      icon={<ImageIcon size={11} />}
-      defaultOpen={false}
-      actions={
-        referenceImage ? (
+    <section className="panel-section">
+      <div className="panel-header">
+        <button
+          type="button"
+          className="panel-collapse-btn"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <ImageIcon size={11} />
+          <span>Reference</span>
+        </button>
+        {referenceImage && (
           <span
             className="mono-value"
             style={{ fontSize: 10, color: "var(--text-muted)" }}
           >
             {referenceImage.width}×{referenceImage.height}
           </span>
-        ) : undefined
-      }
-    >
+        )}
+      </div>
+
+      {open && (
+        <div className="panel-body">
           <input
             ref={fileInputRef}
             type="file"
@@ -231,6 +242,8 @@ export function ReferencePanel() {
               </button>
             </>
           )}
-    </DockablePanelSection>
+        </div>
+      )}
+    </section>
   );
 }

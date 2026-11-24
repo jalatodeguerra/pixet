@@ -14,9 +14,8 @@ import { PALETTE_PRESETS } from "../utils/paletteParser";
 
 type PreviewBackdrop = "checker" | "dark" | "light";
 
-export function FloatingPreview({ docked = false }: { docked?: boolean } = {}) {
-  const showFloating = useEditorStore((s) => s.showFloatingPreview);
-  const show = docked || showFloating;
+export function FloatingPreview() {
+  const show = useEditorStore((s) => s.showFloatingPreview);
   const setShow = useEditorStore((s) => s.setShowFloatingPreview);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
@@ -281,49 +280,36 @@ export function FloatingPreview({ docked = false }: { docked?: boolean } = {}) {
   return (
     <div
       ref={panelRef}
-      className={docked ? "docked-preview-panel" : "floating-preview"}
+      className="floating-preview"
       style={
-        docked
-          ? undefined
-          : pos.left !== null
-            ? { left: pos.left, top: pos.top }
-            : { right: 12, top: pos.top }
+        pos.left !== null
+          ? { left: pos.left, top: pos.top }
+          : { right: 12, top: pos.top }
       }
       onMouseDown={(e) => {
-        if (docked) return;
         e.stopPropagation();
         startDrag(e);
       }}
-      onPointerDown={(e) => {
-        if (!docked) e.stopPropagation();
-      }}
-      onWheel={(e) => {
-        if (!docked) e.stopPropagation();
-      }}
-      onContextMenu={(e) => {
-        if (!docked) e.stopPropagation();
-      }}
-      aria-label={docked ? "Animation Preview" : "Floating Animation Preview"}
+      onPointerDown={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+      aria-label="Floating Animation Preview"
     >
       <div className="floating-preview-header">
-        {!docked && (
-          <button
-            type="button"
-            className="icon-action-btn"
-            style={{ width: 18, height: 18 }}
-            title={collapsed ? "Expand Preview" : "Collapse Preview"}
-            onClick={() => setCollapsed((c) => !c)}
-          >
-            {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-          </button>
-        )}
+        <button
+          type="button"
+          className="icon-action-btn"
+          style={{ width: 18, height: 18 }}
+          title={collapsed ? "Expand Preview" : "Collapse Preview"}
+          onClick={() => setCollapsed((c) => !c)}
+        >
+          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+        </button>
 
-        {!docked && (
-          <div className="floating-preview-drag-handle" title="Drag to move preview">
-            <GripVertical size={11} />
-            <span>Preview</span>
-          </div>
-        )}
+        <div className="floating-preview-drag-handle" title="Drag to move preview">
+          <GripVertical size={11} />
+          <span>Preview</span>
+        </div>
 
         <div className="panel-header-actions">
           <select
@@ -414,21 +400,19 @@ export function FloatingPreview({ docked = false }: { docked?: boolean } = {}) {
           >
             {isPlaying ? <Pause size={11} /> : <Play size={11} />}
           </button>
-          {!docked && (
-            <button
-              type="button"
-              className="icon-action-btn"
-              style={{ width: 20, height: 20 }}
-              title="Hide Floating Preview"
-              onClick={() => setShow(false)}
-            >
-              <X size={11} />
-            </button>
-          )}
+          <button
+            type="button"
+            className="icon-action-btn"
+            style={{ width: 20, height: 20 }}
+            title="Hide Floating Preview"
+            onClick={() => setShow(false)}
+          >
+            <X size={11} />
+          </button>
         </div>
       </div>
 
-      {(docked || !collapsed) && (
+      {!collapsed && (
         <div className="floating-preview-body">
           <div
             className={`preview-stage draw-preview-bg-${backdrop}`}

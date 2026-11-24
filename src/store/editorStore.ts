@@ -19,37 +19,7 @@ import {
   type PanelLayoutState,
   reorderDockedPanelState,
   serializePanelLayout,
-} from "../engine/ui/panelLayout.ts";
-import {
-  addPanelToInspector,
-  buildBuiltInPresetTree,
-  closeArea,
-  createDefaultWorkspaceLayouts,
-  createDefaultWorkspaceTree,
-  deserializeWorkspaceLayouts,
-  equalizeSplit,
-  joinAreas,
-  moveAreaToTarget,
-  movePanelToArea,
-  removePanelFromInspector,
-  resizeSplit,
-  serializeWorkspaceLayouts,
-  setAreaEditor,
-  setInspectorActiveTab,
-  setInspectorMode,
-  splitArea,
-  swapAreas,
-  swapSplitChildren,
-  type AreaEditorType,
-  type AreaNode,
-  type BuiltInPresetId,
-  type DropZone,
-  type InspectorDisplayMode,
-  type LayoutNode,
-  type LayoutPreset,
-  type SplitDirection,
-  type WorkspaceLayoutsState,
-} from "../engine/ui/workspaceLayout.ts";
+} from "../engine/ui/panelLayout";
 import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
 import type { DitherPattern } from "../engine/tools/dither";
 import type { GradientMode } from "../engine/tools/gradient";
@@ -69,36 +39,26 @@ import {
 } from "../engine/tools/animationHelpers.ts";
 
 export type {
-  AreaEditorType,
-  AreaNode,
   BlendMode,
   BrushShape,
-  BuiltInPresetId,
   CustomBrushData,
   DitherPattern,
-  DropZone,
   FloatingPanelRect,
   GradientMode,
   GuideAxis,
   GuideLine,
   InkMode,
-  InspectorDisplayMode,
   KeybindingMap,
   KeybindingPreset,
   LayerMapRole,
-  LayoutNode,
-  LayoutPreset,
   PanelId,
-  SplitDirection,
   TagDirection,
   TileTool,
   TransformAlgorithm,
   TransformState,
-  WorkspaceLayoutsState,
 };
 
 const PANEL_LAYOUT_STORAGE_KEY = "pixet.panelLayout.v1";
-const WORKSPACE_LAYOUTS_STORAGE_KEY = "pixet.workspaceLayouts.v1";
 
 function loadPanelLayout(): PanelLayoutState {
   if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
@@ -122,35 +82,7 @@ function savePanelLayout(state: PanelLayoutState): void {
   }
 }
 
-function loadWorkspaceLayouts(): WorkspaceLayoutsState {
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
-    return createDefaultWorkspaceLayouts();
-  }
-  try {
-    return deserializeWorkspaceLayouts(
-      window.localStorage.getItem(WORKSPACE_LAYOUTS_STORAGE_KEY)
-    );
-  } catch {
-    return createDefaultWorkspaceLayouts();
-  }
-}
-
-function saveWorkspaceLayouts(state: WorkspaceLayoutsState): void {
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.setItem(
-      WORKSPACE_LAYOUTS_STORAGE_KEY,
-      serializeWorkspaceLayouts(state)
-    );
-  } catch {
-    // Ignore quota/private-mode errors
-  }
-}
-
 const initialPanelLayout = loadPanelLayout();
-const initialWorkspaceLayouts = loadWorkspaceLayouts();
 
 export type RightClickMode = "secondaryColor" | "erase" | "eyedropper";
 export type CanvasBackdrop =
@@ -517,9 +449,6 @@ interface EditorState {
   statusMessage: string | null;
   detachedPanels: Partial<Record<PanelId, FloatingPanelRect>>;
   dockedPanelOrder: Record<WorkspaceMode, PanelId[]>;
-  workspaceLayouts: WorkspaceLayoutsState;
-  maximizedAreaId: string | null;
-  hoveredAreaId: string | null;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setActiveTool: (tool: ToolId) => void;
@@ -796,56 +725,6 @@ interface EditorState {
   bringFloatingPanelToFront: (id: PanelId) => void;
   reorderDockedPanel: (mode: WorkspaceMode, id: PanelId, toIndex: number) => void;
   resetPanelLayout: () => void;
-  splitLayoutArea: (
-    areaId: string,
-    direction: SplitDirection,
-    ratio?: number,
-    newArea?: Omit<AreaNode, "kind" | "id"> & { id?: string },
-    insertBefore?: boolean
-  ) => void;
-  closeLayoutArea: (areaId: string) => void;
-  joinLayoutAreas: (sourceAreaId: string, targetAreaId: string) => void;
-  resizeLayoutSplit: (
-    splitId: string,
-    ratio: number,
-    containerSize?: number,
-    minPaneSize?: number
-  ) => void;
-  equalizeLayoutSplit: (splitId: string) => void;
-  swapLayoutSplitChildren: (splitId: string) => void;
-  swapLayoutAreas: (areaAId: string, areaBId: string) => void;
-  setLayoutAreaEditor: (
-    areaId: string,
-    editorType: AreaEditorType,
-    options?: { panelId?: PanelId; panels?: PanelId[] }
-  ) => void;
-  setLayoutInspectorMode: (areaId: string, mode: InspectorDisplayMode) => void;
-  setLayoutInspectorActiveTab: (areaId: string, panelId: PanelId) => void;
-  moveLayoutAreaToTarget: (
-    sourceAreaId: string,
-    targetAreaId: string,
-    zone: DropZone
-  ) => void;
-  moveLayoutPanelToArea: (
-    panelId: PanelId,
-    fromAreaId: string | null,
-    targetAreaId: string,
-    zone: DropZone,
-    insertIndex?: number
-  ) => void;
-  addLayoutPanelToInspector: (areaId: string, panelId: PanelId) => void;
-  removeLayoutPanelFromInspector: (areaId: string, panelId: PanelId) => void;
-  applyBuiltInLayoutPreset: (presetId: BuiltInPresetId) => void;
-  saveCustomLayoutPreset: (name: string) => void;
-  applyCustomLayoutPreset: (presetId: string) => void;
-  deleteCustomLayoutPreset: (presetId: string) => void;
-  resetWorkspaceLayout: () => void;
-  importWorkspaceLayoutsJson: (raw: string) => boolean;
-  setMaximizedAreaId: (areaId: string | null) => void;
-  toggleMaximizeArea: (areaId?: string | null) => void;
-  setHoveredAreaId: (areaId: string | null) => void;
-  toggleToolRailVisible: () => void;
-  setToolRailSide: (side: "left" | "right") => void;
   loadProjectState: (payload: {
     documentName: string;
     filePath: string | null;
@@ -1216,11 +1095,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   statusMessage: null,
   detachedPanels: initialPanelLayout.detachedPanels,
   dockedPanelOrder: initialPanelLayout.dockedPanelOrder,
-  workspaceLayouts: initialWorkspaceLayouts,
-  maximizedAreaId: null,
-  hoveredAreaId: null,
 
-  setWorkspaceMode: (workspaceMode) => set({ workspaceMode, maximizedAreaId: null }),
+  setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
   setActiveTool: (activeTool) => set({ activeTool }),
   setBrushSize: (size) =>
     set({ brushSize: Math.max(1, Math.min(64, Math.round(size))) }),
@@ -2480,338 +2356,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return { dockedPanelOrder: next.dockedPanelOrder };
     }),
   resetPanelLayout: () =>
-    set((s) => {
-      const nextPanel = createDefaultPanelLayout();
-      savePanelLayout(nextPanel);
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: {
-          ...s.workspaceLayouts.layouts,
-          [s.workspaceMode]: createDefaultWorkspaceTree(s.workspaceMode),
-        },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return {
-        ...nextPanel,
-        workspaceLayouts: nextWs,
-        maximizedAreaId: null,
-        panelsCollapsed: false,
-      };
-    }),
-  splitLayoutArea: (areaId, direction, ratio, newArea, insertBefore) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = splitArea(curTree, areaId, direction, ratio, newArea, insertBefore);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs, maximizedAreaId: null };
-    }),
-  closeLayoutArea: (areaId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = closeArea(curTree, areaId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return {
-        workspaceLayouts: nextWs,
-        maximizedAreaId: s.maximizedAreaId === areaId ? null : s.maximizedAreaId,
-      };
-    }),
-  joinLayoutAreas: (sourceAreaId, targetAreaId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = joinAreas(curTree, sourceAreaId, targetAreaId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return {
-        workspaceLayouts: nextWs,
-        maximizedAreaId:
-          s.maximizedAreaId === targetAreaId ? null : s.maximizedAreaId,
-      };
-    }),
-  resizeLayoutSplit: (splitId, ratio, containerSize, minPaneSize) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = resizeSplit(curTree, splitId, ratio, containerSize, minPaneSize);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  equalizeLayoutSplit: (splitId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = equalizeSplit(curTree, splitId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  swapLayoutSplitChildren: (splitId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = swapSplitChildren(curTree, splitId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  swapLayoutAreas: (areaAId, areaBId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = swapAreas(curTree, areaAId, areaBId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  setLayoutAreaEditor: (areaId, editorType, options) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = setAreaEditor(curTree, areaId, editorType, {
-        ...options,
-        workspace: s.workspaceMode,
-      });
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  setLayoutInspectorMode: (areaId, mode) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = setInspectorMode(curTree, areaId, mode);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  setLayoutInspectorActiveTab: (areaId, panelId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = setInspectorActiveTab(curTree, areaId, panelId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  moveLayoutAreaToTarget: (sourceAreaId, targetAreaId, zone) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = moveAreaToTarget(curTree, sourceAreaId, targetAreaId, zone);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs, maximizedAreaId: null };
-    }),
-  moveLayoutPanelToArea: (panelId, fromAreaId, targetAreaId, zone, insertIndex) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = movePanelToArea(
-        curTree,
-        panelId,
-        fromAreaId,
-        targetAreaId,
-        zone,
-        insertIndex
-      );
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  addLayoutPanelToInspector: (areaId, panelId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = addPanelToInspector(curTree, areaId, panelId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  removeLayoutPanelFromInspector: (areaId, panelId) =>
-    set((s) => {
-      const curTree = s.workspaceLayouts.layouts[s.workspaceMode];
-      const nextTree = removePanelFromInspector(curTree, areaId, panelId);
-      if (nextTree === curTree) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  applyBuiltInLayoutPreset: (presetId) =>
-    set((s) => {
-      const nextTree = buildBuiltInPresetTree(presetId, s.workspaceMode);
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: nextTree },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return {
-        workspaceLayouts: nextWs,
-        maximizedAreaId: null,
-        panelsCollapsed: false,
-        statusMessage: `Applied "${presetId}" layout`,
-      };
-    }),
-  saveCustomLayoutPreset: (rawName) =>
-    set((s) => {
-      const name = rawName.trim();
-      if (!name) return s;
-      const tree = JSON.parse(
-        JSON.stringify(s.workspaceLayouts.layouts[s.workspaceMode])
-      ) as LayoutNode;
-      const preset: LayoutPreset = {
-        id: `preset-${Date.now().toString(36)}`,
-        name,
-        tree,
-      };
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        customPresets: [...s.workspaceLayouts.customPresets, preset],
-      };
-      saveWorkspaceLayouts(nextWs);
-      return {
-        workspaceLayouts: nextWs,
-        statusMessage: `Saved layout preset "${name}"`,
-      };
-    }),
-  applyCustomLayoutPreset: (presetId) =>
-    set((s) => {
-      const found = s.workspaceLayouts.customPresets.find((p) => p.id === presetId);
-      if (!found) return s;
-      const cloned = JSON.parse(JSON.stringify(found.tree)) as LayoutNode;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: { ...s.workspaceLayouts.layouts, [s.workspaceMode]: cloned },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return {
-        workspaceLayouts: nextWs,
-        maximizedAreaId: null,
-        panelsCollapsed: false,
-        statusMessage: `Applied layout "${found.name}"`,
-      };
-    }),
-  deleteCustomLayoutPreset: (presetId) =>
-    set((s) => {
-      const nextPresets = s.workspaceLayouts.customPresets.filter(
-        (p) => p.id !== presetId
-      );
-      if (nextPresets.length === s.workspaceLayouts.customPresets.length) return s;
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        customPresets: nextPresets,
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs, statusMessage: "Deleted layout preset" };
-    }),
-  resetWorkspaceLayout: () =>
-    set((s) => {
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        layouts: {
-          ...s.workspaceLayouts.layouts,
-          [s.workspaceMode]: createDefaultWorkspaceTree(s.workspaceMode),
-        },
-      };
-      saveWorkspaceLayouts(nextWs);
-      return {
-        workspaceLayouts: nextWs,
-        maximizedAreaId: null,
-        panelsCollapsed: false,
-        statusMessage: `Reset ${s.workspaceMode} layout to default`,
-      };
-    }),
-  importWorkspaceLayoutsJson: (raw) => {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== "object") return false;
-      const restored = deserializeWorkspaceLayouts(raw);
-      saveWorkspaceLayouts(restored);
-      set({
-        workspaceLayouts: restored,
-        maximizedAreaId: null,
-        statusMessage: "Imported workspace layouts",
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  setMaximizedAreaId: (maximizedAreaId) => set({ maximizedAreaId }),
-  toggleMaximizeArea: (areaId) =>
-    set((s) => {
-      const target = areaId ?? s.hoveredAreaId;
-      if (s.maximizedAreaId && (!target || s.maximizedAreaId === target)) {
-        return { maximizedAreaId: null };
-      }
-      if (!target) return { maximizedAreaId: null };
-      return { maximizedAreaId: target };
-    }),
-  setHoveredAreaId: (hoveredAreaId) =>
-    set((s) => (s.hoveredAreaId === hoveredAreaId ? s : { hoveredAreaId })),
-  toggleToolRailVisible: () =>
-    set((s) => {
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        toolRailVisible: !s.workspaceLayouts.toolRailVisible,
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
-    }),
-  setToolRailSide: (side) =>
-    set((s) => {
-      const nextWs: WorkspaceLayoutsState = {
-        ...s.workspaceLayouts,
-        toolRailSide: side,
-      };
-      saveWorkspaceLayouts(nextWs);
-      return { workspaceLayouts: nextWs };
+    set(() => {
+      const next = createDefaultPanelLayout();
+      savePanelLayout(next);
+      return next;
     }),
   loadProjectState: (payload) =>
     set({

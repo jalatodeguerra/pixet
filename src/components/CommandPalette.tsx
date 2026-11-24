@@ -41,7 +41,6 @@ import {
   fuzzyMatchCommands,
   type CommandEntry,
 } from "../engine/tools/commandMatcher";
-import { BUILT_IN_PRESET_META } from "../engine/ui/workspaceLayout";
 import { useEditorStore } from "../store/editorStore";
 import { DRAW_TOOL_GROUPS } from "./draw/drawTools";
 
@@ -565,60 +564,9 @@ export function CommandPalette() {
       },
     ];
 
-    const layoutCmds: ActionCommandEntry[] = [
-      ...BUILT_IN_PRESET_META.map((preset) => ({
-        id: `layout.preset.${preset.id}`,
-        label: `Layout: Preset — ${preset.name}`,
-        category: "Layout",
-        keywords: ["layout", "preset", "workspace", preset.id, preset.name.toLowerCase()],
-        run: () => st().applyBuiltInLayoutPreset(preset.id),
-      })),
-      {
-        id: "layout.maximizeArea",
-        label: "Layout: Maximize / Restore Area",
-        category: "Layout",
-        shortcut: "Ctrl+Space",
-        keywords: ["maximize", "fullscreen", "area", "panel", "blender"],
-        run: () => st().toggleMaximizeArea(),
-      },
-      {
-        id: "layout.toggleToolRail",
-        label: "Layout: Toggle Tool Rail",
-        category: "Layout",
-        shortcut: "Ctrl+Shift+T",
-        keywords: ["tool", "rail", "toolbar", "strip", "hide", "show"],
-        run: () => st().toggleToolRailVisible(),
-      },
-      {
-        id: "layout.flipToolRailSide",
-        label: "Layout: Move Tool Rail Left / Right",
-        category: "Layout",
-        keywords: ["tool", "rail", "left", "right", "side"],
-        run: () => {
-          const cur = st().workspaceLayouts.toolRailSide;
-          st().setToolRailSide(cur === "left" ? "right" : "left");
-        },
-      },
-      {
-        id: "layout.dockAll",
-        label: "Layout: Dock All Floating Panels",
-        category: "Layout",
-        keywords: ["dock", "floating", "panels", "windows"],
-        run: () => st().dockAllPanels(),
-      },
-      {
-        id: "layout.reset",
-        label: "Layout: Reset Workspace Layout",
-        category: "Layout",
-        keywords: ["reset", "default", "layout", "panels"],
-        run: () => st().resetWorkspaceLayout(),
-      },
-    ];
-
     return [
       ...toolCmds,
       ...viewCmds,
-      ...layoutCmds,
       ...editCmds,
       ...fileCmds,
       ...spriteCmds,

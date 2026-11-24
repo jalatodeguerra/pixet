@@ -29,7 +29,7 @@ export function RigSidebar() {
   );
 }
 
-export function BoundLayersPanel() {
+function BoundLayersPanel() {
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const layers = useEditorStore((s) => s.layers);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
