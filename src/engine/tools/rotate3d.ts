@@ -1,7 +1,22 @@
 import { PixelBuffer, type RGBA } from "../document/PixelBuffer.ts";
+import {
+  applyPixelCleanup,
+  collectPalette,
+  hasPixelCleanup,
+  packRgba,
+  type PixelCleanupOptions,
+} from "../rig/pixelCleanup.ts";
+import {
+  mat3FacingZ,
+  mat3FromEulerDeg,
+  mat3MulVec,
+  mat3TransposeMulVec,
+} from "./math3d.ts";
+import { scale2xEPX } from "./rotsprite.ts";
 
 export type Rotate3DMode = "extruded" | "stack";
 export type SpinAxis = "yaw" | "pitch" | "roll";
+export type DepthProfile = "slab" | "bevel" | "pillow" | "heightmap";
 
 export interface Rotate25DOptions {
   pitchDeg: number;
@@ -12,6 +27,20 @@ export interface Rotate25DOptions {
   shadeDepth: boolean;
   supersample: boolean;
   outlineColor: RGBA | null;
+  pivotX?: number;
+  pivotY?: number;
+  autoFitBounds?: boolean;
+  depthProfile?: DepthProfile;
+  heightMap?: PixelBuffer | null;
+  directionalLighting?: boolean;
+  lightAzimuthDeg?: number;
+  lightElevationDeg?: number;
+  ambient?: number;
+  rimStrength?: number;
+  backSource?: PixelBuffer | null;
+  mirrorBack?: boolean;
+  preScaleEPX?: boolean;
+  cleanup?: PixelCleanupOptions | null;
 }
 
 export interface SpriteStackOptions {
@@ -74,6 +103,135 @@ export function applyPixelOutline(src: PixelBuffer, color: RGBA): PixelBuffer {
   return out;
 }
 
+/**
+ * Builds a normalized per-pixel thickness map in [0, 1] for depth profiles.
+ * Transparent pixels always have thickness 0.
+ */
+function buildThicknessMap(
+  src: PixelBuffer,
+  profile: DepthProfile,
+  heightMap: PixelBuffer | null,
+  depth: number,
+  sampleScale: number
+): Float32Array {
+  const w = src.width;
+  const h = src.height;
+  const size = w * h;
+  const map = new Float32Array(size);
+  const srcData = src.data;
+
+  if (profile === "slab" || (profile === "heightmap" && !heightMap)) {
+    for (let i = 0; i < size; i++) {
+      map[i] = srcData[i * 4 + 3] > 0 ? 1 : 0;
+    }
+    return map;
+  }
+
+  if (profile === "heightmap" && heightMap) {
+    const hmW = heightMap.width;
+    const hmH = heightMap.height;
+    const hmData = heightMap.data;
+    if (hmW === 0 || hmH === 0) return map;
+
+    for (let y = 0; y < h; y++) {
+      const hy = Math.min(hmH - 1, Math.floor((y * hmH) / h));
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (srcData[i * 4 + 3] === 0) continue;
+        const hx = Math.min(hmW - 1, Math.floor((x * hmW) / w));
+        const hIdx = (hy * hmW + hx) * 4;
+        const ha = hmData[hIdx + 3];
+        if (ha === 0) {
+          map[i] = 0;
+        } else {
+          const luma =
+            (0.2126 * hmData[hIdx] +
+              0.7152 * hmData[hIdx + 1] +
+              0.0722 * hmData[hIdx + 2]) /
+            255;
+          map[i] = luma * (ha / 255);
+        }
+      }
+    }
+    return map;
+  }
+
+  // 2-pass Chamfer distance-to-transparent transform for "bevel" and "pillow"
+  const INF = 1e6;
+  const dist = new Float32Array(size);
+  for (let i = 0; i < size; i++) {
+    dist[i] = srcData[i * 4 + 3] > 0 ? INF : 0;
+  }
+
+  const DIAG = Math.SQRT2;
+  // Pass 1: top-left -> bottom-right
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      let d = dist[i];
+      if (d === 0) continue;
+      const left = x > 0 ? dist[i - 1] : 0;
+      const up = y > 0 ? dist[i - w] : 0;
+      const upLeft = x > 0 && y > 0 ? dist[i - w - 1] : 0;
+      const upRight = x + 1 < w && y > 0 ? dist[i - w + 1] : 0;
+      if (left + 1 < d) d = left + 1;
+      if (up + 1 < d) d = up + 1;
+      if (upLeft + DIAG < d) d = upLeft + DIAG;
+      if (upRight + DIAG < d) d = upRight + DIAG;
+      dist[i] = d;
+    }
+  }
+
+  // Pass 2: bottom-right -> top-left
+  let maxDist = 0;
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      let d = dist[i];
+      if (d === 0) continue;
+      const right = x + 1 < w ? dist[i + 1] : 0;
+      const down = y + 1 < h ? dist[i + w] : 0;
+      const downRight = x + 1 < w && y + 1 < h ? dist[i + w + 1] : 0;
+      const downLeft = x > 0 && y + 1 < h ? dist[i + w - 1] : 0;
+      if (right + 1 < d) d = right + 1;
+      if (down + 1 < d) d = down + 1;
+      if (downRight + DIAG < d) d = downRight + DIAG;
+      if (downLeft + DIAG < d) d = downLeft + DIAG;
+      dist[i] = d;
+      if (d > maxDist) maxDist = d;
+    }
+  }
+
+  if (maxDist <= 0) return map;
+
+  if (profile === "bevel") {
+    const bevelWidth = Math.max(
+      1.5,
+      Math.min(maxDist, Math.max(2, depth * 0.5) * sampleScale)
+    );
+    for (let i = 0; i < size; i++) {
+      const d = dist[i];
+      if (d === 0) continue;
+      map[i] = maxDist <= 1 ? 1 : Math.min(1, Math.max(0.05, d - 0.5) / bevelWidth);
+    }
+  } else {
+    // "pillow": smooth rounded inflation sqrt(1 - (1 - t)^2)
+    for (let i = 0; i < size; i++) {
+      const d = dist[i];
+      if (d === 0) continue;
+      if (maxDist <= 1) {
+        map[i] = 1;
+      } else {
+        const t = Math.min(1, Math.max(0.05, d - 0.5) / Math.max(1, maxDist - 0.5));
+        const inv = 1 - t;
+        map[i] = Math.sqrt(Math.max(0, 1 - inv * inv));
+      }
+    }
+  }
+
+  return map;
+}
+
 interface HitSample {
   r: number;
   g: number;
@@ -84,7 +242,9 @@ interface HitSample {
 
 /**
  * Renders a 2D sprite rotated in 3D (Pitch X, Yaw Y, Roll Z) with optional
- * Z-extrusion depth, perspective projection, depth shading, and 1px outline.
+ * Z-extrusion depth, depth profiles, perspective projection, directional
+ * lighting, back-face mapping, auto-fit bounds, EPX pre-scaling, pixel
+ * cleanup, and 1px outline.
  */
 export function render25DSprite(
   src: PixelBuffer,
@@ -95,42 +255,11 @@ export function render25DSprite(
   const out = new PixelBuffer(w, h);
   if (w === 0 || h === 0) return out;
 
-  const cx = (w - 1) / 2;
-  const cy = (h - 1) / 2;
+  const pivotX = opts.pivotX ?? (w - 1) / 2;
+  const pivotY = opts.pivotY ?? (h - 1) / 2;
 
-  const yaw = degToRad(opts.yawDeg);
-  const pitch = degToRad(opts.pitchDeg);
-  const roll = degToRad(opts.rollDeg);
-
-  const cyaw = Math.cos(yaw);
-  const syaw = Math.sin(yaw);
-  const cp = Math.cos(pitch);
-  const sp = Math.sin(pitch);
-  const cr = Math.cos(roll);
-  const sr = Math.sin(roll);
-
-  // R = Rz(roll) * Rx(pitch) * Ry(yaw)
-  // Compute A = Rx * Ry first
-  const a00 = cyaw;
-  const a01 = 0;
-  const a02 = syaw;
-  const a10 = sp * syaw;
-  const a11 = cp;
-  const a12 = -sp * cyaw;
-  const a20 = -cp * syaw;
-  const a21 = sp;
-  const a22 = cp * cyaw;
-
-  // Compute R = Rz * A (only rows needed; R^T uses columns of R)
-  const r00 = cr * a00 - sr * a10;
-  const r01 = cr * a01 - sr * a11;
-  const r02 = cr * a02 - sr * a12;
-  const r10 = sr * a00 + cr * a10;
-  const r11 = sr * a01 + cr * a11;
-  const r12 = sr * a02 + cr * a12;
-  const r20 = a20;
-  const r21 = a21;
-  const r22 = a22;
+  const R = mat3FromEulerDeg(opts.yawDeg, opts.pitchDeg, opts.rollDeg);
+  const facingZ = mat3FacingZ(R);
 
   const persp = Math.max(0, Math.min(1, opts.perspective));
   const usePersp = persp > 0.001;
@@ -138,25 +267,145 @@ export function render25DSprite(
   const camDist = usePersp ? maxDim * (2.6 - 1.5 * persp) : maxDim * 4;
 
   const depth = Math.max(0, Math.min(16, Math.round(opts.extrudeDepth)));
+  const halfDepth = depth / 2;
   const sliceValues: number[] = [];
   if (depth === 0) {
     sliceValues.push(0);
   } else {
-    const half = depth / 2;
-    const steps = Math.max(1, Math.round(depth * 2));
+    const steps = Math.max(2, Math.round(depth * 2));
     for (let i = 0; i <= steps; i++) {
-      sliceValues.push(-half + (i / steps) * depth);
+      sliceValues.push(-halfDepth + (i / steps) * depth);
+    }
+  }
+
+  // Optional 2x EPX pre-scaling for cleaner diagonal edges
+  const useEPX = opts.preScaleEPX === true;
+  const sampleScale = useEPX ? 2 : 1;
+  const sampleSrc = useEPX ? scale2xEPX(src) : src;
+  const sw = sampleSrc.width;
+  const sh = sampleSrc.height;
+  const srcData = sampleSrc.data;
+
+  const rawBack = opts.backSource ?? null;
+  const sampleBack = rawBack ? (useEPX ? scale2xEPX(rawBack) : rawBack) : null;
+  const backData = sampleBack ? sampleBack.data : null;
+  const backW = sampleBack ? sampleBack.width : sw;
+  const backH = sampleBack ? sampleBack.height : sh;
+  const hasBack = Boolean(sampleBack || opts.mirrorBack);
+
+  const rawHeightMap = opts.heightMap ?? null;
+  const sampleHeightMap = rawHeightMap
+    ? useEPX
+      ? scale2xEPX(rawHeightMap)
+      : rawHeightMap
+    : null;
+
+  const depthProfile: DepthProfile = opts.depthProfile ?? "slab";
+  const useDirectional = opts.directionalLighting === true;
+  const rimStrength = Math.max(0, Math.min(1, opts.rimStrength ?? 0));
+  const needsLighting = useDirectional || rimStrength > 0;
+  const needsThickness =
+    (depth > 0 && depthProfile !== "slab") ||
+    (needsLighting && depthProfile !== "slab");
+  const thicknessMap = needsThickness
+    ? buildThicknessMap(
+        sampleSrc,
+        depthProfile,
+        sampleHeightMap,
+        Math.max(1, depth),
+        sampleScale
+      )
+    : null;
+
+  // Compute directional light unit vector in world space (+X right, +Y down, +Z viewer)
+  const lightAz = degToRad(opts.lightAzimuthDeg ?? -35);
+  const lightEl = degToRad(opts.lightElevationDeg ?? 45);
+  const cosEl = Math.cos(lightEl);
+  const lightX = Math.sin(lightAz) * cosEl;
+  const lightY = -Math.sin(lightEl);
+  const lightZ = Math.cos(lightAz) * cosEl;
+  const ambient = Math.max(0.1, Math.min(1, opts.ambient ?? 0.45));
+
+  // Optional auto-fit bounds: project 8 corners of opaque 3D AABB
+  let fitScale = 1;
+  let projCenterX = 0;
+  let projCenterY = 0;
+  const useAutoFit = opts.autoFitBounds === true;
+  const canvasCx = (w - 1) / 2;
+  const canvasCy = (h - 1) / 2;
+
+  if (useAutoFit) {
+    let minX = w;
+    let maxX = -1;
+    let minY = h;
+    let maxY = -1;
+    const origData = src.data;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (origData[(y * w + x) * 4 + 3] > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX >= minX && maxY >= minY) {
+      const xs = [minX - 0.5 - pivotX, maxX + 0.5 - pivotX];
+      const ys = [minY - 0.5 - pivotY, maxY + 0.5 - pivotY];
+      const zs = depth > 0 ? [-halfDepth, halfDepth] : [0];
+
+      let pMinX = Infinity;
+      let pMaxX = -Infinity;
+      let pMinY = Infinity;
+      let pMaxY = -Infinity;
+
+      for (const lx of xs) {
+        for (const ly of ys) {
+          for (const lz of zs) {
+            const [wx, wy, wz] = mat3MulVec(R, lx, ly, lz);
+            let pxProj = wx;
+            let pyProj = wy;
+            if (usePersp) {
+              const denom = Math.max(1e-3, camDist - wz);
+              pxProj = (wx * camDist) / denom;
+              pyProj = (wy * camDist) / denom;
+            }
+            if (pxProj < pMinX) pMinX = pxProj;
+            if (pxProj > pMaxX) pMaxX = pxProj;
+            if (pyProj < pMinY) pMinY = pyProj;
+            if (pyProj > pMaxY) pMaxY = pyProj;
+          }
+        }
+      }
+
+      const spanX = pMaxX - pMinX;
+      const spanY = pMaxY - pMinY;
+      const scaleX = spanX > 1e-4 ? w / spanX : 1;
+      const scaleY = spanY > 1e-4 ? h / spanY : 1;
+      fitScale = Math.min(1, scaleX, scaleY);
+      projCenterX = (pMinX + pMaxX) / 2;
+      projCenterY = (pMinY + pMaxY) / 2;
     }
   }
 
   const subOffsets = opts.supersample ? [-0.25, 0.25] : [0];
-  const srcData = src.data;
   const outData = out.data;
   const numSlices = sliceValues.length;
 
+  const readThickness = (ux: number, uy: number): number => {
+    if (ux < 0 || uy < 0 || ux >= sw || uy >= sh) return 0;
+    if (thicknessMap) return thicknessMap[uy * sw + ux];
+    return srcData[(uy * sw + ux) * 4 + 3] > 0 ? 1 : 0;
+  };
+
   const traceSubRay = (px: number, py: number): HitSample | null => {
-    const sx = px - cx;
-    const sy = py - cy;
+    const sx = useAutoFit
+      ? (px - canvasCx) / fitScale + projCenterX
+      : px - pivotX;
+    const sy = useAutoFit
+      ? (py - canvasCy) / fitScale + projCenterY
+      : py - pivotY;
 
     let worldOx: number;
     let worldOy: number;
@@ -182,13 +431,8 @@ export function render25DSprite(
     }
 
     // Transform into local sprite space via R^T
-    const ox = r00 * worldOx + r10 * worldOy + r20 * worldOz;
-    const oy = r01 * worldOx + r11 * worldOy + r21 * worldOz;
-    const oz = r02 * worldOx + r12 * worldOy + r22 * worldOz;
-
-    const dx = r00 * worldDx + r10 * worldDy + r20 * worldDz;
-    const dy = r01 * worldDx + r11 * worldDy + r21 * worldDz;
-    const dz = r02 * worldDx + r12 * worldDy + r22 * worldDz;
+    const [ox, oy, oz] = mat3TransposeMulVec(R, worldOx, worldOy, worldOz);
+    const [dx, dy, dz] = mat3TransposeMulVec(R, worldDx, worldDy, worldDz);
 
     if (Math.abs(dz) < 1e-5) return null;
 
@@ -199,13 +443,71 @@ export function render25DSprite(
       const t = (zSlice - oz) / dz;
       if (t <= 0) continue;
 
-      const u = Math.round(ox + t * dx + cx);
-      const v = Math.round(oy + t * dy + cy);
-      if (u < 0 || v < 0 || u >= w || v >= h) continue;
+      const lx = ox + t * dx + pivotX;
+      const ly = oy + t * dy + pivotY;
 
-      const sIdx = (v * w + u) * 4;
-      const alpha = srcData[sIdx + 3];
-      if (alpha === 0) continue;
+      let u: number;
+      let v: number;
+      if (useEPX) {
+        u = Math.floor((lx + 0.5) * 2);
+        v = Math.floor((ly + 0.5) * 2);
+      } else {
+        u = Math.round(lx);
+        v = Math.round(ly);
+      }
+      if (u < 0 || v < 0 || u >= sw || v >= sh) continue;
+
+      const useBack =
+        hasBack &&
+        (depth === 0 ? facingZ < 0 : zSlice < 0 || (dz > 0 && s === 0));
+
+      let baseR: number;
+      let baseG: number;
+      let baseB: number;
+      let alpha: number;
+
+      if (useBack) {
+        if (backData) {
+          const bu =
+            backW === sw
+              ? sw - 1 - u
+              : Math.min(backW - 1, Math.floor(((sw - 1 - u) * backW) / sw));
+          const bv =
+            backH === sh
+              ? v
+              : Math.min(backH - 1, Math.floor((v * backH) / sh));
+          const bIdx = (bv * backW + bu) * 4;
+          alpha = backData[bIdx + 3];
+          if (alpha === 0) continue;
+          baseR = backData[bIdx];
+          baseG = backData[bIdx + 1];
+          baseB = backData[bIdx + 2];
+        } else {
+          // mirrorBack with no backSource: mirror src horizontally
+          const mu = sw - 1 - u;
+          const mIdx = (v * sw + mu) * 4;
+          alpha = srcData[mIdx + 3];
+          if (alpha === 0) continue;
+          baseR = srcData[mIdx];
+          baseG = srcData[mIdx + 1];
+          baseB = srcData[mIdx + 2];
+        }
+      } else {
+        const sIdx = (v * sw + u) * 4;
+        alpha = srcData[sIdx + 3];
+        if (alpha === 0) continue;
+        baseR = srcData[sIdx];
+        baseG = srcData[sIdx + 1];
+        baseB = srcData[sIdx + 2];
+      }
+
+      if (depth > 0 && thicknessMap) {
+        const normT = thicknessMap[v * sw + u];
+        // If backSource has an opaque pixel outside src silhouette, allow full thickness
+        const effectiveT = normT > 0 ? normT : useBack && backData ? 1 : 0;
+        const localHalfZ = halfDepth * effectiveT;
+        if (Math.abs(zSlice) > localHalfZ + 1e-4) continue;
+      }
 
       let shade = 1;
       if (opts.shadeDepth && depth > 0 && s > 0) {
@@ -213,10 +515,72 @@ export function render25DSprite(
         shade = 0.62 + 0.26 * depthT;
       }
 
+      let rim = 0;
+      if (needsLighting) {
+        let nlx = 0;
+        let nly = 0;
+        let nlz = dz < 0 ? 1 : -1;
+
+        if (depth > 0 && s > 0 && depthProfile === "slab") {
+          // Extruded slab side wall: 2D silhouette normal
+          const aL = readThickness(u - 1, v);
+          const aR = readThickness(u + 1, v);
+          const aU = readThickness(u, v - 1);
+          const aD = readThickness(u, v + 1);
+          nlx = -(aR - aL);
+          nly = -(aD - aU);
+          nlz = 0;
+          if (nlx === 0 && nly === 0) {
+            nlx = -dx;
+            nly = -dy;
+            nlz = 0;
+          }
+        } else if (thicknessMap) {
+          // Sloped cap/profile normal from local thickness gradient
+          const hScale = Math.max(1, halfDepth) * (useEPX ? 0.5 : 1);
+          const hL = readThickness(u - 1, v) * hScale;
+          const hR = readThickness(u + 1, v) * hScale;
+          const hU = readThickness(u, v - 1) * hScale;
+          const hD = readThickness(u, v + 1) * hScale;
+          nlx = -(hR - hL) * 0.5;
+          nly = -(hD - hU) * 0.5;
+          nlz = depth === 0 ? (facingZ >= 0 ? 1 : -1) : zSlice >= 0 ? 1 : -1;
+        }
+
+        const nLen = Math.hypot(nlx, nly, nlz);
+        if (nLen > 1e-6) {
+          nlx /= nLen;
+          nly /= nLen;
+          nlz /= nLen;
+        } else {
+          nlx = 0;
+          nly = 0;
+          nlz = dz < 0 ? 1 : -1;
+        }
+
+        const [wnx, wny, wnz] = mat3MulVec(R, nlx, nly, nlz);
+        if (useDirectional) {
+          const diffuse = Math.max(
+            0,
+            wnx * lightX + wny * lightY + wnz * lightZ
+          );
+          const litShade = ambient + (1 - ambient) * diffuse;
+          shade *= litShade;
+        }
+        if (rimStrength > 0) {
+          const grazing = 1 - Math.abs(wnz);
+          rim = rimStrength * grazing * grazing;
+        }
+      }
+
+      const litR = baseR * shade;
+      const litG = baseG * shade;
+      const litB = baseB * shade;
+
       return {
-        r: clampByte(srcData[sIdx] * shade),
-        g: clampByte(srcData[sIdx + 1] * shade),
-        b: clampByte(srcData[sIdx + 2] * shade),
+        r: clampByte(rim > 0 ? litR + (255 - litR) * rim : litR),
+        g: clampByte(rim > 0 ? litG + (255 - litG) * rim : litG),
+        b: clampByte(rim > 0 ? litB + (255 - litB) * rim : litB),
         a: alpha,
         t,
       };
@@ -248,7 +612,35 @@ export function render25DSprite(
   }
 
   out.markAllDirty();
-  return opts.outlineColor ? applyPixelOutline(out, opts.outlineColor) : out;
+
+  let result = out;
+  if (opts.cleanup && hasPixelCleanup(opts.cleanup)) {
+    const palette = collectPalette(src);
+    if (rawBack) {
+      const seen = new Set<number>();
+      for (const c of palette) {
+        seen.add(packRgba(c[0], c[1], c[2], c[3]));
+      }
+      for (const c of collectPalette(rawBack)) {
+        const packed = packRgba(c[0], c[1], c[2], c[3]);
+        if (!seen.has(packed)) {
+          seen.add(packed);
+          palette.push(c);
+        }
+      }
+    }
+    result = applyPixelCleanup(result, opts.cleanup, {
+      palette,
+      outlineColor: opts.outlineColor,
+    });
+    if (opts.outlineColor && !opts.cleanup.preserveOutline) {
+      result = applyPixelOutline(result, opts.outlineColor);
+    }
+  } else if (opts.outlineColor) {
+    result = applyPixelOutline(result, opts.outlineColor);
+  }
+
+  return result;
 }
 
 /**
