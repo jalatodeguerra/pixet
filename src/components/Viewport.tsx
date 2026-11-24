@@ -86,6 +86,11 @@ export function Viewport() {
   const rigCleanupHoles = useEditorStore((s) => s.rigCleanupHoles);
   const rigCleanupPaletteLock = useEditorStore((s) => s.rigCleanupPaletteLock);
   const rigCleanupOutline = useEditorStore((s) => s.rigCleanupOutline);
+  const rigAutoZSort = useEditorStore((s) => s.rigAutoZSort);
+  const rigDirectionalLighting = useEditorStore(
+    (s) => s.rigDirectionalLighting
+  );
+  const rigPerspective3d = useEditorStore((s) => s.rigPerspective3d);
   const showFloatingPreview = useEditorStore((s) => s.showFloatingPreview);
   const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
   const showGameDataOverlay = useEditorStore((s) => s.showGameDataOverlay);
@@ -223,6 +228,9 @@ export function Viewport() {
               paletteLock: state.rigCleanupPaletteLock,
               preserveOutline: state.rigCleanupOutline,
             },
+            autoZSort: state.rigAutoZSort,
+            directionalLighting: state.rigDirectionalLighting,
+            perspective3d: state.rigPerspective3d,
           },
           light2d: {
             enabled: state.light2dEnabled,
@@ -476,6 +484,9 @@ export function Viewport() {
     rigCleanupHoles,
     rigCleanupPaletteLock,
     rigCleanupOutline,
+    rigAutoZSort,
+    rigDirectionalLighting,
+    rigPerspective3d,
     selectedBoneId,
     rigTool,
     light2dEnabled,

@@ -1122,6 +1122,7 @@ export function Timeline() {
                         { key: "rot", label: "Rotation" },
                         { key: "pos", label: "Position" },
                         { key: "scale", label: "Scale" },
+                        { key: "rot3d", label: "3D" },
                         { key: "attach", label: "Attach" },
                       ] as const
                     ).map((ch) => (
@@ -1151,6 +1152,10 @@ export function Timeline() {
                                 (ch.key === "scale" &&
                                   (kf.scaleX !== undefined ||
                                     kf.scaleY !== undefined)) ||
+                                (ch.key === "rot3d" &&
+                                  (kf.yawDeg !== undefined ||
+                                    kf.pitchDeg !== undefined ||
+                                    kf.localZ !== undefined)) ||
                                 (ch.key === "attach" &&
                                   kf.attachment !== undefined))
                           );

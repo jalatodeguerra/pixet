@@ -86,6 +86,21 @@ export function BonePropertiesPanel() {
       ? (selectedBone.scaleY ?? 1)
       : (selectedPose?.scaleY ?? 1)
     : 1;
+  const activeYaw = selectedBone
+    ? setupMode
+      ? (selectedBone.yawDeg ?? 0)
+      : (selectedPose?.yawDeg ?? selectedBone.yawDeg ?? 0)
+    : 0;
+  const activePitch = selectedBone
+    ? setupMode
+      ? (selectedBone.pitchDeg ?? 0)
+      : (selectedPose?.pitchDeg ?? selectedBone.pitchDeg ?? 0)
+    : 0;
+  const activeLocalZ = selectedBone
+    ? setupMode
+      ? (selectedBone.localZ ?? 0)
+      : (selectedPose?.localZ ?? selectedBone.localZ ?? 0)
+    : 0;
 
   const hasLimits =
     selectedBone !== null &&
@@ -98,6 +113,9 @@ export function BonePropertiesPanel() {
     rotationDeg?: number;
     scaleX?: number;
     scaleY?: number;
+    yawDeg?: number;
+    pitchDeg?: number;
+    localZ?: number;
   }) => {
     if (!selectedBone) return;
     if (setupMode) {
@@ -454,6 +472,174 @@ export function BonePropertiesPanel() {
             ) : (
               <span className="rotate3d-hint">Unconstrained</span>
             )}
+          </div>
+
+          <div className="rig-cleanup-box">
+            <div className="rig-option-row">
+              <span className="rig-cleanup-title">3D Rotation & Extrusion</span>
+              <button
+                type="button"
+                className="mini-btn"
+                title="Reset 3D Yaw, Pitch, and Z"
+                onClick={() =>
+                  handleEditTransform({ yawDeg: 0, pitchDeg: 0, localZ: 0 })
+                }
+              >
+                <RotateCcw size={10} />
+                <span>Reset 3D</span>
+              </button>
+            </div>
+
+            <label className="rig-slider-row">
+              <span>Yaw</span>
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                value={Math.round(activeYaw)}
+                onPointerDown={() => beginRigGesture("3D Rotate Bone")}
+                onPointerUp={endRigGesture}
+                onPointerCancel={endRigGesture}
+                onChange={(e) =>
+                  handleEditTransform({ yawDeg: Number(e.target.value) })
+                }
+              />
+              <input
+                type="number"
+                className="rig-num-input"
+                style={{ width: 46 }}
+                value={Math.round(activeYaw)}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) handleEditTransform({ yawDeg: v });
+                }}
+              />
+            </label>
+
+            <label className="rig-slider-row">
+              <span>Pitch</span>
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                value={Math.round(activePitch)}
+                onPointerDown={() => beginRigGesture("3D Rotate Bone")}
+                onPointerUp={endRigGesture}
+                onPointerCancel={endRigGesture}
+                onChange={(e) =>
+                  handleEditTransform({ pitchDeg: Number(e.target.value) })
+                }
+              />
+              <input
+                type="number"
+                className="rig-num-input"
+                style={{ width: 46 }}
+                value={Math.round(activePitch)}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) handleEditTransform({ pitchDeg: v });
+                }}
+              />
+            </label>
+
+            <div className="rig-inspector-row">
+              <span>Depth Z</span>
+              <input
+                type="number"
+                step={0.5}
+                className="rig-num-input"
+                style={{ width: 64 }}
+                value={round2(activeLocalZ)}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) handleEditTransform({ localZ: v });
+                }}
+              />
+            </div>
+
+            <label className="rig-slider-row">
+              <span>Thickness</span>
+              <input
+                type="range"
+                min={0}
+                max={12}
+                step={1}
+                value={Math.round(selectedBone.extrudeDepth ?? 0)}
+                onPointerDown={() => beginRigGesture("Set bone thickness")}
+                onPointerUp={endRigGesture}
+                onPointerCancel={endRigGesture}
+                onChange={(e) =>
+                  mutateRig("Set bone thickness", () =>
+                    pixelEngine.rig.updateBone(selectedBone.id, {
+                      extrudeDepth: Number(e.target.value),
+                    })
+                  )
+                }
+              />
+              <input
+                type="number"
+                min={0}
+                max={12}
+                className="rig-num-input"
+                style={{ width: 46 }}
+                value={Math.round(selectedBone.extrudeDepth ?? 0)}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) {
+                    const clamped = Math.max(0, Math.min(12, Math.round(v)));
+                    mutateRig("Set bone thickness", () =>
+                      pixelEngine.rig.updateBone(selectedBone.id, {
+                        extrudeDepth: clamped,
+                      })
+                    );
+                  }
+                }}
+              />
+            </label>
+
+            <div className="rig-inspector-row">
+              <span>Profile</span>
+              <select
+                className="palette-select"
+                value={selectedBone.depthProfile ?? "slab"}
+                onChange={(e) => {
+                  const v = e.target.value as "slab" | "bevel" | "pillow";
+                  mutateRig("Set bone depth profile", () =>
+                    pixelEngine.rig.updateBone(selectedBone.id, {
+                      depthProfile: v,
+                    })
+                  );
+                }}
+              >
+                <option value="slab">Slab</option>
+                <option value="bevel">Bevel</option>
+                <option value="pillow">Pillow</option>
+              </select>
+            </div>
+
+            <div className="rig-inspector-row">
+              <span>Back Layer</span>
+              <select
+                className="palette-select"
+                value={selectedBone.backLayerId ?? ""}
+                onChange={(e) =>
+                  mutateRig("Set bone back layer", () =>
+                    pixelEngine.rig.updateBone(selectedBone.id, {
+                      backLayerId: e.target.value || null,
+                    })
+                  )
+                }
+              >
+                <option value="">None</option>
+                {layers
+                  .filter((l) => l.kind === "raster")
+                  .map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
           </div>
 
           <div className="rig-key-actions">

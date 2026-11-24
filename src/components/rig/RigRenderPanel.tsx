@@ -31,6 +31,16 @@ export function RigRenderPanel() {
   const toggleRigCleanupOutline = useEditorStore(
     (s) => s.toggleRigCleanupOutline
   );
+  const rigAutoZSort = useEditorStore((s) => s.rigAutoZSort);
+  const toggleRigAutoZSort = useEditorStore((s) => s.toggleRigAutoZSort);
+  const rigDirectionalLighting = useEditorStore(
+    (s) => s.rigDirectionalLighting
+  );
+  const toggleRigDirectionalLighting = useEditorStore(
+    (s) => s.toggleRigDirectionalLighting
+  );
+  const rigPerspective3d = useEditorStore((s) => s.rigPerspective3d);
+  const setRigPerspective3d = useEditorStore((s) => s.setRigPerspective3d);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const documentName = useEditorStore((s) => s.documentName);
@@ -64,6 +74,9 @@ export function RigRenderPanel() {
           rotSprite: state.rigRotSprite,
           mode: "pose",
           cleanup,
+          autoZSort: state.rigAutoZSort,
+          directionalLighting: state.rigDirectionalLighting,
+          perspective3d: state.rigPerspective3d,
         },
         false
       );
@@ -137,6 +150,39 @@ export function RigRenderPanel() {
           <span>RotSprite Clean</span>
         </label>
       </div>
+
+      <div className="rig-option-row">
+        <label className="modal-checkbox" style={{ fontSize: 11 }}>
+          <input
+            type="checkbox"
+            checked={rigAutoZSort}
+            onChange={toggleRigAutoZSort}
+          />
+          <span>Auto Z-Sort</span>
+        </label>
+        <label className="modal-checkbox" style={{ fontSize: 11 }}>
+          <input
+            type="checkbox"
+            checked={rigDirectionalLighting}
+            onChange={toggleRigDirectionalLighting}
+          />
+          <span>3D Lighting</span>
+        </label>
+      </div>
+
+      <label className="rig-slider-row">
+        <span>Perspective</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(rigPerspective3d * 100)}
+          onChange={(e) => setRigPerspective3d(Number(e.target.value) / 100)}
+        />
+        <span className="rig-stub-meta" style={{ minWidth: 30, textAlign: "right" }}>
+          {Math.round(rigPerspective3d * 100)}%
+        </span>
+      </label>
 
       {/* R6 post-deformation pixel cleanup. */}
       <div className="rig-cleanup-box">

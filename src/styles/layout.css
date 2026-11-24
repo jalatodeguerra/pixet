@@ -2604,6 +2604,11 @@
   stroke-dasharray: 2 2;
 }
 
+.rig-bone-shape.back-facing {
+  stroke-dasharray: 2.5 2;
+  opacity: 0.72;
+}
+
 .rig-bone-shape.ik-chain {
   fill: rgba(234, 179, 8, 0.24);
   stroke: #eab308;

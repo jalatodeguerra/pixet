@@ -185,7 +185,7 @@ export function RigOverlay({
       {shapes.map((b) => (
         <g key={b.id}>
           <polygon
-            className={`rig-bone-shape ${b.selected ? "selected" : ""} ${b.hovered ? "hovered" : ""} ${b.locked ? "locked" : ""} ${b.ikTinted ? "ik-chain" : ""}`}
+            className={`rig-bone-shape ${b.selected ? "selected" : ""} ${b.hovered ? "hovered" : ""} ${b.locked ? "locked" : ""} ${b.ikTinted ? "ik-chain" : ""} ${b.facingZ < 0 ? "back-facing" : ""}`}
             points={b.polygon}
             style={!b.selected && b.color ? { stroke: b.color } : undefined}
           />
@@ -239,6 +239,110 @@ export function RigOverlay({
             cy={selected.y}
             r={ringRadius}
           />
+          {(rigTool === "rotate3d" ||
+            Math.abs(selected.worldYawDeg) > 0.1 ||
+            Math.abs(selected.worldPitchDeg) > 0.1) &&
+            (() => {
+              const orbitR = ringRadius * 1.3;
+              const yawRad = (selected.worldYawDeg * Math.PI) / 180;
+              const pitchRad = (selected.worldPitchDeg * Math.PI) / 180;
+              const pitchRy = Math.max(
+                orbitR * 0.14,
+                Math.abs(Math.sin(pitchRad)) * orbitR
+              );
+              const yawRx = Math.max(
+                orbitR * 0.14,
+                Math.abs(Math.sin(yawRad)) * orbitR
+              );
+              const crossLen = orbitR * 0.35;
+              const strokeW = 1 / safeZoom;
+              const badgeFontSize = 9 / safeZoom;
+              const badgeW = 34 / safeZoom;
+              const badgeH = 12 / safeZoom;
+              const showZBadge = Math.abs(selected.z) > 0.1;
+              const zLabel = `Z${selected.z >= 0 ? "+" : ""}${Math.round(selected.z * 10) / 10}`;
+              return (
+                <g className="rig-gizmo-3d" style={{ pointerEvents: "none" }}>
+                  <circle
+                    cx={selected.x}
+                    cy={selected.y}
+                    r={orbitR}
+                    fill="none"
+                    stroke={selected.facingZ < 0 ? "#eab308" : "#4c8bf5"}
+                    strokeWidth={strokeW}
+                    strokeDasharray={
+                      selected.facingZ < 0
+                        ? `${3 / safeZoom} ${2 / safeZoom}`
+                        : undefined
+                    }
+                    strokeOpacity={0.85}
+                  />
+                  <ellipse
+                    cx={selected.x}
+                    cy={selected.y}
+                    rx={orbitR}
+                    ry={pitchRy}
+                    fill="none"
+                    stroke="#2dd4bf"
+                    strokeWidth={strokeW}
+                    strokeOpacity={0.8}
+                  />
+                  <ellipse
+                    cx={selected.x}
+                    cy={selected.y}
+                    rx={yawRx}
+                    ry={orbitR}
+                    fill="none"
+                    stroke="#4c8bf5"
+                    strokeWidth={strokeW}
+                    strokeOpacity={0.8}
+                  />
+                  <line
+                    x1={selected.x - crossLen}
+                    y1={selected.y}
+                    x2={selected.x + crossLen}
+                    y2={selected.y}
+                    stroke="#2dd4bf"
+                    strokeWidth={strokeW}
+                    strokeOpacity={0.7}
+                  />
+                  <line
+                    x1={selected.x}
+                    y1={selected.y - crossLen}
+                    x2={selected.x}
+                    y2={selected.y + crossLen}
+                    stroke="#4c8bf5"
+                    strokeWidth={strokeW}
+                    strokeOpacity={0.7}
+                  />
+                  {showZBadge && (
+                    <g
+                      transform={`translate(${selected.x + orbitR + 2 / safeZoom}, ${selected.y - badgeH / 2})`}
+                    >
+                      <rect
+                        x={0}
+                        y={0}
+                        width={badgeW}
+                        height={badgeH}
+                        fill="#141414"
+                        stroke="#4c8bf5"
+                        strokeWidth={strokeW}
+                      />
+                      <text
+                        x={badgeW / 2}
+                        y={badgeH * 0.74}
+                        textAnchor="middle"
+                        fill="#e4e4ec"
+                        fontSize={badgeFontSize}
+                        fontFamily="monospace"
+                      >
+                        {zLabel}
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            })()}
           <rect
             className="rig-gizmo-handle rig-gizmo-translate"
             x={selected.x - handleHalf}

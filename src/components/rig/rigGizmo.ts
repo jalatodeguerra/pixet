@@ -25,6 +25,10 @@ export interface RigBoneShape {
   locked: boolean;
   ikTinted: boolean;
   color?: string;
+  facingZ: number;
+  z: number;
+  worldYawDeg: number;
+  worldPitchDeg: number;
 }
 
 export interface RigConstraintTargetShape {
@@ -110,6 +114,10 @@ export function buildRigBoneShapes(
       locked: Boolean(bone.locked),
       ikTinted: ikBoneIds.has(bone.id),
       color: bone.color,
+      facingZ: t.facingZ,
+      z: t.z,
+      worldYawDeg: t.worldYawDeg,
+      worldPitchDeg: t.worldPitchDeg,
     });
   }
   return shapes;

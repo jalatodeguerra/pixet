@@ -15,7 +15,15 @@ import {
 } from "../../engine/rig/rigActions";
 import { useEditorStore } from "../../store/editorStore";
 
-type CurveChannel = "rotationDeg" | "localX" | "localY" | "scaleX" | "scaleY";
+type CurveChannel =
+  | "rotationDeg"
+  | "localX"
+  | "localY"
+  | "scaleX"
+  | "scaleY"
+  | "yawDeg"
+  | "pitchDeg"
+  | "localZ";
 
 const CHANNELS: ReadonlyArray<{ id: CurveChannel; label: string }> = [
   { id: "rotationDeg", label: "Rotation" },
@@ -23,6 +31,9 @@ const CHANNELS: ReadonlyArray<{ id: CurveChannel; label: string }> = [
   { id: "localY", label: "Pos Y" },
   { id: "scaleX", label: "Scale X" },
   { id: "scaleY", label: "Scale Y" },
+  { id: "yawDeg", label: "Yaw 3D" },
+  { id: "pitchDeg", label: "Pitch 3D" },
+  { id: "localZ", label: "Depth Z" },
 ];
 
 const EASINGS: EasingMode[] = [
@@ -50,6 +61,12 @@ function channelValue(
       return kf.scaleX ?? bone.scaleX ?? 1;
     case "scaleY":
       return kf.scaleY ?? bone.scaleY ?? 1;
+    case "yawDeg":
+      return kf.yawDeg ?? bone.yawDeg ?? 0;
+    case "pitchDeg":
+      return kf.pitchDeg ?? bone.pitchDeg ?? 0;
+    case "localZ":
+      return kf.localZ ?? bone.localZ ?? 0;
   }
 }
 

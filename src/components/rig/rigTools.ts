@@ -7,6 +7,7 @@ import {
   Move,
   Paintbrush,
   Pin,
+  Rotate3d,
   Scaling,
 } from "lucide-react";
 import type { RigMode, RigTool } from "../../store/editorStore";
@@ -32,6 +33,7 @@ export const RIG_TOOL_DEFS: RigToolDef[] = [
   { id: "select", label: "Select / Rotate", shortcut: "V", icon: MousePointer2 },
   { id: "translate", label: "Translate", shortcut: "G", icon: Move },
   { id: "scale", label: "Scale", shortcut: "S", icon: Scaling },
+  { id: "rotate3d", label: "3D Rotate", shortcut: "R", icon: Rotate3d },
   {
     id: "addBone",
     label: "Add Bone",
@@ -76,7 +78,7 @@ for (const def of RIG_TOOL_DEFS) {
 
 /** Groups drawn with a separator between them in the rail. */
 export const RIG_TOOL_GROUPS: { ids: RigTool[]; dividerAfter?: boolean }[] = [
-  { ids: ["select", "translate", "scale"], dividerAfter: true },
+  { ids: ["select", "translate", "scale", "rotate3d"], dividerAfter: true },
   { ids: ["addBone", "chain"], dividerAfter: true },
   { ids: ["ik", "weightPaint", "meshEdit", "pin"] },
 ];

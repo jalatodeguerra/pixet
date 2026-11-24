@@ -7,6 +7,7 @@ import {
 } from "../../engine/rig/RigEngine";
 import {
   beginRigGesture,
+  cancelRigGesture,
   endRigGesture,
   mutateRig,
 } from "../../engine/rig/rigActions";
@@ -55,6 +56,7 @@ export interface UseRigPointerResult {
 
 type RigDragKind =
   | "rotateBone"
+  | "rotate3d"
   | "moveBone"
   | "scaleBone"
   | "addBone"
@@ -82,6 +84,11 @@ interface RigDrag {
   startDist: number;
   addTipX: number;
   addTipY: number;
+  origYawDeg?: number;
+  origPitchDeg?: number;
+  origLocalZ?: number;
+  startClientX?: number;
+  startClientY?: number;
   eraseMask?: boolean;
   lastPx?: number;
   lastPy?: number;
@@ -284,6 +291,30 @@ export function useRigPointer({
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && dragRef.current?.kind === "rotate3d") {
+        e.preventDefault();
+        const drag = dragRef.current;
+        dragRef.current = null;
+        const state = useEditorStore.getState();
+        const rig = pixelEngine.rig;
+        const restore = {
+          yawDeg: drag.origYawDeg ?? 0,
+          pitchDeg: drag.origPitchDeg ?? 0,
+          localZ: drag.origLocalZ ?? 0,
+        };
+        if (state.rigMode === "setup") {
+          rig.updateBone(drag.boneId, restore);
+        } else {
+          rig.setPoseOverride(drag.boneId, restore, state.currentFrame);
+          if (state.rigAutoKey) {
+            rig.autoKeyBone(drag.boneId, state.currentFrame, restore);
+          }
+        }
+        cancelRigGesture();
+        state.bumpRigVersion();
+        pixelEngine.emitChange();
+        return;
+      }
       if (!chainRef.current) return;
       if (e.key === "Escape" || e.key === "Enter") {
         e.preventDefault();
@@ -295,12 +326,14 @@ export function useRigPointer({
   }, [finishChain]);
 
   const beginBoneDrag = (
-    kind: "rotateBone" | "moveBone" | "scaleBone",
+    kind: "rotateBone" | "rotate3d" | "moveBone" | "scaleBone",
     boneId: string,
     x: number,
     y: number,
     canvas: HTMLCanvasElement,
-    pointerId: number
+    pointerId: number,
+    clientX = 0,
+    clientY = 0
   ) => {
     const state = useEditorStore.getState();
     const rig = pixelEngine.rig;
@@ -323,6 +356,9 @@ export function useRigPointer({
             rotationDeg: bone.rotationDeg,
             scaleX: bone.scaleX ?? 1,
             scaleY: bone.scaleY ?? 1,
+            yawDeg: bone.yawDeg ?? 0,
+            pitchDeg: bone.pitchDeg ?? 0,
+            localZ: bone.localZ ?? 0,
           }
         : rig.getBonePoseAtFrame(bone.id, state.currentFrame, true);
 
@@ -344,6 +380,11 @@ export function useRigPointer({
       startDist: Math.max(0.5, Math.hypot(x - t.x, y - t.y)),
       addTipX: x,
       addTipY: y,
+      origYawDeg: pose.yawDeg,
+      origPitchDeg: pose.pitchDeg,
+      origLocalZ: pose.localZ,
+      startClientX: clientX,
+      startClientY: clientY,
     };
     canvas.setPointerCapture(pointerId);
   };
@@ -816,6 +857,31 @@ export function useRigPointer({
       return true;
     }
 
+    if (tool === "rotate3d") {
+      const hit = hitTestRigGizmo(shapes, pt.x, pt.y, zoom, false);
+      const targetId =
+        hit?.boneId ??
+        (state.selectedBoneId &&
+        !rig.bones.find((b) => b.id === state.selectedBoneId)?.locked
+          ? state.selectedBoneId
+          : null);
+      if (!targetId) return true;
+      if (hit && state.selectedBoneId !== targetId) {
+        state.setSelectedBoneId(targetId);
+      }
+      beginBoneDrag(
+        "rotate3d",
+        targetId,
+        pt.x,
+        pt.y,
+        e.currentTarget,
+        e.pointerId,
+        e.clientX,
+        e.clientY
+      );
+      return true;
+    }
+
     if (tool === "translate" || tool === "scale") {
       const hit = hitTestRigGizmo(shapes, pt.x, pt.y, zoom, false);
       if (!hit) return true;
@@ -858,6 +924,19 @@ export function useRigPointer({
     }
     if (hit.kind === "body") {
       state.setSelectedBoneId(hit.boneId);
+    }
+    if (e.altKey) {
+      beginBoneDrag(
+        "rotate3d",
+        hit.boneId,
+        pt.x,
+        pt.y,
+        e.currentTarget,
+        e.pointerId,
+        e.clientX,
+        e.clientY
+      );
+      return true;
     }
     beginBoneDrag(
       hit.kind === "translate"
@@ -1047,6 +1126,44 @@ export function useRigPointer({
         state.rigMode === "setup" ? "IK bind pose" : "IK pose"
       );
       applyIk(drag.boneId, pt.x, pt.y);
+      return true;
+    }
+
+    if (drag.kind === "rotate3d") {
+      ensureGesture(drag, "3D Rotate Bone");
+      const dxPx = e.clientX - (drag.startClientX ?? e.clientX);
+      const dyPx = e.clientY - (drag.startClientY ?? e.clientY);
+      const origYaw = drag.origYawDeg ?? 0;
+      const origPitch = drag.origPitchDeg ?? 0;
+      const origZ = drag.origLocalZ ?? 0;
+
+      const patch: { yawDeg?: number; pitchDeg?: number; localZ?: number } = {};
+      if (e.ctrlKey || e.metaKey) {
+        const rawZ = origZ - dyPx * 0.15;
+        patch.localZ = e.shiftKey
+          ? Math.round(rawZ)
+          : Math.round(rawZ * 10) / 10;
+      } else {
+        const rawYaw = origYaw + dxPx * 0.9;
+        const rawPitch = origPitch - dyPx * 0.9;
+        patch.yawDeg = e.shiftKey
+          ? Math.round(rawYaw / 15) * 15
+          : Math.round(rawYaw * 10) / 10;
+        patch.pitchDeg = e.shiftKey
+          ? Math.round(rawPitch / 15) * 15
+          : Math.round(rawPitch * 10) / 10;
+      }
+
+      if (state.rigMode === "setup") {
+        mutateRig("3D Rotate Bone", () => rig.updateBone(drag.boneId, patch));
+      } else {
+        mutateRig("3D Rotate Bone", () => {
+          rig.setPoseOverride(drag.boneId, patch, state.currentFrame);
+          if (state.rigAutoKey) {
+            rig.autoKeyBone(drag.boneId, state.currentFrame, patch);
+          }
+        });
+      }
       return true;
     }
 
@@ -1366,6 +1483,9 @@ export function useRigPointer({
                 localY: targetBone.localY,
                 scaleX: targetBone.scaleX ?? 1,
                 scaleY: targetBone.scaleY ?? 1,
+                yawDeg: targetBone.yawDeg ?? 0,
+                pitchDeg: targetBone.pitchDeg ?? 0,
+                localZ: targetBone.localZ ?? 0,
               },
               state.currentFrame
             );

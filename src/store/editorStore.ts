@@ -118,6 +118,7 @@ export type RigTool =
   | "select"
   | "translate"
   | "scale"
+  | "rotate3d"
   | "addBone"
   | "chain"
   | "ik"
@@ -401,6 +402,10 @@ interface EditorState {
   rigCleanupHoles: boolean;
   rigCleanupPaletteLock: boolean;
   rigCleanupOutline: boolean;
+  /** R3D-5 rig 3D render options. */
+  rigAutoZSort: boolean;
+  rigDirectionalLighting: boolean;
+  rigPerspective3d: number;
 
   dataTool: DataTool;
   showGameDataOverlay: boolean;
@@ -693,6 +698,9 @@ interface EditorState {
   toggleRigCleanupHoles: () => void;
   toggleRigCleanupPaletteLock: () => void;
   toggleRigCleanupOutline: () => void;
+  toggleRigAutoZSort: () => void;
+  toggleRigDirectionalLighting: () => void;
+  setRigPerspective3d: (v: number) => void;
   setDataTool: (tool: DataTool) => void;
   toggleShowGameDataOverlay: () => void;
   bumpGameDataVersion: () => void;
@@ -996,6 +1004,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigCleanupHoles: false,
   rigCleanupPaletteLock: false,
   rigCleanupOutline: false,
+  rigAutoZSort: true,
+  rigDirectionalLighting: false,
+  rigPerspective3d: 0.2,
 
   dataTool: "hitbox",
   showGameDataOverlay: true,
@@ -2232,6 +2243,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((s) => ({ rigCleanupPaletteLock: !s.rigCleanupPaletteLock })),
   toggleRigCleanupOutline: () =>
     set((s) => ({ rigCleanupOutline: !s.rigCleanupOutline })),
+  toggleRigAutoZSort: () => set((s) => ({ rigAutoZSort: !s.rigAutoZSort })),
+  toggleRigDirectionalLighting: () =>
+    set((s) => ({ rigDirectionalLighting: !s.rigDirectionalLighting })),
+  setRigPerspective3d: (v) =>
+    set({ rigPerspective3d: Math.max(0, Math.min(1, v)) }),
   setDataTool: (dataTool) => set({ dataTool }),
   toggleShowGameDataOverlay: () =>
     set((s) => ({ showGameDataOverlay: !s.showGameDataOverlay })),
