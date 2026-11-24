@@ -1,15 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Film, Play, RotateCcw, Square, Sparkles, X } from "lucide-react";
+import {
+  Box,
+  Film,
+  Pause,
+  Play,
+  RotateCcw,
+  Sparkles,
+  Square,
+  X,
+} from "lucide-react";
 import { hexToRgba, PixelBuffer } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import { commitFloatingSelection } from "../engine/document/selectionActions";
 import { syncTimelineCels } from "../engine/document/timelineActions";
+import type { PixelCleanupOptions } from "../engine/rig/pixelCleanup";
+import { mat3FromEulerDeg, mat3MulVec } from "../engine/tools/math3d";
 import {
   bakeTurntableFrames,
+  computeTurntableAngleOffset,
   render25DSprite,
   renderSpriteStack,
+  ROTATE3D_CAMERA_PRESETS,
+  TURNTABLE_PRESETS,
+  type DepthProfile,
+  type Rotate25DOptions,
+  type Rotate3DCameraPreset,
   type Rotate3DMode,
   type SpinAxis,
+  type SpriteStackOptions,
+  type TurntableEasing,
+  type TurntablePreset,
 } from "../engine/tools/rotate3d";
 import {
   isLayerEffectivelyLocked,
@@ -17,11 +37,97 @@ import {
 } from "../store/editorStore";
 
 type SourceScope = "visible" | "active";
+type PivotMode = "center" | "bottom" | "custom";
+type PreviewMode = "orbit" | "turntable";
+type PreviewZoom = "auto" | 2 | 4 | 6;
+
+const CAMERA_PRESET_LIST: readonly Rotate3DCameraPreset[] = [
+  ROTATE3D_CAMERA_PRESETS.front,
+  ROTATE3D_CAMERA_PRESETS.threeQuarterL,
+  ROTATE3D_CAMERA_PRESETS.threeQuarterR,
+  ROTATE3D_CAMERA_PRESETS.iso2to1,
+  ROTATE3D_CAMERA_PRESETS.topDown,
+];
+
+const TURNTABLE_PRESET_LIST: readonly TurntablePreset[] = [
+  TURNTABLE_PRESETS.dir4,
+  TURNTABLE_PRESETS.dir8,
+  TURNTABLE_PRESETS.dir16,
+  TURNTABLE_PRESETS.sway,
+];
+
+const FRAME_COUNT_OPTIONS = [4, 6, 8, 12, 16, 24, 32] as const;
+const ZOOM_OPTIONS: readonly PreviewZoom[] = ["auto", 2, 4, 6];
 
 function normalizeDeg(deg: number): number {
-  let d = ((deg + 180) % 360 + 360) % 360 - 180;
+  let d = (((deg + 180) % 360) + 360) % 360 - 180;
   if (d === -180 && deg > 0) d = 180;
   return Math.round(d);
+}
+
+interface AxisGizmoProps {
+  yawDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
+}
+
+function AxisGizmo({ yawDeg, pitchDeg, rollDeg }: AxisGizmoProps) {
+  const m = mat3FromEulerDeg(yawDeg, pitchDeg, rollDeg);
+  const cx = 24;
+  const cy = 24;
+  const len = 14;
+  const labelDist = 19;
+
+  const axes: Array<{
+    label: string;
+    color: string;
+    vec: [number, number, number];
+  }> = [
+    { label: "X", color: "#e05555", vec: mat3MulVec(m, 1, 0, 0) },
+    { label: "Y", color: "#4db86a", vec: mat3MulVec(m, 0, 1, 0) },
+    { label: "Z", color: "#4c8bf5", vec: mat3MulVec(m, 0, 0, 1) },
+  ];
+
+  // Draw far-to-near so front-facing axis renders on top
+  axes.sort((a, b) => a.vec[2] - b.vec[2]);
+
+  return (
+    <svg className="rotate3d-gizmo" viewBox="0 0 48 48" aria-hidden="true">
+      {axes.map(({ label, color, vec }) => {
+        const [vx, vy] = vec;
+        const x2 = cx + vx * len;
+        const y2 = cy + vy * len;
+        const lx = cx + vx * labelDist;
+        const ly = cy + vy * labelDist;
+        return (
+          <g key={label}>
+            <line
+              x1={cx}
+              y1={cy}
+              x2={x2}
+              y2={y2}
+              stroke={color}
+              strokeWidth={1.5}
+            />
+            <circle cx={x2} cy={y2} r={1.8} fill={color} />
+            <text
+              x={lx}
+              y={ly}
+              fill={color}
+              fontSize={7.5}
+              fontFamily="var(--font-mono)"
+              fontWeight={700}
+              textAnchor="middle"
+              dominantBaseline="central"
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })}
+      <circle cx={cx} cy={cy} r={1.5} fill="#b8b8b8" />
+    </svg>
+  );
 }
 
 export function Rotate3DModal() {
@@ -32,31 +138,69 @@ export function Rotate3DModal() {
   const layers = useEditorStore((s) => s.layers);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const currentFrame = useEditorStore((s) => s.currentFrame);
+  const frames = useEditorStore((s) => s.frames);
 
+  // Mode & Source
   const [mode, setMode] = useState<Rotate3DMode>("extruded");
   const [sourceScope, setSourceScope] = useState<SourceScope>("visible");
+  const [backFaceChoice, setBackFaceChoice] = useState<string>("none");
+  const [pivotMode, setPivotMode] = useState<PivotMode>("center");
+  const [customPivotX, setCustomPivotX] = useState(() =>
+    Math.floor(canvasWidth / 2)
+  );
+  const [customPivotY, setCustomPivotY] = useState(() =>
+    Math.floor(canvasHeight / 2)
+  );
 
-  // 2.5D & Shared angle controls
+  // Transform controls
   const [yawDeg, setYawDeg] = useState(28);
   const [pitchDeg, setPitchDeg] = useState(18);
   const [rollDeg, setRollDeg] = useState(0);
-  const [extrudeDepth, setExtrudeDepth] = useState(4);
   const [perspective, setPerspective] = useState(0.35);
-  const [supersample, setSupersample] = useState(true);
+  const [autoFitBounds, setAutoFitBounds] = useState(false);
+
+  // Extrusion controls
+  const [depthProfile, setDepthProfile] = useState<DepthProfile>("slab");
+  const [extrudeDepth, setExtrudeDepth] = useState(4);
+  const [heightMapLayerId, setHeightMapLayerId] = useState<string>("");
 
   // Sprite stacking controls
   const [stackPitchDeg, setStackPitchDeg] = useState(42);
   const [sliceSpacing, setSliceSpacing] = useState(1.5);
+  const [sliceThickness, setSliceThickness] = useState(1);
+  const [reverseOrder, setReverseOrder] = useState(false);
 
-  // Shared shading & outline
+  // Lighting & Pixel Quality controls
   const [shadeDepth, setShadeDepth] = useState(true);
+  const [directionalLighting, setDirectionalLighting] = useState(false);
+  const [lightAzimuthDeg, setLightAzimuthDeg] = useState(-35);
+  const [lightElevationDeg, setLightElevationDeg] = useState(45);
+  const [ambient, setAmbient] = useState(0.45);
+  const [rimStrength, setRimStrength] = useState(0);
+
+  const [supersample, setSupersample] = useState(true);
+  const [preScaleEPX, setPreScaleEPX] = useState(false);
+  const [paletteLock, setPaletteLock] = useState(false);
+  const [removeOrphans, setRemoveOrphans] = useState(false);
+  const [fillHoles, setFillHoles] = useState(false);
   const [outlineEnabled, setOutlineEnabled] = useState(false);
   const [outlineHex, setOutlineHex] = useState("#0f0f17");
 
-  // Orbit & turntable controls
+  // Preview stage controls
+  const [previewMode, setPreviewMode] = useState<PreviewMode>("orbit");
+  const [previewZoom, setPreviewZoom] = useState<PreviewZoom>("auto");
   const [autoSpin, setAutoSpin] = useState(false);
+  const [scrubberFrame, setScrubberFrame] = useState(0);
+  const [scrubberPlaying, setScrubberPlaying] = useState(false);
+
+  // Turntable Baker controls
   const [bakeFrameCount, setBakeFrameCount] = useState(8);
   const [spinAxis, setSpinAxis] = useState<SpinAxis>("yaw");
+  const [bakeStartDeg, setBakeStartDeg] = useState(0);
+  const [bakeSweepDeg, setBakeSweepDeg] = useState(360);
+  const [bakePingPong, setBakePingPong] = useState(false);
+  const [bakeEasing, setBakeEasing] = useState<TurntableEasing>("linear");
+  const [spinTimelineFrames, setSpinTimelineFrames] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{
@@ -66,10 +210,26 @@ export function Rotate3DModal() {
     pitch: number;
   } | null>(null);
 
-  // Escape key closes modal
+  const visibleRasterLayers = useMemo(
+    () => layers.filter((l) => l.kind === "raster" && l.visible),
+    [layers]
+  );
+
+  const allRasterLayers = useMemo(
+    () => layers.filter((l) => l.kind === "raster"),
+    [layers]
+  );
+
+  const clampedScrubberFrame = Math.max(
+    0,
+    Math.min(bakeFrameCount - 1, scrubberFrame)
+  );
+
+  // Escape key & close cleanup
   useEffect(() => {
     if (!open) {
       setAutoSpin(false);
+      setScrubberPlaying(false);
       return;
     }
     const onKeyDown = (e: KeyboardEvent) => {
@@ -81,9 +241,9 @@ export function Rotate3DModal() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
 
-  // Smooth auto-spin preview animation
+  // Smooth auto-spin preview animation (Orbit mode)
   useEffect(() => {
-    if (!open || !autoSpin) return;
+    if (!open || previewMode !== "orbit" || !autoSpin) return;
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
@@ -94,14 +254,34 @@ export function Rotate3DModal() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [open, autoSpin]);
+  }, [open, previewMode, autoSpin]);
 
-  // Gather source buffer (2.5D) and slice stack (Sprite Stacking)
-  const { singleSource, stackSlices } = useMemo(() => {
+  // Live Turntable Scrubber playback
+  useEffect(() => {
+    if (!open || previewMode !== "turntable" || !scrubberPlaying) return;
+    const id = window.setInterval(() => {
+      setScrubberFrame((prev) => (prev + 1) % Math.max(1, bakeFrameCount));
+    }, 150);
+    return () => window.clearInterval(id);
+  }, [open, previewMode, scrubberPlaying, bakeFrameCount]);
+
+  // Gather source buffers, back-face buffer, height-map buffer, and slice stack
+  const {
+    singleSource,
+    backSourceBuffer,
+    heightMapBuffer,
+    stackSlices,
+    timelineSourceFrames,
+    timelineBackFrames,
+  } = useMemo(() => {
     if (!open) {
       return {
         singleSource: new PixelBuffer(1, 1),
+        backSourceBuffer: null as PixelBuffer | null,
+        heightMapBuffer: null as PixelBuffer | null,
         stackSlices: [] as PixelBuffer[],
+        timelineSourceFrames: [] as PixelBuffer[],
+        timelineBackFrames: undefined as PixelBuffer[] | undefined,
       };
     }
 
@@ -112,6 +292,25 @@ export function Rotate3DModal() {
     } else {
       const cel = pixelEngine.getCel(activeLayerId, currentFrame);
       single = cel ? cel.clone() : new PixelBuffer(canvasWidth, canvasHeight);
+    }
+
+    const isCustomBackLayer =
+      backFaceChoice !== "none" &&
+      backFaceChoice !== "mirror" &&
+      visibleRasterLayers.some((l) => l.id === backFaceChoice);
+
+    let backBuf: PixelBuffer | null = null;
+    if (isCustomBackLayer) {
+      const backCel = pixelEngine.getCel(backFaceChoice, currentFrame);
+      backBuf = backCel
+        ? backCel.clone()
+        : new PixelBuffer(canvasWidth, canvasHeight);
+    }
+
+    let hmBuf: PixelBuffer | null = null;
+    if (depthProfile === "heightmap" && heightMapLayerId) {
+      const hmCel = pixelEngine.getCel(heightMapLayerId, currentFrame);
+      if (hmCel) hmBuf = hmCel.clone();
     }
 
     const slices: PixelBuffer[] = [];
@@ -125,28 +324,126 @@ export function Rotate3DModal() {
       }
     }
 
-    return { singleSource: single, stackSlices: slices };
-  }, [open, sourceScope, layers, activeLayerId, currentFrame, canvasWidth, canvasHeight]);
+    const tlSources: PixelBuffer[] = [];
+    let tlBacks: PixelBuffer[] | undefined;
+    if (mode === "extruded" && spinTimelineFrames && frames.length > 1) {
+      for (let f = 0; f < frames.length; f++) {
+        if (sourceScope === "visible") {
+          const comp = pixelEngine.compositeFrame(layers, f);
+          tlSources.push(new PixelBuffer(canvasWidth, canvasHeight, comp));
+        } else {
+          const cel = pixelEngine.getCel(activeLayerId, f);
+          tlSources.push(
+            cel ? cel.clone() : new PixelBuffer(canvasWidth, canvasHeight)
+          );
+        }
+      }
+      if (isCustomBackLayer) {
+        tlBacks = [];
+        for (let f = 0; f < frames.length; f++) {
+          const backCel = pixelEngine.getCel(backFaceChoice, f);
+          tlBacks.push(
+            backCel
+              ? backCel.clone()
+              : new PixelBuffer(canvasWidth, canvasHeight)
+          );
+        }
+      }
+    }
+
+    return {
+      singleSource: single,
+      backSourceBuffer: backBuf,
+      heightMapBuffer: hmBuf,
+      stackSlices: slices,
+      timelineSourceFrames: tlSources,
+      timelineBackFrames: tlBacks,
+    };
+  }, [
+    open,
+    sourceScope,
+    layers,
+    activeLayerId,
+    currentFrame,
+    canvasWidth,
+    canvasHeight,
+    backFaceChoice,
+    visibleRasterLayers,
+    depthProfile,
+    heightMapLayerId,
+    mode,
+    spinTimelineFrames,
+    frames.length,
+  ]);
 
   const outlineColor = useMemo(
     () => (outlineEnabled ? hexToRgba(outlineHex, 255) : null),
     [outlineEnabled, outlineHex]
   );
 
-  // Render preview buffer whenever options change
-  const renderedPreview = useMemo(() => {
-    if (!open) return null;
-    if (mode === "stack") {
-      const slices = stackSlices.length > 0 ? stackSlices : [singleSource];
-      return renderSpriteStack(slices, {
-        yawDeg,
-        pitchDeg: stackPitchDeg,
-        sliceSpacing,
-        depthShading: shadeDepth,
-        outlineColor,
-      });
+  const cleanupOptions = useMemo<PixelCleanupOptions | null>(() => {
+    if (!paletteLock && !removeOrphans && !fillHoles) return null;
+    return {
+      paletteLock,
+      removeOrphans,
+      fillHoles,
+      preserveOutline: false,
+    };
+  }, [paletteLock, removeOrphans, fillHoles]);
+
+  const resolvedPivot = useMemo(() => {
+    if (pivotMode === "bottom") {
+      return {
+        pivotX: (canvasWidth - 1) / 2,
+        pivotY: canvasHeight - 1,
+      };
     }
-    return render25DSprite(singleSource, {
+    if (pivotMode === "custom") {
+      return {
+        pivotX: customPivotX,
+        pivotY: customPivotY,
+      };
+    }
+    return {
+      pivotX: undefined as number | undefined,
+      pivotY: undefined as number | undefined,
+    };
+  }, [pivotMode, canvasWidth, canvasHeight, customPivotX, customPivotY]);
+
+  const turntableAngleOffset = useMemo(() => {
+    if (previewMode !== "turntable") return 0;
+    return computeTurntableAngleOffset(clampedScrubberFrame, bakeFrameCount, {
+      startDeg: bakeStartDeg,
+      sweepDeg: bakeSweepDeg,
+      pingPong: bakePingPong,
+      easing: bakeEasing,
+    });
+  }, [
+    previewMode,
+    clampedScrubberFrame,
+    bakeFrameCount,
+    bakeStartDeg,
+    bakeSweepDeg,
+    bakePingPong,
+    bakeEasing,
+  ]);
+
+  const basePitch = mode === "stack" ? stackPitchDeg : pitchDeg;
+  const previewYaw =
+    previewMode === "turntable" && spinAxis === "yaw"
+      ? yawDeg + turntableAngleOffset
+      : yawDeg;
+  const previewPitch =
+    previewMode === "turntable" && spinAxis === "pitch"
+      ? basePitch + turntableAngleOffset
+      : basePitch;
+  const previewRoll =
+    previewMode === "turntable" && spinAxis === "roll"
+      ? rollDeg + turntableAngleOffset
+      : rollDeg;
+
+  const baseOpts25d = useMemo<Rotate25DOptions>(
+    () => ({
       pitchDeg,
       yawDeg,
       rollDeg,
@@ -155,22 +452,131 @@ export function Rotate3DModal() {
       shadeDepth,
       supersample,
       outlineColor,
+      pivotX: resolvedPivot.pivotX,
+      pivotY: resolvedPivot.pivotY,
+      autoFitBounds,
+      depthProfile,
+      heightMap: heightMapBuffer,
+      directionalLighting,
+      lightAzimuthDeg,
+      lightElevationDeg,
+      ambient,
+      rimStrength,
+      backSource: backSourceBuffer,
+      mirrorBack: backFaceChoice === "mirror",
+      preScaleEPX,
+      cleanup: cleanupOptions,
+    }),
+    [
+      pitchDeg,
+      yawDeg,
+      rollDeg,
+      extrudeDepth,
+      perspective,
+      shadeDepth,
+      supersample,
+      outlineColor,
+      resolvedPivot.pivotX,
+      resolvedPivot.pivotY,
+      autoFitBounds,
+      depthProfile,
+      heightMapBuffer,
+      directionalLighting,
+      lightAzimuthDeg,
+      lightElevationDeg,
+      ambient,
+      rimStrength,
+      backSourceBuffer,
+      backFaceChoice,
+      preScaleEPX,
+      cleanupOptions,
+    ]
+  );
+
+  const baseOptsStack = useMemo<SpriteStackOptions>(
+    () => ({
+      yawDeg,
+      pitchDeg: stackPitchDeg,
+      rollDeg,
+      perspective,
+      sliceSpacing,
+      sliceThickness,
+      reverseOrder,
+      depthShading: shadeDepth,
+      directionalLighting,
+      lightAzimuthDeg,
+      lightElevationDeg,
+      ambient,
+      autoFitBounds,
+      outlineColor,
+      cleanup: cleanupOptions,
+    }),
+    [
+      yawDeg,
+      stackPitchDeg,
+      rollDeg,
+      perspective,
+      sliceSpacing,
+      sliceThickness,
+      reverseOrder,
+      shadeDepth,
+      directionalLighting,
+      lightAzimuthDeg,
+      lightElevationDeg,
+      ambient,
+      autoFitBounds,
+      outlineColor,
+      cleanupOptions,
+    ]
+  );
+
+  // Render preview buffer whenever options change
+  const renderedPreview = useMemo(() => {
+    if (!open) return null;
+    if (mode === "stack") {
+      const slices = stackSlices.length > 0 ? stackSlices : [singleSource];
+      return renderSpriteStack(slices, {
+        ...baseOptsStack,
+        yawDeg: previewYaw,
+        pitchDeg: previewPitch,
+        rollDeg: previewRoll,
+      });
+    }
+
+    const useTimelineInPreview =
+      previewMode === "turntable" &&
+      spinTimelineFrames &&
+      timelineSourceFrames.length > 1;
+    const src = useTimelineInPreview
+      ? timelineSourceFrames[clampedScrubberFrame % timelineSourceFrames.length]
+      : singleSource;
+    const backSrc =
+      useTimelineInPreview && timelineBackFrames && timelineBackFrames.length > 0
+        ? timelineBackFrames[clampedScrubberFrame % timelineBackFrames.length]
+        : baseOpts25d.backSource;
+
+    return render25DSprite(src, {
+      ...baseOpts25d,
+      backSource: backSrc,
+      yawDeg: previewYaw,
+      pitchDeg: previewPitch,
+      rollDeg: previewRoll,
     });
   }, [
     open,
     mode,
     stackSlices,
     singleSource,
-    yawDeg,
-    stackPitchDeg,
-    sliceSpacing,
-    shadeDepth,
-    outlineColor,
-    pitchDeg,
-    rollDeg,
-    extrudeDepth,
-    perspective,
-    supersample,
+    baseOptsStack,
+    baseOpts25d,
+    previewYaw,
+    previewPitch,
+    previewRoll,
+    previewMode,
+    spinTimelineFrames,
+    timelineSourceFrames,
+    timelineBackFrames,
+    clampedScrubberFrame,
   ]);
 
   // Blit preview PixelBuffer onto modal canvas
@@ -191,20 +597,37 @@ export function Rotate3DModal() {
 
   if (!open) return null;
 
-  const previewScale = Math.max(
-    2,
-    Math.min(10, Math.floor(220 / Math.max(canvasWidth, canvasHeight)))
+  const autoScale = Math.max(
+    1,
+    Math.min(10, Math.floor(236 / Math.max(canvasWidth, canvasHeight)))
   );
+  const previewScale = previewZoom === "auto" ? autoScale : previewZoom;
 
-  const applyPreset = (yaw: number, pitch: number, roll: number) => {
+  const closeModal = () => {
     setAutoSpin(false);
-    setYawDeg(yaw);
+    setScrubberPlaying(false);
+    setOpen(false);
+  };
+
+  const applyCameraPreset = (preset: Rotate3DCameraPreset) => {
+    setAutoSpin(false);
+    setYawDeg(preset.yawDeg);
     if (mode === "stack") {
-      setStackPitchDeg(Math.max(0, Math.min(75, Math.abs(pitch))));
+      setStackPitchDeg(Math.max(0, Math.min(75, Math.abs(preset.pitchDeg))));
+      setRollDeg(preset.rollDeg);
     } else {
-      setPitchDeg(pitch);
-      setRollDeg(roll);
+      setPitchDeg(preset.pitchDeg);
+      setRollDeg(preset.rollDeg);
     }
+  };
+
+  const applyTurntablePreset = (preset: TurntablePreset) => {
+    setBakeFrameCount(preset.frameCount);
+    setBakeStartDeg(preset.startDeg);
+    setBakeSweepDeg(preset.sweepDeg);
+    setBakePingPong(preset.pingPong);
+    setBakeEasing(preset.easing);
+    setScrubberFrame(0);
   };
 
   const handleApplyCurrentFrame = () => {
@@ -237,36 +660,30 @@ export function Rotate3DModal() {
     syncTimelineCels();
     pixelEngine.emitChange();
     state.setStatusMessage("Applied 3D rotation to current frame");
-    setOpen(false);
+    closeModal();
   };
 
   const handleBakeTurntable = () => {
     commitFloatingSelection();
     const state = useEditorStore.getState();
     const slices = stackSlices.length > 0 ? stackSlices : [singleSource];
+    const useTimeline =
+      mode === "extruded" && spinTimelineFrames && timelineSourceFrames.length > 1;
+
     const baked = bakeTurntableFrames({
       mode,
       frameCount: bakeFrameCount,
-      spinAxis: mode === "stack" ? "yaw" : spinAxis,
+      spinAxis,
+      startDeg: bakeStartDeg,
+      sweepDeg: bakeSweepDeg,
+      pingPong: bakePingPong,
+      easing: bakeEasing,
       source: singleSource,
       slices,
-      opts25d: {
-        pitchDeg,
-        yawDeg,
-        rollDeg,
-        extrudeDepth,
-        perspective,
-        shadeDepth,
-        supersample,
-        outlineColor,
-      },
-      optsStack: {
-        yawDeg,
-        pitchDeg: stackPitchDeg,
-        sliceSpacing,
-        depthShading: shadeDepth,
-        outlineColor,
-      },
+      sourceFrames: useTimeline ? timelineSourceFrames : undefined,
+      backFrames: useTimeline ? timelineBackFrames : undefined,
+      opts25d: baseOpts25d,
+      optsStack: baseOptsStack,
     });
 
     const newLayerId = state.addNamedLayer(
@@ -298,14 +715,16 @@ export function Rotate3DModal() {
     useEditorStore
       .getState()
       .setStatusMessage(`Baked ${baked.length}-frame 3D turntable`);
-    setOpen(false);
+    closeModal();
   };
+
+  const canSpinTimeline = mode === "extruded" && frames.length > 1;
 
   return (
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) setOpen(false);
+        if (e.target === e.currentTarget) closeModal();
       }}
     >
       <div
@@ -316,13 +735,14 @@ export function Rotate3DModal() {
         <div className="modal-header">
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <Box size={14} />
-            <span>3D Rotate &amp; Turntable</span>
+            <span>3D Studio &amp; Turntable</span>
           </div>
           <button
             type="button"
             className="icon-action-btn"
             style={{ width: 22, height: 22 }}
-            onClick={() => setOpen(false)}
+            onClick={closeModal}
+            aria-label="Close"
           >
             <X size={13} />
           </button>
@@ -351,12 +771,13 @@ export function Rotate3DModal() {
           </div>
 
           <div className="rotate3d-layout">
-            {/* Left column: interactive orbit preview */}
+            {/* Left column: interactive preview stage, zoom & turntable scrubber */}
             <div className="rotate3d-preview-pane">
               <div
                 className="rotate3d-preview-stage"
                 onMouseDown={(e) => {
                   setAutoSpin(false);
+                  setScrubberPlaying(false);
                   dragRef.current = {
                     x: e.clientX,
                     y: e.clientY,
@@ -372,11 +793,17 @@ export function Rotate3DModal() {
                   setYawDeg(normalizeDeg(drag.yaw + dx * 0.9));
                   if (mode === "stack") {
                     setStackPitchDeg(
-                      Math.max(0, Math.min(75, Math.round(drag.pitch + dy * 0.6)))
+                      Math.max(
+                        0,
+                        Math.min(75, Math.round(drag.pitch + dy * 0.6))
+                      )
                     );
                   } else {
                     setPitchDeg(
-                      Math.max(-85, Math.min(85, Math.round(drag.pitch + dy * 0.8)))
+                      Math.max(
+                        -85,
+                        Math.min(85, Math.round(drag.pitch + dy * 0.8))
+                      )
                     );
                   }
                 }}
@@ -398,76 +825,191 @@ export function Rotate3DModal() {
                     height: canvasHeight * previewScale,
                   }}
                 />
+                <AxisGizmo
+                  yawDeg={previewYaw}
+                  pitchDeg={previewPitch}
+                  rollDeg={previewRoll}
+                />
               </div>
 
+              {/* Preview zoom row */}
               <div className="rotate3d-preview-bar">
-                <button
-                  type="button"
-                  className={`mini-btn ${autoSpin ? "active" : ""}`}
-                  onClick={() => setAutoSpin((v) => !v)}
-                >
-                  {autoSpin ? <Square size={11} /> : <Play size={11} />}
-                  <span>{autoSpin ? "Stop Spin" : "Auto-Spin"}</span>
-                </button>
-                <span className="rotate3d-hint">Drag preview to orbit</span>
+                <div className="rotate3d-btn-row">
+                  {ZOOM_OPTIONS.map((z) => (
+                    <button
+                      key={String(z)}
+                      type="button"
+                      className={`mini-btn ${previewZoom === z ? "active" : ""}`}
+                      onClick={() => setPreviewZoom(z)}
+                    >
+                      {z === "auto" ? "Auto" : `${z}×`}
+                    </button>
+                  ))}
+                </div>
+                <span className="rotate3d-hint">{previewScale}×</span>
               </div>
 
-              <div className="rotate3d-presets">
+              {/* Orbit vs Turntable Preview mode switch */}
+              <div className="rotate3d-mode-tabs" role="tablist">
                 <button
                   type="button"
-                  className="mini-btn"
-                  onClick={() => applyPreset(0, 0, 0)}
+                  role="tab"
+                  aria-selected={previewMode === "orbit"}
+                  className={`rotate3d-tab ${previewMode === "orbit" ? "active" : ""}`}
+                  onClick={() => {
+                    setScrubberPlaying(false);
+                    setPreviewMode("orbit");
+                  }}
                 >
-                  Front
+                  Orbit
                 </button>
                 <button
                   type="button"
-                  className="mini-btn"
-                  onClick={() => applyPreset(-35, 22, 0)}
+                  role="tab"
+                  aria-selected={previewMode === "turntable"}
+                  className={`rotate3d-tab ${previewMode === "turntable" ? "active" : ""}`}
+                  onClick={() => {
+                    setAutoSpin(false);
+                    setPreviewMode("turntable");
+                  }}
                 >
-                  3/4 L
-                </button>
-                <button
-                  type="button"
-                  className="mini-btn"
-                  onClick={() => applyPreset(35, 22, 0)}
-                >
-                  3/4 R
-                </button>
-                <button
-                  type="button"
-                  className="mini-btn"
-                  onClick={() => applyPreset(45, 35, 0)}
-                >
-                  Iso
-                </button>
-                <button
-                  type="button"
-                  className="mini-btn"
-                  title="Reset Angles"
-                  onClick={() => applyPreset(0, 0, 0)}
-                >
-                  <RotateCcw size={11} />
+                  Turntable Preview
                 </button>
               </div>
+
+              {previewMode === "orbit" ? (
+                <div className="rotate3d-preview-bar">
+                  <button
+                    type="button"
+                    className={`mini-btn ${autoSpin ? "active" : ""}`}
+                    onClick={() => setAutoSpin((v) => !v)}
+                  >
+                    {autoSpin ? <Square size={11} /> : <Play size={11} />}
+                    <span>{autoSpin ? "Stop Spin" : "Auto-Spin"}</span>
+                  </button>
+                  <span className="rotate3d-hint">Drag stage to orbit</span>
+                </div>
+              ) : (
+                <div className="rotate3d-scrubber-box">
+                  <div className="rotate3d-preview-bar">
+                    <button
+                      type="button"
+                      className={`mini-btn ${scrubberPlaying ? "active" : ""}`}
+                      onClick={() => setScrubberPlaying((v) => !v)}
+                    >
+                      {scrubberPlaying ? (
+                        <Pause size={11} />
+                      ) : (
+                        <Play size={11} />
+                      )}
+                      <span>{scrubberPlaying ? "Pause" : "Play"}</span>
+                    </button>
+                    <span className="rotate3d-val">
+                      {clampedScrubberFrame + 1}/{bakeFrameCount} (
+                      {Math.round(turntableAngleOffset)}°)
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    className="rotate3d-scrubber-range"
+                    min={1}
+                    max={bakeFrameCount}
+                    value={clampedScrubberFrame + 1}
+                    onChange={(e) => {
+                      setScrubberPlaying(false);
+                      setScrubberFrame(Number(e.target.value) - 1);
+                    }}
+                    aria-label="Turntable preview frame"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Right column: parameters & turntable baker */}
+            {/* Right column: compact scrollable organized control groups */}
             <div className="rotate3d-controls">
+              {/* Group 1: Source & Faces */}
               {mode === "extruded" ? (
-                <label className="modal-field">
-                  <span>Source</span>
-                  <select
-                    className="palette-select"
-                    value={sourceScope}
-                    onChange={(e) =>
-                      setSourceScope(e.target.value as SourceScope)
-                    }
-                  >
-                    <option value="visible">All Visible Layers</option>
-                    <option value="active">Active Layer Only</option>
-                  </select>
-                </label>
+                <div className="rotate3d-group">
+                  <div className="rotate3d-group-title">Source &amp; Faces</div>
+                  <div className="rotate3d-grid-2">
+                    <label className="modal-field">
+                      <span>Source</span>
+                      <select
+                        className="palette-select"
+                        value={sourceScope}
+                        onChange={(e) =>
+                          setSourceScope(e.target.value as SourceScope)
+                        }
+                      >
+                        <option value="visible">All Visible Layers</option>
+                        <option value="active">Active Layer Only</option>
+                      </select>
+                    </label>
+                    <label className="modal-field">
+                      <span>Back-Face</span>
+                      <select
+                        className="palette-select"
+                        value={backFaceChoice}
+                        onChange={(e) => setBackFaceChoice(e.target.value)}
+                      >
+                        <option value="none">None</option>
+                        <option value="mirror">Mirror Front</option>
+                        {visibleRasterLayers.map((layer) => (
+                          <option key={layer.id} value={layer.id}>
+                            {layer.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="rotate3d-pivot-row">
+                    <label className="modal-field" style={{ flex: 1 }}>
+                      <span>Pivot</span>
+                      <select
+                        className="palette-select"
+                        value={pivotMode}
+                        onChange={(e) =>
+                          setPivotMode(e.target.value as PivotMode)
+                        }
+                      >
+                        <option value="center">Center</option>
+                        <option value="bottom">Bottom</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                    </label>
+                    {pivotMode === "custom" && (
+                      <>
+                        <label className="modal-field rotate3d-pivot-coord">
+                          <span>X</span>
+                          <input
+                            type="number"
+                            className="rotate3d-num-input"
+                            min={0}
+                            max={Math.max(0, canvasWidth - 1)}
+                            value={customPivotX}
+                            onChange={(e) =>
+                              setCustomPivotX(Number(e.target.value) || 0)
+                            }
+                          />
+                        </label>
+                        <label className="modal-field rotate3d-pivot-coord">
+                          <span>Y</span>
+                          <input
+                            type="number"
+                            className="rotate3d-num-input"
+                            min={0}
+                            max={Math.max(0, canvasHeight - 1)}
+                            value={customPivotY}
+                            onChange={(e) =>
+                              setCustomPivotY(Number(e.target.value) || 0)
+                            }
+                          />
+                        </label>
+                      </>
+                    )}
+                  </div>
+                </div>
               ) : (
                 <div className="rotate3d-stack-note">
                   Stacks {stackSlices.length} visible raster layer
@@ -477,20 +1019,49 @@ export function Rotate3DModal() {
                 </div>
               )}
 
-              <label className="rotate3d-slider-row">
-                <span>Yaw (Y)</span>
-                <input
-                  type="range"
-                  min={-180}
-                  max={180}
-                  value={yawDeg}
-                  onChange={(e) => setYawDeg(Number(e.target.value))}
-                />
-                <span className="rotate3d-val">{yawDeg}°</span>
-              </label>
+              {/* Group 2: Transform */}
+              <div className="rotate3d-group">
+                <div className="rotate3d-group-title">
+                  <span>Transform</span>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    title="Reset Angles"
+                    onClick={() =>
+                      applyCameraPreset(ROTATE3D_CAMERA_PRESETS.front)
+                    }
+                  >
+                    <RotateCcw size={10} />
+                    <span>Reset</span>
+                  </button>
+                </div>
 
-              {mode === "extruded" ? (
-                <>
+                <div className="rotate3d-btn-row">
+                  {CAMERA_PRESET_LIST.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => applyCameraPreset(preset)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="rotate3d-slider-row">
+                  <span>Yaw (Y)</span>
+                  <input
+                    type="range"
+                    min={-180}
+                    max={180}
+                    value={yawDeg}
+                    onChange={(e) => setYawDeg(Number(e.target.value))}
+                  />
+                  <span className="rotate3d-val">{yawDeg}°</span>
+                </label>
+
+                {mode === "extruded" ? (
                   <label className="rotate3d-slider-row">
                     <span>Pitch (X)</span>
                     <input
@@ -502,170 +1073,462 @@ export function Rotate3DModal() {
                     />
                     <span className="rotate3d-val">{pitchDeg}°</span>
                   </label>
-
+                ) : (
                   <label className="rotate3d-slider-row">
-                    <span>Roll (Z)</span>
-                    <input
-                      type="range"
-                      min={-180}
-                      max={180}
-                      value={rollDeg}
-                      onChange={(e) => setRollDeg(Number(e.target.value))}
-                    />
-                    <span className="rotate3d-val">{rollDeg}°</span>
-                  </label>
-
-                  <label className="rotate3d-slider-row">
-                    <span>Thickness</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={10}
-                      step={1}
-                      value={extrudeDepth}
-                      onChange={(e) => setExtrudeDepth(Number(e.target.value))}
-                    />
-                    <span className="rotate3d-val">{extrudeDepth}px</span>
-                  </label>
-
-                  <label className="rotate3d-slider-row">
-                    <span>Perspective</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={Math.round(perspective * 100)}
-                      onChange={(e) =>
-                        setPerspective(Number(e.target.value) / 100)
-                      }
-                    />
-                    <span className="rotate3d-val">
-                      {Math.round(perspective * 100)}%
-                    </span>
-                  </label>
-                </>
-              ) : (
-                <>
-                  <label className="rotate3d-slider-row">
-                    <span>Tilt (Pitch)</span>
+                    <span>Tilt (X)</span>
                     <input
                       type="range"
                       min={0}
                       max={75}
                       value={stackPitchDeg}
-                      onChange={(e) =>
-                        setStackPitchDeg(Number(e.target.value))
-                      }
+                      onChange={(e) => setStackPitchDeg(Number(e.target.value))}
                     />
                     <span className="rotate3d-val">{stackPitchDeg}°</span>
                   </label>
+                )}
 
-                  <label className="rotate3d-slider-row">
-                    <span>Slice Step</span>
-                    <input
-                      type="range"
-                      min={0.5}
-                      max={3}
-                      step={0.25}
-                      value={sliceSpacing}
-                      onChange={(e) => setSliceSpacing(Number(e.target.value))}
-                    />
-                    <span className="rotate3d-val">{sliceSpacing}px</span>
-                  </label>
-                </>
-              )}
+                <label className="rotate3d-slider-row">
+                  <span>Roll (Z)</span>
+                  <input
+                    type="range"
+                    min={-180}
+                    max={180}
+                    value={rollDeg}
+                    onChange={(e) => setRollDeg(Number(e.target.value))}
+                  />
+                  <span className="rotate3d-val">{rollDeg}°</span>
+                </label>
 
-              <div className="rotate3d-toggles">
+                <label className="rotate3d-slider-row">
+                  <span>Perspective</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(perspective * 100)}
+                    onChange={(e) =>
+                      setPerspective(Number(e.target.value) / 100)
+                    }
+                  />
+                  <span className="rotate3d-val">
+                    {Math.round(perspective * 100)}%
+                  </span>
+                </label>
+
                 <label className="modal-checkbox">
                   <input
                     type="checkbox"
-                    checked={shadeDepth}
-                    onChange={(e) => setShadeDepth(e.target.checked)}
+                    checked={autoFitBounds}
+                    onChange={(e) => setAutoFitBounds(e.target.checked)}
                   />
-                  <span>Depth Shading</span>
+                  <span>Safe Auto-Fit</span>
                 </label>
+              </div>
 
-                {mode === "extruded" && (
+              {/* Group 3: Extrusion / Stack */}
+              <div className="rotate3d-group">
+                <div className="rotate3d-group-title">
+                  {mode === "extruded" ? "Extrusion" : "Sprite Stack"}
+                </div>
+
+                {mode === "extruded" ? (
+                  <>
+                    <label className="modal-field">
+                      <span>Depth Profile</span>
+                      <select
+                        className="palette-select"
+                        value={depthProfile}
+                        onChange={(e) =>
+                          setDepthProfile(e.target.value as DepthProfile)
+                        }
+                      >
+                        <option value="slab">Slab</option>
+                        <option value="bevel">Bevel</option>
+                        <option value="pillow">Pillow</option>
+                        <option value="heightmap">Height-Map</option>
+                      </select>
+                    </label>
+
+                    <label className="rotate3d-slider-row">
+                      <span>Thickness</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={16}
+                        step={1}
+                        value={extrudeDepth}
+                        onChange={(e) =>
+                          setExtrudeDepth(Number(e.target.value))
+                        }
+                      />
+                      <span className="rotate3d-val">{extrudeDepth}px</span>
+                    </label>
+
+                    {depthProfile === "heightmap" && (
+                      <label className="modal-field">
+                        <span>Height-Map Layer</span>
+                        <select
+                          className="palette-select"
+                          value={heightMapLayerId}
+                          onChange={(e) => setHeightMapLayerId(e.target.value)}
+                        >
+                          <option value="">None (Uniform Slab)</option>
+                          {allRasterLayers.map((layer) => (
+                            <option key={layer.id} value={layer.id}>
+                              {layer.name}
+                              {layer.visible ? "" : " (hidden)"}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <label className="rotate3d-slider-row">
+                      <span>Slice Step</span>
+                      <input
+                        type="range"
+                        min={0.25}
+                        max={3}
+                        step={0.25}
+                        value={sliceSpacing}
+                        onChange={(e) =>
+                          setSliceSpacing(Number(e.target.value))
+                        }
+                      />
+                      <span className="rotate3d-val">{sliceSpacing}px</span>
+                    </label>
+
+                    <label className="rotate3d-slider-row">
+                      <span>Slice Thick</span>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={3}
+                        step={0.25}
+                        value={sliceThickness}
+                        onChange={(e) =>
+                          setSliceThickness(Number(e.target.value))
+                        }
+                      />
+                      <span className="rotate3d-val">{sliceThickness}×</span>
+                    </label>
+
+                    <label className="modal-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={reverseOrder}
+                        onChange={(e) => setReverseOrder(e.target.checked)}
+                      />
+                      <span>Reverse Order (Top-to-Bottom)</span>
+                    </label>
+                  </>
+                )}
+              </div>
+
+              {/* Group 4: Lighting & Pixel Quality */}
+              <div className="rotate3d-group">
+                <div className="rotate3d-group-title">
+                  Lighting &amp; Pixel Quality
+                </div>
+
+                <div className="rotate3d-toggles">
                   <label className="modal-checkbox">
                     <input
                       type="checkbox"
-                      checked={supersample}
-                      onChange={(e) => setSupersample(e.target.checked)}
+                      checked={shadeDepth}
+                      onChange={(e) => setShadeDepth(e.target.checked)}
                     />
-                    <span>Clean 2x Sample</span>
+                    <span>Depth Shading</span>
                   </label>
+
+                  <label className="modal-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={directionalLighting}
+                      onChange={(e) =>
+                        setDirectionalLighting(e.target.checked)
+                      }
+                    />
+                    <span>Directional Lighting</span>
+                  </label>
+                </div>
+
+                {directionalLighting && (
+                  <div className="rotate3d-subpanel">
+                    <label className="rotate3d-slider-row">
+                      <span>Azimuth</span>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        value={lightAzimuthDeg}
+                        onChange={(e) =>
+                          setLightAzimuthDeg(Number(e.target.value))
+                        }
+                      />
+                      <span className="rotate3d-val">{lightAzimuthDeg}°</span>
+                    </label>
+
+                    <label className="rotate3d-slider-row">
+                      <span>Elevation</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={90}
+                        value={lightElevationDeg}
+                        onChange={(e) =>
+                          setLightElevationDeg(Number(e.target.value))
+                        }
+                      />
+                      <span className="rotate3d-val">{lightElevationDeg}°</span>
+                    </label>
+
+                    <label className="rotate3d-slider-row">
+                      <span>Ambient</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={Math.round(ambient * 100)}
+                        onChange={(e) =>
+                          setAmbient(Number(e.target.value) / 100)
+                        }
+                      />
+                      <span className="rotate3d-val">
+                        {Math.round(ambient * 100)}%
+                      </span>
+                    </label>
+
+                    {mode === "extruded" && (
+                      <label className="rotate3d-slider-row">
+                        <span>Rim</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={Math.round(rimStrength * 100)}
+                          onChange={(e) =>
+                            setRimStrength(Number(e.target.value) / 100)
+                          }
+                        />
+                        <span className="rotate3d-val">
+                          {Math.round(rimStrength * 100)}%
+                        </span>
+                      </label>
+                    )}
+                  </div>
                 )}
 
-                <div className="rotate3d-outline-row">
+                <div className="rotate3d-toggles">
+                  {mode === "extruded" && (
+                    <>
+                      <label className="modal-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={supersample}
+                          onChange={(e) => setSupersample(e.target.checked)}
+                        />
+                        <span>Clean 2× Sample</span>
+                      </label>
+
+                      <label className="modal-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={preScaleEPX}
+                          onChange={(e) => setPreScaleEPX(e.target.checked)}
+                        />
+                        <span>EPX Pre-Scale</span>
+                      </label>
+                    </>
+                  )}
+
                   <label className="modal-checkbox">
                     <input
                       type="checkbox"
-                      checked={outlineEnabled}
-                      onChange={(e) => setOutlineEnabled(e.target.checked)}
+                      checked={paletteLock}
+                      onChange={(e) => setPaletteLock(e.target.checked)}
                     />
-                    <span>1px Outline</span>
+                    <span>Palette Lock</span>
                   </label>
-                  {outlineEnabled && (
+
+                  <label className="modal-checkbox">
                     <input
-                      type="color"
-                      value={outlineHex}
-                      onChange={(e) => setOutlineHex(e.target.value)}
-                      className="rotate3d-color-input"
-                      title="Outline Color"
+                      type="checkbox"
+                      checked={removeOrphans}
+                      onChange={(e) => setRemoveOrphans(e.target.checked)}
                     />
-                  )}
+                    <span>Orphans</span>
+                  </label>
+
+                  <label className="modal-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={fillHoles}
+                      onChange={(e) => setFillHoles(e.target.checked)}
+                    />
+                    <span>Fill Holes</span>
+                  </label>
+
+                  <div className="rotate3d-outline-row">
+                    <label className="modal-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={outlineEnabled}
+                        onChange={(e) => setOutlineEnabled(e.target.checked)}
+                      />
+                      <span>1px Outline</span>
+                    </label>
+                    {outlineEnabled && (
+                      <input
+                        type="color"
+                        value={outlineHex}
+                        onChange={(e) => setOutlineHex(e.target.value)}
+                        className="rotate3d-color-input"
+                        title="Outline Color"
+                      />
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="rotate3d-bake-box">
-                <div className="rotate3d-bake-title">
-                  <Film size={12} />
-                  <span>Turntable Bake</span>
+              {/* Group 5: Turntable Baker */}
+              <div className="rotate3d-group">
+                <div className="rotate3d-group-title">
+                  <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <Film size={11} />
+                    <span>Turntable Baker</span>
+                  </span>
                 </div>
-                <div className="modal-grid-2">
+
+                <div className="rotate3d-btn-row">
+                  {TURNTABLE_PRESET_LIST.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => applyTurntablePreset(preset)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="rotate3d-grid-2">
                   <label className="modal-field">
                     <span>Frames</span>
                     <select
                       className="palette-select"
                       value={bakeFrameCount}
-                      onChange={(e) =>
-                        setBakeFrameCount(Number(e.target.value))
-                      }
+                      onChange={(e) => {
+                        const nextCount = Number(e.target.value);
+                        setBakeFrameCount(nextCount);
+                        setScrubberFrame((f) => Math.min(f, nextCount - 1));
+                      }}
                     >
-                      <option value={4}>4 frames</option>
-                      <option value={8}>8 frames</option>
-                      <option value={12}>12 frames</option>
-                      <option value={16}>16 frames</option>
+                      {FRAME_COUNT_OPTIONS.map((count) => (
+                        <option key={count} value={count}>
+                          {count} frames
+                        </option>
+                      ))}
                     </select>
                   </label>
 
-                  {mode === "extruded" && (
-                    <label className="modal-field">
-                      <span>Spin Axis</span>
-                      <select
-                        className="palette-select"
-                        value={spinAxis}
-                        onChange={(e) =>
-                          setSpinAxis(e.target.value as SpinAxis)
-                        }
-                      >
-                        <option value="yaw">Yaw (Turntable)</option>
-                        <option value="pitch">Pitch (Tumble)</option>
-                        <option value="roll">Roll (Wheel)</option>
-                      </select>
-                    </label>
-                  )}
+                  <label className="modal-field">
+                    <span>Spin Axis</span>
+                    <select
+                      className="palette-select"
+                      value={spinAxis}
+                      onChange={(e) => setSpinAxis(e.target.value as SpinAxis)}
+                    >
+                      <option value="yaw">Yaw (Turntable)</option>
+                      <option value="pitch">Pitch (Tumble)</option>
+                      <option value="roll">Roll (Wheel)</option>
+                    </select>
+                  </label>
                 </div>
+
+                <div className="rotate3d-grid-2">
+                  <label className="modal-field">
+                    <span>Start°</span>
+                    <input
+                      type="number"
+                      className="rotate3d-num-input"
+                      min={-180}
+                      max={180}
+                      value={bakeStartDeg}
+                      onChange={(e) =>
+                        setBakeStartDeg(Number(e.target.value) || 0)
+                      }
+                    />
+                  </label>
+
+                  <label className="modal-field">
+                    <span>Sweep°</span>
+                    <input
+                      type="number"
+                      className="rotate3d-num-input"
+                      min={-360}
+                      max={360}
+                      value={bakeSweepDeg}
+                      onChange={(e) =>
+                        setBakeSweepDeg(Number(e.target.value) || 0)
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="rotate3d-grid-2">
+                  <label className="modal-field">
+                    <span>Easing</span>
+                    <select
+                      className="palette-select"
+                      value={bakeEasing}
+                      onChange={(e) =>
+                        setBakeEasing(e.target.value as TurntableEasing)
+                      }
+                    >
+                      <option value="linear">Linear</option>
+                      <option value="easeInOut">Ease In-Out</option>
+                      <option value="easeIn">Ease In</option>
+                      <option value="easeOut">Ease Out</option>
+                    </select>
+                  </label>
+
+                  <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 3 }}>
+                    <label className="modal-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={bakePingPong}
+                        onChange={(e) => setBakePingPong(e.target.checked)}
+                      />
+                      <span>Ping-Pong</span>
+                    </label>
+                  </div>
+                </div>
+
+                <label
+                  className="modal-checkbox"
+                  style={{ opacity: canSpinTimeline ? 1 : 0.5 }}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={!canSpinTimeline}
+                    checked={canSpinTimeline && spinTimelineFrames}
+                    onChange={(e) => setSpinTimelineFrames(e.target.checked)}
+                  />
+                  <span>
+                    Spin Across Timeline Frames
+                    {frames.length > 1 ? ` (${frames.length}f)` : ""}
+                  </span>
+                </label>
               </div>
             </div>
           </div>
 
           <div className="modal-footer">
-            <button
-              type="button"
-              className="mini-btn"
-              onClick={() => setOpen(false)}
-            >
+            <button type="button" className="mini-btn" onClick={closeModal}>
               Cancel
             </button>
             <button
