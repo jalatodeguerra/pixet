@@ -43,15 +43,34 @@ export interface Rotate25DOptions {
   cleanup?: PixelCleanupOptions | null;
 }
 
+export type TurntableEasing = "linear" | "easeInOut" | "easeIn" | "easeOut";
+
 export interface SpriteStackOptions {
   yawDeg: number;
   pitchDeg: number;
   sliceSpacing: number;
   depthShading: boolean;
   outlineColor: RGBA | null;
+  rollDeg?: number;
+  perspective?: number;
+  sliceThickness?: number;
+  reverseOrder?: boolean;
+  directionalLighting?: boolean;
+  lightAzimuthDeg?: number;
+  lightElevationDeg?: number;
+  ambient?: number;
+  autoFitBounds?: boolean;
+  cleanup?: PixelCleanupOptions | null;
 }
 
-export interface BakeTurntableOptions {
+export interface TurntableAngleOptions {
+  startDeg?: number;
+  sweepDeg?: number;
+  pingPong?: boolean;
+  easing?: TurntableEasing;
+}
+
+export interface BakeTurntableOptions extends TurntableAngleOptions {
   mode: Rotate3DMode;
   frameCount: number;
   spinAxis: SpinAxis;
@@ -59,7 +78,111 @@ export interface BakeTurntableOptions {
   slices?: readonly PixelBuffer[];
   opts25d: Rotate25DOptions;
   optsStack: SpriteStackOptions;
+  sourceFrames?: readonly PixelBuffer[];
+  backFrames?: readonly PixelBuffer[];
 }
+
+export interface Rotate3DCameraPreset {
+  id: string;
+  label: string;
+  yawDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
+}
+
+export const ROTATE3D_CAMERA_PRESETS: Record<
+  "front" | "threeQuarterL" | "threeQuarterR" | "iso2to1" | "topDown" | "coinFlip",
+  Rotate3DCameraPreset
+> = {
+  front: { id: "front", label: "Front", yawDeg: 0, pitchDeg: 0, rollDeg: 0 },
+  threeQuarterL: {
+    id: "threeQuarterL",
+    label: "3/4 L",
+    yawDeg: -35,
+    pitchDeg: 22,
+    rollDeg: 0,
+  },
+  threeQuarterR: {
+    id: "threeQuarterR",
+    label: "3/4 R",
+    yawDeg: 35,
+    pitchDeg: 22,
+    rollDeg: 0,
+  },
+  iso2to1: {
+    id: "iso2to1",
+    label: "Iso 2:1",
+    yawDeg: 45,
+    pitchDeg: 30,
+    rollDeg: 0,
+  },
+  topDown: {
+    id: "topDown",
+    label: "Top-Down",
+    yawDeg: 0,
+    pitchDeg: 65,
+    rollDeg: 0,
+  },
+  coinFlip: {
+    id: "coinFlip",
+    label: "Coin Flip",
+    yawDeg: 0,
+    pitchDeg: 0,
+    rollDeg: 0,
+  },
+};
+
+export interface TurntablePreset {
+  id: string;
+  label: string;
+  frameCount: number;
+  startDeg: number;
+  sweepDeg: number;
+  pingPong: boolean;
+  easing: TurntableEasing;
+}
+
+export const TURNTABLE_PRESETS: Record<
+  "dir4" | "dir8" | "dir16" | "sway",
+  TurntablePreset
+> = {
+  dir4: {
+    id: "dir4",
+    label: "4-Dir",
+    frameCount: 4,
+    startDeg: 0,
+    sweepDeg: 360,
+    pingPong: false,
+    easing: "linear",
+  },
+  dir8: {
+    id: "dir8",
+    label: "8-Dir",
+    frameCount: 8,
+    startDeg: 0,
+    sweepDeg: 360,
+    pingPong: false,
+    easing: "linear",
+  },
+  dir16: {
+    id: "dir16",
+    label: "16-Dir",
+    frameCount: 16,
+    startDeg: 0,
+    sweepDeg: 360,
+    pingPong: false,
+    easing: "linear",
+  },
+  sway: {
+    id: "sway",
+    label: "Sway ±35°",
+    frameCount: 8,
+    startDeg: -35,
+    sweepDeg: 70,
+    pingPong: true,
+    easing: "easeInOut",
+  },
+};
 
 function degToRad(deg: number): number {
   return (deg * Math.PI) / 180;
@@ -645,7 +768,9 @@ export function render25DSprite(
 
 /**
  * Renders a stack of 2D horizontal slice layers (`slices[0]` = bottom,
- * `slices[n-1]` = top) rotated by yaw and tilted by pitch.
+ * `slices[n-1]` = top) rotated by yaw/roll, tilted by pitch, with optional
+ * perspective scaling, slice thickness repeat, reverse ordering, directional
+ * lighting, auto-fit bounds, pixel cleanup, and 1px outline.
  */
 export function renderSpriteStack(
   slices: readonly PixelBuffer[],
@@ -665,37 +790,165 @@ export function renderSpriteStack(
 
   const yaw = degToRad(opts.yawDeg);
   const pitch = degToRad(Math.max(0, Math.min(80, opts.pitchDeg)));
+  const roll = degToRad(opts.rollDeg ?? 0);
   const cyaw = Math.cos(yaw);
   const syaw = Math.sin(yaw);
-  const tiltScale = Math.max(0.15, Math.cos(pitch));
+  const cpitch = Math.cos(pitch);
+  const spitch = Math.sin(pitch);
+  const croll = Math.cos(roll);
+  const sroll = Math.sin(roll);
+  const hasRoll = Math.abs(roll) > 1e-7;
+
+  const tiltScale = Math.max(0.15, cpitch);
   const sliceSpacing = Math.max(0.25, Math.min(4, opts.sliceSpacing));
-  const zLift = Math.sin(pitch) * sliceSpacing;
+  const sliceThickness = Math.max(0.25, Math.min(4, opts.sliceThickness ?? 1));
+  const zLift = spitch * sliceSpacing;
   const midZ = (slices.length - 1) / 2;
-  const subSteps = Math.max(1, Math.ceil(sliceSpacing));
+  const subSteps = Math.max(1, Math.ceil(sliceSpacing * sliceThickness));
+
+  const persp = Math.max(0, Math.min(1, opts.perspective ?? 0));
+  const usePersp = persp > 0.001;
+  const maxDim = Math.max(w, h, slices.length * sliceSpacing);
+  const camDist = maxDim * (2.6 - 1.5 * persp);
+
+  const reverseOrder = opts.reverseOrder === true;
+  const useDirectional = opts.directionalLighting === true;
+  const lightAz = degToRad(opts.lightAzimuthDeg ?? -35);
+  const lightEl = degToRad(opts.lightElevationDeg ?? 45);
+  const cosEl = Math.cos(lightEl);
+  const lightX = Math.sin(lightAz) * cosEl;
+  const lightY = -Math.sin(lightEl);
+  const lightZ = Math.cos(lightAz) * cosEl;
+  const ambient = Math.max(0.1, Math.min(1, opts.ambient ?? 0.45));
+
+  // Optional auto-fit bounds: project 3D AABB of all opaque slice pixels
+  const useAutoFit = opts.autoFitBounds === true;
+  let fitScale = 1;
+  let projCenterX = 0;
+  let projCenterY = 0;
+
+  if (useAutoFit) {
+    let minLx = Infinity;
+    let maxLx = -Infinity;
+    let minLy = Infinity;
+    let maxLy = -Infinity;
+
+    for (let sIdx = 0; sIdx < slices.length; sIdx++) {
+      const slice = slices[sIdx];
+      const sw = slice.width;
+      const sh = slice.height;
+      const scx = (sw - 1) / 2;
+      const scy = (sh - 1) / 2;
+      const sData = slice.data;
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          if (sData[(y * sw + x) * 4 + 3] > 0) {
+            const lx = x - scx;
+            const ly = y - scy;
+            if (lx < minLx) minLx = lx;
+            if (lx > maxLx) maxLx = lx;
+            if (ly < minLy) minLy = ly;
+            if (ly > maxLy) maxLy = ly;
+          }
+        }
+      }
+    }
+
+    if (maxLx >= minLx && maxLy >= minLy) {
+      const lxs = [minLx - 0.5, maxLx + 0.5];
+      const lys = [minLy - 0.5, maxLy + 0.5];
+      const zMin = 0;
+      const zMax =
+        slices.length - 1 + ((subSteps - 1) / subSteps) * sliceThickness;
+      const zs = zMax > zMin ? [zMin, zMax] : [zMin];
+
+      let pMinX = Infinity;
+      let pMaxX = -Infinity;
+      let pMinY = Infinity;
+      let pMaxY = -Infinity;
+
+      for (const lx of lxs) {
+        for (const ly of lys) {
+          const x1 = lx * cyaw - ly * syaw;
+          const y1 = lx * syaw + ly * cyaw;
+          for (const zPos of zs) {
+            const yShift = (zPos - midZ) * zLift;
+            const x2 = x1;
+            const y2 = y1 * tiltScale - yShift;
+            const zDepth = (zPos - midZ) * sliceSpacing;
+            const pScale = usePersp
+              ? camDist / Math.max(1e-3, camDist - zDepth)
+              : 1;
+            const x3 = x2 * pScale;
+            const y3 = y2 * pScale;
+            const x4 = hasRoll ? x3 * croll - y3 * sroll : x3;
+            const y4 = hasRoll ? x3 * sroll + y3 * croll : y3;
+            if (x4 < pMinX) pMinX = x4;
+            if (x4 > pMaxX) pMaxX = x4;
+            if (y4 < pMinY) pMinY = y4;
+            if (y4 > pMaxY) pMaxY = y4;
+          }
+        }
+      }
+
+      const spanX = pMaxX - pMinX;
+      const spanY = pMaxY - pMinY;
+      const scaleX = spanX > 1e-4 ? w / spanX : 1;
+      const scaleY = spanY > 1e-4 ? h / spanY : 1;
+      fitScale = Math.min(1, scaleX, scaleY);
+      projCenterX = (pMinX + pMaxX) / 2;
+      projCenterY = (pMinY + pMaxY) / 2;
+    }
+  }
+
+  // Precompute top-face directional lighting factor: local normal (0, 0, 1)
+  // After pitch tilt: (0, -sin(pitch), cos(pitch)); after screen roll:
+  const topWnx = hasRoll ? spitch * sroll : 0;
+  const topWny = hasRoll ? -spitch * croll : -spitch;
+  const topWnz = cpitch;
+  const topDiffuse = Math.max(
+    0,
+    topWnx * lightX + topWny * lightY + topWnz * lightZ
+  );
+  const topLitShade = ambient + (1 - ambient) * topDiffuse;
 
   const outData = out.data;
   const maxSliceIdx = Math.max(1, slices.length - 1);
 
   for (let sIdx = 0; sIdx < slices.length; sIdx++) {
-    const slice = slices[sIdx];
+    const srcSliceIdx = reverseOrder ? slices.length - 1 - sIdx : sIdx;
+    const slice = slices[srcSliceIdx];
     const sw = slice.width;
     const sh = slice.height;
     const scx = (sw - 1) / 2;
     const scy = (sh - 1) / 2;
     const srcData = slice.data;
 
-    const shade = opts.depthShading
+    const baseShade = opts.depthShading
       ? 0.72 + 0.28 * (sIdx / maxSliceIdx)
       : 1;
 
     for (let sub = 0; sub < subSteps; sub++) {
-      const zPos = sIdx + sub / subSteps;
+      const zPos = sIdx + (sub / subSteps) * sliceThickness;
       const yShift = (zPos - midZ) * zLift;
+      const zDepth = (zPos - midZ) * sliceSpacing;
+      const perspScale = usePersp
+        ? camDist / Math.max(1e-3, camDist - zDepth)
+        : 1;
+      const invPerspScale = 1 / perspScale;
+      const isTopMost = sIdx === slices.length - 1 && sub === subSteps - 1;
 
       for (let py = 0; py < h; py++) {
-        const sy = (py - cy + yShift) / tiltScale;
+        const ry0 = useAutoFit ? (py - cy) / fitScale + projCenterY : py - cy;
         for (let px = 0; px < w; px++) {
-          const sx = px - cx;
+          const rx0 = useAutoFit ? (px - cx) / fitScale + projCenterX : px - cx;
+
+          const x3 = hasRoll ? rx0 * croll + ry0 * sroll : rx0;
+          const y3 = hasRoll ? -rx0 * sroll + ry0 * croll : ry0;
+
+          const sx = x3 * invPerspScale;
+          const sy = (y3 * invPerspScale + yShift) / tiltScale;
+
           // Inverse rotate by -yaw
           const u = Math.round(sx * cyaw + sy * syaw + scx);
           const v = Math.round(-sx * syaw + sy * cyaw + scy);
@@ -704,6 +957,45 @@ export function renderSpriteStack(
           const pIdx = (v * sw + u) * 4;
           const alpha = srcData[pIdx + 3];
           if (alpha === 0) continue;
+
+          let shade = baseShade;
+          if (useDirectional) {
+            if (isTopMost) {
+              shade *= topLitShade;
+            } else {
+              // Extruded side silhouette normal in local slice space
+              const aL = u > 0 && srcData[(v * sw + (u - 1)) * 4 + 3] > 0 ? 1 : 0;
+              const aR =
+                u + 1 < sw && srcData[(v * sw + (u + 1)) * 4 + 3] > 0 ? 1 : 0;
+              const aU =
+                v > 0 && srcData[((v - 1) * sw + u) * 4 + 3] > 0 ? 1 : 0;
+              const aD =
+                v + 1 < sh && srcData[((v + 1) * sw + u) * 4 + 3] > 0 ? 1 : 0;
+              const nlx = -(aR - aL);
+              const nly = -(aD - aU);
+
+              if (nlx === 0 && nly === 0) {
+                shade *= topLitShade;
+              } else {
+                const nLen = Math.hypot(nlx, nly);
+                const ux = nlx / nLen;
+                const uy = nly / nLen;
+                // Forward rotate normal: yaw -> pitch -> roll
+                const nx1 = ux * cyaw - uy * syaw;
+                const ny1 = ux * syaw + uy * cyaw;
+                const ny2 = ny1 * cpitch;
+                const nz2 = ny1 * spitch;
+                const wnx = hasRoll ? nx1 * croll - ny2 * sroll : nx1;
+                const wny = hasRoll ? nx1 * sroll + ny2 * croll : ny2;
+                const wnz = nz2;
+                const diffuse = Math.max(
+                  0,
+                  wnx * lightX + wny * lightY + wnz * lightZ
+                );
+                shade *= ambient + (1 - ambient) * diffuse;
+              }
+            }
+          }
 
           const oIdx = (py * w + px) * 4;
           outData[oIdx] = clampByte(srcData[pIdx] * shade);
@@ -716,44 +1008,145 @@ export function renderSpriteStack(
   }
 
   out.markAllDirty();
-  return opts.outlineColor ? applyPixelOutline(out, opts.outlineColor) : out;
+
+  let result = out;
+  if (opts.cleanup && hasPixelCleanup(opts.cleanup)) {
+    const palette: RGBA[] = [];
+    const seen = new Set<number>();
+    for (const slice of slices) {
+      for (const c of collectPalette(slice)) {
+        const packed = packRgba(c[0], c[1], c[2], c[3]);
+        if (!seen.has(packed)) {
+          seen.add(packed);
+          palette.push(c);
+        }
+      }
+    }
+    result = applyPixelCleanup(result, opts.cleanup, {
+      palette,
+      outlineColor: opts.outlineColor,
+    });
+    if (opts.outlineColor && !opts.cleanup.preserveOutline) {
+      result = applyPixelOutline(result, opts.outlineColor);
+    }
+  } else if (opts.outlineColor) {
+    result = applyPixelOutline(result, opts.outlineColor);
+  }
+
+  return result;
+}
+
+function applyTurntableEasing(u: number, easing: TurntableEasing): number {
+  const t = Math.max(0, Math.min(1, u));
+  switch (easing) {
+    case "easeIn":
+      return t * t;
+    case "easeOut":
+      return 1 - (1 - t) * (1 - t);
+    case "easeInOut":
+      return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    case "linear":
+    default:
+      return t;
+  }
 }
 
 /**
- * Generates an N-frame 360-degree turntable sequence for either 2.5D Extruded
- * or Sprite Stacking mode.
+ * Computes the angle offset (in degrees) for frame `frameIndex` of an N-frame
+ * turntable sequence, supporting custom start/sweep angles, ping-pong sway,
+ * and easing curves.
+ */
+export function computeTurntableAngleOffset(
+  frameIndex: number,
+  frameCount: number,
+  opts: TurntableAngleOptions = {}
+): number {
+  const startDeg = opts.startDeg ?? 0;
+  const sweepDeg = opts.sweepDeg ?? 360;
+  const pingPong = opts.pingPong === true;
+  const easing: TurntableEasing = opts.easing ?? "linear";
+
+  const count = Math.max(1, Math.round(frameCount));
+  const idx = Math.max(0, Math.min(count - 1, frameIndex));
+
+  let u: number;
+  if (pingPong) {
+    const phase = idx / count;
+    u = phase <= 0.5 ? phase * 2 : (1 - phase) * 2;
+  } else {
+    const isFullLoop = sweepDeg !== 0 && Math.abs(sweepDeg) % 360 === 0;
+    if (isFullLoop) {
+      u = idx / count;
+    } else {
+      u = count > 1 ? idx / (count - 1) : 0;
+    }
+  }
+
+  const eased = applyTurntableEasing(u, easing);
+  return startDeg + eased * sweepDeg;
+}
+
+/**
+ * Generates an N-frame turntable sequence for either 2.5D Extruded
+ * or Sprite Stacking mode, supporting custom start/sweep angles, ping-pong
+ * sway, easing, and animated source/back frame sequences.
  */
 export function bakeTurntableFrames(
   options: BakeTurntableOptions
 ): PixelBuffer[] {
   const count = Math.max(2, Math.min(32, Math.round(options.frameCount)));
   const frames: PixelBuffer[] = [];
+  const sourceFrames =
+    options.sourceFrames && options.sourceFrames.length > 0
+      ? options.sourceFrames
+      : null;
+  const backFrames =
+    options.backFrames && options.backFrames.length > 0
+      ? options.backFrames
+      : null;
 
   for (let i = 0; i < count; i++) {
-    const stepDeg = (i / count) * 360;
+    const angleOffset = computeTurntableAngleOffset(i, count, options);
     if (options.mode === "stack") {
       const slices = options.slices ?? [];
       frames.push(
         renderSpriteStack(slices, {
           ...options.optsStack,
-          yawDeg: options.optsStack.yawDeg + stepDeg,
+          yawDeg:
+            options.spinAxis === "yaw"
+              ? options.optsStack.yawDeg + angleOffset
+              : options.optsStack.yawDeg,
+          pitchDeg:
+            options.spinAxis === "pitch"
+              ? options.optsStack.pitchDeg + angleOffset
+              : options.optsStack.pitchDeg,
+          rollDeg:
+            options.spinAxis === "roll"
+              ? (options.optsStack.rollDeg ?? 0) + angleOffset
+              : options.optsStack.rollDeg,
         })
       );
     } else {
-      const src = options.source ?? new PixelBuffer(1, 1);
+      const src = sourceFrames
+        ? sourceFrames[i % sourceFrames.length]
+        : (options.source ?? new PixelBuffer(1, 1));
+      const backSource = backFrames
+        ? backFrames[i % backFrames.length]
+        : options.opts25d.backSource;
       const nextOpts: Rotate25DOptions = {
         ...options.opts25d,
+        backSource,
         yawDeg:
           options.spinAxis === "yaw"
-            ? options.opts25d.yawDeg + stepDeg
+            ? options.opts25d.yawDeg + angleOffset
             : options.opts25d.yawDeg,
         pitchDeg:
           options.spinAxis === "pitch"
-            ? options.opts25d.pitchDeg + stepDeg
+            ? options.opts25d.pitchDeg + angleOffset
             : options.opts25d.pitchDeg,
         rollDeg:
           options.spinAxis === "roll"
-            ? options.opts25d.rollDeg + stepDeg
+            ? options.opts25d.rollDeg + angleOffset
             : options.opts25d.rollDeg,
       };
       frames.push(render25DSprite(src, nextOpts));

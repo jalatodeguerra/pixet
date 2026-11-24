@@ -19,8 +19,15 @@ import {
   type Mat3,
 } from "../src/engine/tools/math3d.ts";
 import {
+  ROTATE3D_CAMERA_PRESETS,
+  TURNTABLE_PRESETS,
+  bakeTurntableFrames,
+  computeTurntableAngleOffset,
   render25DSprite,
+  renderSpriteStack,
   type Rotate25DOptions,
+  type SpriteStackOptions,
+  type TurntableEasing,
 } from "../src/engine/tools/rotate3d.ts";
 
 function assertClose(actual: number, expected: number, eps = 1e-5): void {
@@ -471,4 +478,455 @@ test("render25DSprite: preScaleEPX and cleanup paletteLock keep all colors stric
       `unexpected color [${c.join(",")}] outside source palette`
     );
   }
+});
+
+function baseStackOpts(
+  overrides: Partial<SpriteStackOptions> = {}
+): SpriteStackOptions {
+  return {
+    yawDeg: 0,
+    pitchDeg: 45,
+    sliceSpacing: 2,
+    depthShading: false,
+    outlineColor: null,
+    ...overrides,
+  };
+}
+
+test("renderSpriteStack: rollDeg rotates stack around screen center", () => {
+  const bottom = new PixelBuffer(21, 21);
+  const top = new PixelBuffer(21, 21);
+  for (let y = 9; y <= 11; y++) {
+    for (let x = 9; x <= 11; x++) {
+      bottom.setPixel(x, y, 220, 40, 40, 255); // Red
+      top.setPixel(x, y, 40, 80, 230, 255); // Blue
+    }
+  }
+
+  const upright = renderSpriteStack(
+    [bottom, top],
+    baseStackOpts({ pitchDeg: 60, sliceSpacing: 4, rollDeg: 0 })
+  );
+  const rolled = renderSpriteStack(
+    [bottom, top],
+    baseStackOpts({ pitchDeg: 60, sliceSpacing: 4, rollDeg: 90 })
+  );
+
+  const findColorCenter = (
+    buf: PixelBuffer,
+    pred: (p: RGBA) => boolean
+  ): { x: number; y: number } => {
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (let y = 0; y < buf.height; y++) {
+      for (let x = 0; x < buf.width; x++) {
+        const p = buf.getPixel(x, y);
+        if (p[3] > 0 && pred(p)) {
+          sx += x;
+          sy += y;
+          n++;
+        }
+      }
+    }
+    assert.ok(n > 0, "expected matching pixels");
+    return { x: sx / n, y: sy / n };
+  };
+
+  const uprightRed = findColorCenter(upright, (p) => p[0] > 150);
+  const uprightBlue = findColorCenter(upright, (p) => p[2] > 150);
+  assert.ok(uprightBlue.y < uprightRed.y - 1);
+  assertClose(uprightBlue.x, uprightRed.x, 0.5);
+
+  // With rollDeg = +90°, vertical stack lift (-Y) rotates to +X (blue to the right of red)
+  const rolledRed = findColorCenter(rolled, (p) => p[0] > 150);
+  const rolledBlue = findColorCenter(rolled, (p) => p[2] > 150);
+  assert.ok(
+    rolledBlue.x > rolledRed.x + 1,
+    `expected rolled blue x (${rolledBlue.x}) > red x (${rolledRed.x})`
+  );
+  assertClose(rolledBlue.y, rolledRed.y, 0.5);
+});
+
+test("renderSpriteStack: perspective scales upper slices larger than lower slices", () => {
+  const makeBar = (r: number, g: number, b: number) => {
+    const buf = new PixelBuffer(25, 25);
+    for (let x = 7; x <= 17; x++) {
+      buf.setPixel(x, 12, r, g, b, 255);
+    }
+    return buf;
+  };
+
+  const bottom = makeBar(220, 40, 40);
+  const mid1 = new PixelBuffer(25, 25);
+  const mid2 = new PixelBuffer(25, 25);
+  const top = makeBar(40, 80, 220);
+
+  const rendered = renderSpriteStack(
+    [bottom, mid1, mid2, top],
+    baseStackOpts({
+      pitchDeg: 55,
+      sliceSpacing: 3,
+      perspective: 0.85,
+    })
+  );
+
+  const spanX = (pred: (p: RGBA) => boolean): number => {
+    let minX = 25;
+    let maxX = -1;
+    for (let y = 0; y < 25; y++) {
+      for (let x = 0; x < 25; x++) {
+        const p = rendered.getPixel(x, y);
+        if (p[3] > 0 && pred(p)) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+        }
+      }
+    }
+    return maxX >= minX ? maxX - minX + 1 : 0;
+  };
+
+  const redSpan = spanX((p) => p[0] > 150);
+  const blueSpan = spanX((p) => p[2] > 150);
+  assert.ok(
+    blueSpan > redSpan,
+    `expected upper slice span (${blueSpan}) > lower slice span (${redSpan})`
+  );
+});
+
+test("renderSpriteStack: reverseOrder flips bottom and top slices", () => {
+  const bottom = new PixelBuffer(16, 16);
+  const top = new PixelBuffer(16, 16);
+  bottom.setPixel(8, 8, 220, 40, 40, 255); // Red
+  top.setPixel(8, 8, 40, 80, 220, 255); // Blue
+
+  const normal = renderSpriteStack(
+    [bottom, top],
+    baseStackOpts({ pitchDeg: 55, sliceSpacing: 3, reverseOrder: false })
+  );
+  const reversed = renderSpriteStack(
+    [bottom, top],
+    baseStackOpts({ pitchDeg: 55, sliceSpacing: 3, reverseOrder: true })
+  );
+
+  const minYFor = (buf: PixelBuffer, pred: (p: RGBA) => boolean): number => {
+    let minY = buf.height;
+    for (let y = 0; y < buf.height; y++) {
+      for (let x = 0; x < buf.width; x++) {
+        const p = buf.getPixel(x, y);
+        if (p[3] > 0 && pred(p) && y < minY) minY = y;
+      }
+    }
+    return minY;
+  };
+
+  assert.ok(
+    minYFor(normal, (p) => p[2] > 150) < minYFor(normal, (p) => p[0] > 150)
+  );
+  assert.ok(
+    minYFor(reversed, (p) => p[0] > 150) < minYFor(reversed, (p) => p[2] > 150)
+  );
+});
+
+test("renderSpriteStack: directionalLighting shades lit side brighter than shadowed side", () => {
+  const slices: PixelBuffer[] = [];
+  for (let s = 0; s < 6; s++) {
+    const buf = new PixelBuffer(24, 24);
+    for (let y = 7; y <= 16; y++) {
+      for (let x = 7; x <= 16; x++) {
+        buf.setPixel(x, y, 200, 200, 200, 255);
+      }
+    }
+    slices.push(buf);
+  }
+
+  // Yaw 45° exposes left-front and right-front extruded faces cleanly
+  const litLeft = renderSpriteStack(
+    slices,
+    baseStackOpts({
+      yawDeg: 45,
+      pitchDeg: 55,
+      sliceSpacing: 1.5,
+      directionalLighting: true,
+      lightAzimuthDeg: -70,
+      lightElevationDeg: 10,
+      ambient: 0.3,
+    })
+  );
+
+  const avgLumaCols = (x0: number, x1: number): number => {
+    let sum = 0;
+    let count = 0;
+    for (let y = 12; y < 24; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const [r, g, b, a] = litLeft.getPixel(x, y);
+        if (a > 0) {
+          sum += (r + g + b) / 3;
+          count++;
+        }
+      }
+    }
+    return count > 0 ? sum / count : 0;
+  };
+
+  const leftSide = avgLumaCols(4, 10);
+  const rightSide = avgLumaCols(13, 19);
+  assert.ok(
+    leftSide > rightSide + 15,
+    `expected left side (${leftSide}) brighter than right side (${rightSide})`
+  );
+});
+
+test("renderSpriteStack: sliceThickness increases vertical extrusion coverage", () => {
+  const slice = new PixelBuffer(16, 16);
+  slice.setPixel(8, 8, 180, 200, 220, 255);
+
+  const thin = renderSpriteStack(
+    [slice, slice],
+    baseStackOpts({
+      pitchDeg: 60,
+      sliceSpacing: 1.5,
+      sliceThickness: 0.5,
+    })
+  );
+  const thick = renderSpriteStack(
+    [slice, slice],
+    baseStackOpts({
+      pitchDeg: 60,
+      sliceSpacing: 1.5,
+      sliceThickness: 3,
+    })
+  );
+
+  assert.ok(
+    countOpaque(thick) > countOpaque(thin),
+    `expected thick stack (${countOpaque(thick)}) > thin stack (${countOpaque(thin)})`
+  );
+});
+
+test("renderSpriteStack: autoFitBounds prevents clipping on 45° rolled full-canvas stack", () => {
+  const slice = new PixelBuffer(16, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      slice.setPixel(x, y, 160, 160, 160, 255);
+    }
+  }
+  const corner: RGBA = [0, 255, 0, 255];
+  slice.setPixel(0, 0, ...corner);
+  slice.setPixel(15, 0, ...corner);
+  slice.setPixel(0, 15, ...corner);
+  slice.setPixel(15, 15, ...corner);
+
+  const clipped = renderSpriteStack(
+    [slice, slice],
+    baseStackOpts({ pitchDeg: 0, rollDeg: 45, autoFitBounds: false })
+  );
+  const fitted = renderSpriteStack(
+    [slice, slice],
+    baseStackOpts({ pitchDeg: 0, rollDeg: 45, autoFitBounds: true })
+  );
+
+  const countGreen = (buf: PixelBuffer): number => {
+    let n = 0;
+    for (let y = 0; y < buf.height; y++) {
+      for (let x = 0; x < buf.width; x++) {
+        const [r, g, b, a] = buf.getPixel(x, y);
+        if (a === 255 && r === 0 && g === 255 && b === 0) n++;
+      }
+    }
+    return n;
+  };
+
+  assert.equal(countGreen(clipped), 0);
+  assert.ok(
+    countGreen(fitted) >= 2,
+    `expected autoFitBounds to preserve corner pixels, got ${countGreen(fitted)}`
+  );
+  assert.ok(countOpaqueInRow(fitted, 0) < countOpaqueInRow(clipped, 0));
+});
+
+test("renderSpriteStack: cleanup paletteLock restricts output to combined slice palette", () => {
+  const s1 = new PixelBuffer(16, 16);
+  const s2 = new PixelBuffer(16, 16);
+  for (let y = 5; y <= 10; y++) {
+    for (let x = 5; x <= 10; x++) {
+      s1.setPixel(x, y, 220, 60, 40, 255);
+      s2.setPixel(x, y, 40, 180, 220, 255);
+    }
+  }
+
+  const rendered = renderSpriteStack(
+    [s1, s2],
+    baseStackOpts({
+      yawDeg: 30,
+      pitchDeg: 45,
+      sliceSpacing: 2,
+      depthShading: true,
+      directionalLighting: true,
+      cleanup: {
+        removeOrphans: true,
+        fillHoles: true,
+        paletteLock: true,
+        preserveOutline: false,
+      },
+    })
+  );
+
+  assert.ok(countOpaque(rendered) > 0);
+  const allowed = new Set(
+    [...collectPalette(s1), ...collectPalette(s2)].map((c) =>
+      packRgba(c[0], c[1], c[2], c[3])
+    )
+  );
+  for (const c of collectPalette(rendered)) {
+    assert.ok(
+      allowed.has(packRgba(c[0], c[1], c[2], c[3])),
+      `unexpected color [${c.join(",")}] outside combined slice palette`
+    );
+  }
+});
+
+test("computeTurntableAngleOffset: startDeg/sweepDeg, pingPong, easing, and presets", () => {
+  // Default 360° linear loop matches legacy (i / count) * 360
+  for (let i = 0; i < 8; i++) {
+    assertClose(computeTurntableAngleOffset(i, 8), i * 45);
+  }
+
+  // Custom partial sweep hits exact start and end endpoints
+  const partial = Array.from({ length: 5 }, (_, i) =>
+    computeTurntableAngleOffset(i, 5, {
+      startDeg: -40,
+      sweepDeg: 80,
+      pingPong: false,
+      easing: "linear",
+    })
+  );
+  assert.deepEqual(partial, [-40, -20, 0, 20, 40]);
+
+  // Ping-pong sway (8 frames, -35° -> +35° -> back)
+  const sway = Array.from({ length: 8 }, (_, i) =>
+    computeTurntableAngleOffset(i, 8, {
+      startDeg: -35,
+      sweepDeg: 70,
+      pingPong: true,
+      easing: "linear",
+    })
+  );
+  assertClose(sway[0], -35);
+  assertClose(sway[4], 35);
+  assertClose(sway[1], sway[7]);
+  assertClose(sway[2], sway[6]);
+  assertClose(sway[3], sway[5]);
+
+  // Easing monotonicity, endpoints, and curve shape
+  const easings: TurntableEasing[] = ["linear", "easeIn", "easeOut", "easeInOut"];
+  for (const easing of easings) {
+    const seq = Array.from({ length: 9 }, (_, i) =>
+      computeTurntableAngleOffset(i, 9, {
+        startDeg: 10,
+        sweepDeg: 100,
+        pingPong: false,
+        easing,
+      })
+    );
+    assertClose(seq[0], 10);
+    assertClose(seq[8], 110);
+    for (let i = 1; i < seq.length; i++) {
+      assert.ok(
+        seq[i] >= seq[i - 1],
+        `expected ${easing} to be monotonic at index ${i}`
+      );
+    }
+  }
+
+  const midIn = computeTurntableAngleOffset(2, 5, {
+    startDeg: 0,
+    sweepDeg: 100,
+    easing: "easeIn",
+  });
+  const midLin = computeTurntableAngleOffset(2, 5, {
+    startDeg: 0,
+    sweepDeg: 100,
+    easing: "linear",
+  });
+  const midOut = computeTurntableAngleOffset(2, 5, {
+    startDeg: 0,
+    sweepDeg: 100,
+    easing: "easeOut",
+  });
+  assert.ok(midIn < midLin && midLin < midOut);
+
+  const q1InOut = computeTurntableAngleOffset(1, 5, {
+    startDeg: 0,
+    sweepDeg: 100,
+    easing: "easeInOut",
+  });
+  const q3InOut = computeTurntableAngleOffset(3, 5, {
+    startDeg: 0,
+    sweepDeg: 100,
+    easing: "easeInOut",
+  });
+  assert.ok(q1InOut < 25 && q3InOut > 75);
+
+  // Verify exported presets
+  assert.equal(ROTATE3D_CAMERA_PRESETS.iso2to1.yawDeg, 45);
+  assert.equal(ROTATE3D_CAMERA_PRESETS.iso2to1.pitchDeg, 30);
+  assert.equal(ROTATE3D_CAMERA_PRESETS.topDown.pitchDeg, 65);
+  assert.equal(TURNTABLE_PRESETS.dir8.frameCount, 8);
+  assert.equal(TURNTABLE_PRESETS.sway.pingPong, true);
+  assert.equal(TURNTABLE_PRESETS.sway.startDeg, -35);
+  assert.equal(TURNTABLE_PRESETS.sway.sweepDeg, 70);
+  assert.equal(TURNTABLE_PRESETS.sway.easing, "easeInOut");
+});
+
+test("bakeTurntableFrames: animated sourceFrames and backFrames combine with rotation steps", () => {
+  const makeSolid = (r: number, g: number, b: number) => {
+    const buf = new PixelBuffer(12, 12);
+    for (let y = 4; y <= 7; y++) {
+      for (let x = 4; x <= 7; x++) {
+        buf.setPixel(x, y, r, g, b, 255);
+      }
+    }
+    return buf;
+  };
+
+  const front0 = makeSolid(230, 40, 40); // Red
+  const front1 = makeSolid(40, 220, 40); // Green
+  const back0 = makeSolid(40, 80, 230); // Blue
+  const back1 = makeSolid(230, 210, 40); // Yellow
+
+  // 4 frames, 360° yaw: angles are 0°, 90°, 180°, 270°
+  // Frame 0 (0°): front0 (Red)
+  // Frame 2 (180°): back0 (Blue) since 2 % 2 === 0
+  const frames = bakeTurntableFrames({
+    mode: "extruded",
+    frameCount: 4,
+    spinAxis: "yaw",
+    sourceFrames: [front0, front1],
+    backFrames: [back0, back1],
+    opts25d: baseOpts(),
+    optsStack: baseStackOpts(),
+  });
+
+  assert.equal(frames.length, 4);
+  assert.deepEqual(frames[0].getPixel(6, 6), [230, 40, 40, 255]);
+  assert.deepEqual(frames[2].getPixel(6, 6), [40, 80, 230, 255]);
+
+  // 2 frames at 0° and 180° with 2 sourceFrames + 2 backFrames:
+  // Frame 0 (0°) -> front0 (Red), Frame 1 (180°) -> back1 (Yellow)
+  const flipFrames = bakeTurntableFrames({
+    mode: "extruded",
+    frameCount: 2,
+    spinAxis: "yaw",
+    startDeg: 0,
+    sweepDeg: 180,
+    sourceFrames: [front0, front1],
+    backFrames: [back0, back1],
+    opts25d: baseOpts(),
+    optsStack: baseStackOpts(),
+  });
+
+  assert.equal(flipFrames.length, 2);
+  assert.deepEqual(flipFrames[0].getPixel(6, 6), [230, 40, 40, 255]);
+  assert.deepEqual(flipFrames[1].getPixel(6, 6), [230, 210, 40, 255]);
 });
