@@ -1,6 +1,7 @@
-import { Film, Sparkles } from "lucide-react";
+import { Download, Film, Sparkles } from "lucide-react";
 import {
   ROTATE3D_CAMERA_PRESETS,
+  type Render3DPass,
   type Rotate3DCameraPreset,
 } from "../../engine/tools/rotate3d";
 import { useEditorStore, type Studio3DZoom } from "../../store/editorStore";
@@ -8,9 +9,17 @@ import {
   applyStudio3DCameraPreset,
   applyStudio3DToCurrentFrameAction,
   bakeStudio3DTurntableAction,
+  exportStudio3DPassPngAction,
   setStudio3DGridMode,
   STUDIO3D_SIDE_PRESET,
 } from "./studio3dActions";
+
+const PASS_OPTIONS: readonly { id: Render3DPass; label: string }[] = [
+  { id: "lit", label: "Lit" },
+  { id: "normal", label: "Normal" },
+  { id: "height", label: "Height" },
+  { id: "depth", label: "Depth" },
+];
 
 const CAMERA_PRESETS: readonly Rotate3DCameraPreset[] = [
   ROTATE3D_CAMERA_PRESETS.front,
@@ -102,7 +111,32 @@ export function Studio3DToolOptionsBar() {
         ))}
       </div>
 
+      <div className="option-divider" />
+
+      <div className="options-group">
+        <span className="option-label">Pass</span>
+        {PASS_OPTIONS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            className={`mini-btn ${studio3d.renderPass === p.id ? "active" : ""}`}
+            onClick={() => patchStudio3D({ renderPass: p.id })}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
       <div className="options-group" style={{ marginLeft: "auto" }}>
+        <button
+          type="button"
+          className="mini-btn"
+          title="Export current 3D pass as PNG"
+          onClick={exportStudio3DPassPngAction}
+        >
+          <Download size={12} />
+          <span>Export PNG</span>
+        </button>
         <button
           type="button"
           className="mini-btn"

@@ -3,8 +3,15 @@ import {
   type LayerCompositingInfo,
   pixelEngine,
 } from "../../engine/document/PixelEngine";
+import { syncHistoryAndCelState } from "../../engine/document/historyActions";
 import { commitFloatingSelection } from "../../engine/document/selectionActions";
 import { syncTimelineCels } from "../../engine/document/timelineActions";
+import {
+  downloadPixelBufferAsPng,
+  generateDepthMap,
+  generateHeightMap,
+  generateNormalMap,
+} from "../../engine/gamedev/pbrMaps";
 import { bakeRigTurntable } from "../../engine/rig/export/bake";
 import type { PixelCleanupOptions } from "../../engine/rig/pixelCleanup";
 import {
@@ -35,7 +42,12 @@ export const STUDIO3D_SIDE_PRESET: Rotate3DCameraPreset = {
 export interface Studio3DSources {
   singleSource: PixelBuffer;
   backSourceBuffer: PixelBuffer | null;
+  leftSideBuffer: PixelBuffer | null;
+  rightSideBuffer: PixelBuffer | null;
+  topSideBuffer: PixelBuffer | null;
+  bottomSideBuffer: PixelBuffer | null;
   heightMapBuffer: PixelBuffer | null;
+  normalMapBuffer: PixelBuffer | null;
   stackSlices: PixelBuffer[];
   timelineSourceFrames: PixelBuffer[];
   timelineBackFrames: PixelBuffer[] | undefined;
@@ -67,6 +79,8 @@ export function resolveStudio3DPivot(
   };
 }
 
+const FACE_SENTINELS = new Set(["none", "mirror", "mirrorLeft", "solid"]);
+
 export function collectStudio3DSources(
   s: Studio3DState,
   layers: readonly LayerCompositingInfo[],
@@ -76,13 +90,30 @@ export function collectStudio3DSources(
   canvasWidth: number,
   canvasHeight: number
 ): Studio3DSources {
-  const visibleRasterLayers = layers.filter(
-    (l) => l.kind === "raster" && l.visible
+  const assignedFaceLayerIds = new Set<string>();
+  for (const choice of [
+    s.backFaceChoice,
+    s.leftSideChoice,
+    s.rightSideChoice,
+    s.topSideChoice,
+    s.bottomSideChoice,
+  ]) {
+    if (choice && !FACE_SENTINELS.has(choice)) {
+      assignedFaceLayerIds.add(choice);
+    }
+  }
+
+  const visibleAlbedoLayers = layers.filter(
+    (l) =>
+      !assignedFaceLayerIds.has(l.id) &&
+      (l.kind === "group" || !l.mapRole || l.mapRole === "albedo") &&
+      (l.kind === "group" || l.visible)
   );
+  const allRasterLayers = layers.filter((l) => l.kind === "raster");
 
   let singleSource: PixelBuffer;
   if (s.sourceScope === "visible") {
-    const composited = pixelEngine.compositeFrame(layers, currentFrame);
+    const composited = pixelEngine.compositeFrame(visibleAlbedoLayers, currentFrame);
     singleSource = new PixelBuffer(canvasWidth, canvasHeight, composited);
   } else {
     const cel = pixelEngine.getCel(activeLayerId, currentFrame);
@@ -91,29 +122,59 @@ export function collectStudio3DSources(
       : new PixelBuffer(canvasWidth, canvasHeight);
   }
 
-  const isCustomBackLayer =
-    s.backFaceChoice !== "none" &&
-    s.backFaceChoice !== "mirror" &&
-    visibleRasterLayers.some((l) => l.id === s.backFaceChoice);
+  const resolveFaceBuffer = (choice: string): PixelBuffer | null => {
+    if (!choice || FACE_SENTINELS.has(choice)) return null;
+    if (!allRasterLayers.some((l) => l.id === choice)) return null;
+    const cel = pixelEngine.getCel(choice, currentFrame);
+    return cel ? cel.clone() : new PixelBuffer(canvasWidth, canvasHeight);
+  };
 
-  let backSourceBuffer: PixelBuffer | null = null;
-  if (isCustomBackLayer) {
-    const backCel = pixelEngine.getCel(s.backFaceChoice, currentFrame);
-    backSourceBuffer = backCel
-      ? backCel.clone()
-      : new PixelBuffer(canvasWidth, canvasHeight);
-  }
+  const isCustomBackLayer =
+    Boolean(s.backFaceChoice) &&
+    !FACE_SENTINELS.has(s.backFaceChoice) &&
+    allRasterLayers.some((l) => l.id === s.backFaceChoice);
+
+  const backSourceBuffer = resolveFaceBuffer(s.backFaceChoice);
+  const leftSideBuffer = resolveFaceBuffer(s.leftSideChoice);
+  const rightSideBuffer = resolveFaceBuffer(s.rightSideChoice);
+  const topSideBuffer = resolveFaceBuffer(s.topSideChoice);
+  const bottomSideBuffer = resolveFaceBuffer(s.bottomSideChoice);
 
   let heightMapBuffer: PixelBuffer | null = null;
   if (s.depthProfile === "heightmap" && s.heightMapLayerId) {
     const hmCel = pixelEngine.getCel(s.heightMapLayerId, currentFrame);
     if (hmCel) heightMapBuffer = hmCel.clone();
+  } else {
+    const autoHmLayer = layers.find(
+      (l) => l.kind === "raster" && l.visible && l.mapRole === "height"
+    );
+    if (autoHmLayer) {
+      const hmCel = pixelEngine.getCel(autoHmLayer.id, currentFrame);
+      if (hmCel && !hmCel.isEmpty()) heightMapBuffer = hmCel.clone();
+    }
+  }
+
+  let normalMapBuffer: PixelBuffer | null = null;
+  if (s.useNormalLayer) {
+    const normLayer = layers.find(
+      (l) => l.kind === "raster" && l.visible && l.mapRole === "normal"
+    );
+    if (normLayer) {
+      const nCel = pixelEngine.getCel(normLayer.id, currentFrame);
+      if (nCel && !nCel.isEmpty()) normalMapBuffer = nCel.clone();
+    }
   }
 
   const stackSlices: PixelBuffer[] = [];
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i];
-    if (layer.kind !== "raster" || !layer.visible) continue;
+    if (
+      layer.kind !== "raster" ||
+      !layer.visible ||
+      (layer.mapRole && layer.mapRole !== "albedo")
+    ) {
+      continue;
+    }
     const cel = pixelEngine.getCel(layer.id, currentFrame);
     if (cel && !cel.isEmpty()) {
       stackSlices.push(cel.clone());
@@ -125,7 +186,7 @@ export function collectStudio3DSources(
   if (s.mode === "extruded" && s.spinTimelineFrames && frameCount > 1) {
     for (let f = 0; f < frameCount; f++) {
       if (s.sourceScope === "visible") {
-        const comp = pixelEngine.compositeFrame(layers, f);
+        const comp = pixelEngine.compositeFrame(visibleAlbedoLayers, f);
         timelineSourceFrames.push(new PixelBuffer(canvasWidth, canvasHeight, comp));
       } else {
         const cel = pixelEngine.getCel(activeLayerId, f);
@@ -148,7 +209,12 @@ export function collectStudio3DSources(
   return {
     singleSource,
     backSourceBuffer,
+    leftSideBuffer,
+    rightSideBuffer,
+    topSideBuffer,
+    bottomSideBuffer,
     heightMapBuffer,
+    normalMapBuffer,
     stackSlices,
     timelineSourceFrames,
     timelineBackFrames,
@@ -285,10 +351,35 @@ export function renderStudio3DPreviewBuffer(
       },
       true
     );
-    return new PixelBuffer(canvasWidth, canvasHeight, composited);
+    const rigBuf = new PixelBuffer(canvasWidth, canvasHeight, composited);
+    if (s.renderPass === "normal") {
+      return generateNormalMap(rigBuf, {
+        strength: s.normalStrength,
+        convention: s.normalConvention,
+        blurRadius: s.heightBlur,
+      });
+    }
+    if (s.renderPass === "height") {
+      return generateHeightMap(rigBuf, {
+        source: s.heightSource,
+        bevelWeight: s.heightBevelWeight,
+        contrast: s.heightContrast,
+        blurRadius: s.heightBlur,
+      });
+    }
+    if (s.renderPass === "depth") {
+      return generateDepthMap(rigBuf, {
+        mode: s.depthMode,
+        invert: s.depthInvert,
+      });
+    }
+    return rigBuf;
   }
 
   const outlineColor = s.outlineEnabled ? hexToRgba(s.outlineHex, 255) : null;
+  const lightColor = hexToRgba(s.lightColor, 255);
+  const ambientColor = hexToRgba(s.ambientColor, 255);
+  const rimColor = hexToRgba(s.rimColor, 255);
   const cleanup = buildStudio3DCleanup(s);
 
   if (s.mode === "stack") {
@@ -308,7 +399,21 @@ export function renderStudio3DPreviewBuffer(
       directionalLighting: s.directionalLighting,
       lightAzimuthDeg: s.lightAzimuthDeg,
       lightElevationDeg: s.lightElevationDeg,
+      lightType: s.lightType,
+      lightPosition: [s.lightPosX, s.lightPosY, s.lightPosZ],
+      lightRadius: s.lightRadius,
+      spotAngleDeg: s.spotAngleDeg,
+      spotSoftness: s.spotSoftness,
       ambient: s.ambient,
+      lightColor,
+      ambientColor,
+      lightIntensity: s.lightIntensity,
+      specularStrength: s.specularStrength,
+      shininess: s.shininess,
+      celSteps: s.celSteps,
+      renderPass: s.renderPass,
+      normalConvention: s.normalConvention,
+      depthInvert: s.depthInvert,
       autoFitBounds: s.autoFitBounds,
       outlineColor,
       cleanup,
@@ -349,13 +454,41 @@ export function renderStudio3DPreviewBuffer(
     autoFitBounds: s.autoFitBounds,
     depthProfile: s.depthProfile,
     heightMap: sources.heightMapBuffer,
+    normalMap: sources.normalMapBuffer,
     directionalLighting: s.directionalLighting,
     lightAzimuthDeg: s.lightAzimuthDeg,
     lightElevationDeg: s.lightElevationDeg,
+    lightType: s.lightType,
+    lightPosition: [s.lightPosX, s.lightPosY, s.lightPosZ],
+    lightRadius: s.lightRadius,
+    spotAngleDeg: s.spotAngleDeg,
+    spotSoftness: s.spotSoftness,
     ambient: s.ambient,
     rimStrength: s.rimStrength,
+    lightColor,
+    ambientColor,
+    lightIntensity: s.lightIntensity,
+    specularStrength: s.specularStrength,
+    shininess: s.shininess,
+    celSteps: s.celSteps,
+    rimColor,
+    renderPass: s.renderPass,
+    normalConvention: s.normalConvention,
+    depthInvert: s.depthInvert,
     backSource: backSrc,
     mirrorBack: s.backFaceChoice === "mirror",
+    leftSideSource: sources.leftSideBuffer,
+    rightSideSource: sources.rightSideBuffer,
+    topSideSource: sources.topSideBuffer,
+    bottomSideSource: sources.bottomSideBuffer,
+    mirrorRightFromLeft: s.rightSideChoice === "mirrorLeft",
+    sideColor:
+      s.leftSideChoice === "solid" ||
+      s.rightSideChoice === "solid" ||
+      s.topSideChoice === "solid" ||
+      s.bottomSideChoice === "solid"
+        ? hexToRgba(s.sideColorHex, 255)
+        : null,
     preScaleEPX: s.preScaleEPX,
     cleanup,
   };
@@ -574,10 +707,27 @@ export function bakeStudio3DTurntableAction(): void {
     directionalLighting: s.directionalLighting,
     lightAzimuthDeg: s.lightAzimuthDeg,
     lightElevationDeg: s.lightElevationDeg,
+    lightType: s.lightType,
+    lightPosition: [s.lightPosX, s.lightPosY, s.lightPosZ],
+    lightRadius: s.lightRadius,
+    spotAngleDeg: s.spotAngleDeg,
+    spotSoftness: s.spotSoftness,
     ambient: s.ambient,
     rimStrength: s.rimStrength,
     backSource: sources.backSourceBuffer,
     mirrorBack: s.backFaceChoice === "mirror",
+    leftSideSource: sources.leftSideBuffer,
+    rightSideSource: sources.rightSideBuffer,
+    topSideSource: sources.topSideBuffer,
+    bottomSideSource: sources.bottomSideBuffer,
+    mirrorRightFromLeft: s.rightSideChoice === "mirrorLeft",
+    sideColor:
+      s.leftSideChoice === "solid" ||
+      s.rightSideChoice === "solid" ||
+      s.topSideChoice === "solid" ||
+      s.bottomSideChoice === "solid"
+        ? hexToRgba(s.sideColorHex, 255)
+        : null,
     preScaleEPX: s.preScaleEPX,
     cleanup,
   };
@@ -594,6 +744,11 @@ export function bakeStudio3DTurntableAction(): void {
     directionalLighting: s.directionalLighting,
     lightAzimuthDeg: s.lightAzimuthDeg,
     lightElevationDeg: s.lightElevationDeg,
+    lightType: s.lightType,
+    lightPosition: [s.lightPosX, s.lightPosY, s.lightPosZ],
+    lightRadius: s.lightRadius,
+    spotAngleDeg: s.spotAngleDeg,
+    spotSoftness: s.spotSoftness,
     ambient: s.ambient,
     autoFitBounds: s.autoFitBounds,
     outlineColor,
@@ -645,4 +800,252 @@ export function bakeStudio3DTurntableAction(): void {
   useEditorStore
     .getState()
     .setStatusMessage(`Baked ${baked.length}-frame 3D turntable`);
+}
+
+function writeMapBufferToRoleLayer(
+  role: "normal" | "height" | "depth",
+  buf: PixelBuffer,
+  label: string
+): void {
+  const state = useEditorStore.getState();
+  const existing = state.layers.find(
+    (l) => l.kind === "raster" && l.mapRole === role
+  );
+  const targetId =
+    existing?.id ??
+    state.addMapLayer(
+      role,
+      role === "normal"
+        ? "Normal Map"
+        : role === "height"
+          ? "Height Map"
+          : "Depth Map"
+    );
+
+  const frameIdx = useEditorStore.getState().currentFrame;
+  const cel = pixelEngine.getOrCreateCel(targetId, frameIdx);
+  pixelEngine.history.beginTransaction(targetId, frameIdx, label);
+  pixelEngine.history.captureAllTiles(cel);
+  cel.data.set(buf.data);
+  cel.markAllDirty();
+  pixelEngine.history.commitTransaction(cel);
+  syncHistoryAndCelState(targetId, frameIdx);
+  pixelEngine.emitChange();
+}
+
+export function generateStudio3DMapLayerAction(
+  kind: "normal" | "height" | "depth"
+): void {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  const s = state.studio3d;
+  const sources = collectStudio3DSources(
+    s,
+    state.layers,
+    state.activeLayerId,
+    state.currentFrame,
+    state.frames.length,
+    state.canvasWidth,
+    state.canvasHeight
+  );
+
+  const isFlatFront =
+    s.mode === "extruded" &&
+    s.yawDeg === 0 &&
+    s.pitchDeg === 0 &&
+    s.rollDeg === 0 &&
+    s.depthProfile === "slab";
+
+  let mapBuf: PixelBuffer;
+  if (isFlatFront) {
+    if (kind === "height") {
+      mapBuf = generateHeightMap(sources.singleSource, {
+        source: s.heightSource,
+        bevelWeight: s.heightBevelWeight,
+        contrast: s.heightContrast,
+        blurRadius: s.heightBlur,
+      });
+    } else if (kind === "normal") {
+      mapBuf = generateNormalMap(sources.singleSource, {
+        strength: s.normalStrength,
+        convention: s.normalConvention,
+        bevelStrength: s.heightBevelWeight,
+        blurRadius: s.heightBlur,
+        heightMap: sources.heightMapBuffer,
+      });
+    } else {
+      mapBuf = generateDepthMap(sources.singleSource, {
+        mode: s.depthMode,
+        invert: s.depthInvert,
+        heightMap: sources.heightMapBuffer,
+      });
+    }
+  } else {
+    mapBuf = renderStudio3DPreviewBuffer(
+      { ...s, renderPass: kind },
+      sources,
+      state.layers,
+      state.canvasWidth,
+      state.canvasHeight,
+      state.rigPixelSnap,
+      state.rigRotSprite
+    );
+  }
+
+  const label =
+    kind === "normal"
+      ? "Generate 3D Normal Map"
+      : kind === "height"
+        ? "Generate 3D Height Map"
+        : "Generate 3D Depth Map";
+  writeMapBufferToRoleLayer(kind, mapBuf, label);
+  useEditorStore
+    .getState()
+    .setStatusMessage(`${label} on frame ${state.currentFrame + 1}`);
+}
+
+export function generateAllStudio3DMapsAction(): void {
+  generateStudio3DMapLayerAction("height");
+  generateStudio3DMapLayerAction("normal");
+  generateStudio3DMapLayerAction("depth");
+  useEditorStore
+    .getState()
+    .setStatusMessage("Generated Normal, Height & Depth Map layers");
+}
+
+export function exportStudio3DPassPngAction(): void {
+  const state = useEditorStore.getState();
+  const s = state.studio3d;
+  const sources = collectStudio3DSources(
+    s,
+    state.layers,
+    state.activeLayerId,
+    state.currentFrame,
+    state.frames.length,
+    state.canvasWidth,
+    state.canvasHeight
+  );
+  const buf = renderStudio3DPreviewBuffer(
+    s,
+    sources,
+    state.layers,
+    state.canvasWidth,
+    state.canvasHeight,
+    state.rigPixelSnap,
+    state.rigRotSprite
+  );
+  const base = state.documentName.replace(/\.pixet$/i, "") || "sprite";
+  const filename = `${base}_${s.renderPass}.png`;
+  downloadPixelBufferAsPng(buf, filename);
+  state.setStatusMessage(`Exported ${filename}`);
+}
+
+export function createCustom3DFaceLayerAction(
+  face: "back" | "left" | "right" | "top" | "bottom"
+): void {
+  commitFloatingSelection();
+  const state = useEditorStore.getState();
+  const s = state.studio3d;
+  const sources = collectStudio3DSources(
+    s,
+    state.layers,
+    state.activeLayerId,
+    state.currentFrame,
+    state.frames.length,
+    state.canvasWidth,
+    state.canvasHeight
+  );
+
+  const w = state.canvasWidth;
+  const h = state.canvasHeight;
+  const front = sources.singleSource;
+  const template = new PixelBuffer(w, h);
+
+  // Find opaque bounds of front sprite for aligned side-strip templates
+  let minX = w;
+  let maxX = -1;
+  let minY = h;
+  let maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (front.data[(y * w + x) * 4 + 3] > 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) {
+    minX = Math.floor(w * 0.25);
+    maxX = Math.floor(w * 0.75);
+    minY = Math.floor(h * 0.25);
+    maxY = Math.floor(h * 0.75);
+  }
+
+  if (face === "back") {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const [r, g, b, a] = front.getPixel(w - 1 - x, y);
+        if (a > 0) template.setPixel(x, y, r, g, b, a);
+      }
+    }
+  } else {
+    const [sr, sg, sb] = hexToRgba(s.sideColorHex, 255);
+    const stripSize = Math.max(2, Math.min(16, Math.round(s.extrudeDepth) || 4));
+    if (face === "left" || face === "right") {
+      const x0 = Math.max(0, Math.floor((w - stripSize) / 2));
+      const x1 = Math.min(w - 1, x0 + stripSize - 1);
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = x0; x <= x1; x++) {
+          template.setPixel(x, y, sr, sg, sb, 255);
+        }
+      }
+    } else {
+      const y0 = Math.max(0, Math.floor((h - stripSize) / 2));
+      const y1 = Math.min(h - 1, y0 + stripSize - 1);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          template.setPixel(x, y, sr, sg, sb, 255);
+        }
+      }
+    }
+  }
+
+  const faceNames: Record<typeof face, string> = {
+    back: "3D Back",
+    left: "3D Left Side",
+    right: "3D Right Side",
+    top: "3D Top",
+    bottom: "3D Bottom",
+  };
+  const newLayerId = state.addNamedLayer(faceNames[face]);
+  const cel = pixelEngine.getOrCreateCel(newLayerId, state.currentFrame);
+  cel.data.set(template.data);
+  cel.markAllDirty();
+
+  const patch: Partial<Studio3DState> = {};
+  if (face === "back") patch.backFaceChoice = newLayerId;
+  else if (face === "left") patch.leftSideChoice = newLayerId;
+  else if (face === "right") patch.rightSideChoice = newLayerId;
+  else if (face === "top") patch.topSideChoice = newLayerId;
+  else patch.bottomSideChoice = newLayerId;
+
+  useEditorStore.getState().patchStudio3D(patch);
+  syncTimelineCels();
+  pixelEngine.emitChange();
+  useEditorStore
+    .getState()
+    .setStatusMessage(`Created "${faceNames[face]}" layer & assigned to ${face} face`);
+}
+
+export function editCustom3DFaceLayerAction(layerId: string): void {
+  const st = useEditorStore.getState();
+  const layer = st.layers.find((l) => l.id === layerId && l.kind === "raster");
+  if (!layer) return;
+  st.selectLayer(layer.id);
+  st.setWorkspaceMode("draw");
+  st.setStatusMessage(
+    `Editing "${layer.name}" — press Ctrl+3 to return to 3D Studio`
+  );
 }

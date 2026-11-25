@@ -16,6 +16,10 @@ import {
   strokeSelectionAction,
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
+import {
+  generateAllStudio3DMapsAction,
+  generateStudio3DMapLayerAction,
+} from "./studio3d/studio3dActions";
 import { beginFreeTransformAction } from "../engine/document/transformActions";
 import {
   applyBufferFilterAction,
@@ -417,6 +421,42 @@ export function CommandPalette() {
         category: "Sprite",
         keywords: ["layer", "cel", "clear", "erase"],
         run: () => clearActiveCelAction(),
+      },
+      {
+        id: "pbr.generateNormal",
+        label: "3D & PBR: Generate Normal Map Layer",
+        category: "Sprite",
+        keywords: ["normal", "map", "3d", "lighting", "bump"],
+        run: () => generateStudio3DMapLayerAction("normal"),
+      },
+      {
+        id: "pbr.generateHeight",
+        label: "3D & PBR: Generate Height / Displacement Map Layer",
+        category: "Sprite",
+        keywords: ["height", "displacement", "map", "bump", "3d"],
+        run: () => generateStudio3DMapLayerAction("height"),
+      },
+      {
+        id: "pbr.generateDepth",
+        label: "3D & PBR: Generate Depth Map Layer",
+        category: "Sprite",
+        keywords: ["depth", "zbuffer", "map", "3d"],
+        run: () => generateStudio3DMapLayerAction("depth"),
+      },
+      {
+        id: "pbr.generateAllMaps",
+        label: "3D & PBR: Generate All PBR Maps (Normal + Height + Depth)",
+        category: "Sprite",
+        keywords: ["pbr", "normal", "height", "depth", "displacement", "maps"],
+        run: () => generateAllStudio3DMapsAction(),
+      },
+      {
+        id: "workspace.studio3d",
+        label: "Workspace: Open 3D Studio",
+        category: "View",
+        shortcut: "Ctrl+3",
+        keywords: ["3d", "studio", "lighting", "turntable", "normal", "depth"],
+        run: () => st().setWorkspaceMode("studio3d"),
       },
       {
         id: "sprite.toggleClippingMask",

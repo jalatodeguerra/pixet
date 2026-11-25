@@ -19,7 +19,7 @@ import {
   type PanelLayoutState,
   reorderDockedPanelState,
   serializePanelLayout,
-} from "../engine/ui/panelLayout";
+} from "../engine/ui/panelLayout.ts";
 import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
 import type { DitherPattern } from "../engine/tools/dither";
 import type { GradientMode } from "../engine/tools/gradient";
@@ -39,9 +39,16 @@ import {
 } from "../engine/tools/animationHelpers.ts";
 import type {
   DepthProfile,
+  Light3DType,
+  Render3DPass,
   SpinAxis,
   TurntableEasing,
 } from "../engine/tools/rotate3d.ts";
+import type {
+  DepthMapMode,
+  HeightMapSource,
+  NormalConvention,
+} from "../engine/gamedev/pbrMaps.ts";
 import type { Scene3DGridMode } from "../engine/tools/scene3d.ts";
 import type { RigTurntableMode } from "../engine/rig/export/bake.ts";
 
@@ -126,6 +133,11 @@ export interface Studio3DState {
   showFloorStage: boolean;
   sourceScope: Studio3DSourceScope;
   backFaceChoice: string;
+  leftSideChoice: string;
+  rightSideChoice: string;
+  topSideChoice: string;
+  bottomSideChoice: string;
+  sideColorHex: string;
   pivotMode: Studio3DPivotMode;
   customPivotX: number;
   customPivotY: number;
@@ -148,6 +160,14 @@ export interface Studio3DState {
   directionalLighting: boolean;
   lightAzimuthDeg: number;
   lightElevationDeg: number;
+  lightType: Light3DType;
+  lightPosX: number;
+  lightPosY: number;
+  lightPosZ: number;
+  lightRadius: number;
+  spotAngleDeg: number;
+  spotSoftness: number;
+  showLightGizmo: boolean;
   ambient: number;
   rimStrength: number;
   supersample: boolean;
@@ -169,6 +189,23 @@ export interface Studio3DState {
   bakePingPong: boolean;
   bakeEasing: TurntableEasing;
   spinTimelineFrames: boolean;
+  renderPass: Render3DPass;
+  lightColor: string;
+  ambientColor: string;
+  lightIntensity: number;
+  specularStrength: number;
+  shininess: number;
+  celSteps: number;
+  rimColor: string;
+  useNormalLayer: boolean;
+  normalConvention: NormalConvention;
+  normalStrength: number;
+  heightSource: HeightMapSource;
+  heightBevelWeight: number;
+  heightContrast: number;
+  heightBlur: number;
+  depthMode: DepthMapMode;
+  depthInvert: boolean;
 }
 
 const DEFAULT_STUDIO3D_STATE: Studio3DState = {
@@ -178,6 +215,11 @@ const DEFAULT_STUDIO3D_STATE: Studio3DState = {
   showFloorStage: true,
   sourceScope: "visible",
   backFaceChoice: "none",
+  leftSideChoice: "none",
+  rightSideChoice: "none",
+  topSideChoice: "none",
+  bottomSideChoice: "none",
+  sideColorHex: "#3a3f54",
   pivotMode: "center",
   customPivotX: 16,
   customPivotY: 16,
@@ -197,9 +239,17 @@ const DEFAULT_STUDIO3D_STATE: Studio3DState = {
   sliceThickness: 1,
   reverseOrder: false,
   shadeDepth: true,
-  directionalLighting: false,
+  directionalLighting: true,
   lightAzimuthDeg: -35,
   lightElevationDeg: 45,
+  lightType: "point",
+  lightPosX: -18,
+  lightPosY: -20,
+  lightPosZ: 24,
+  lightRadius: 36,
+  spotAngleDeg: 55,
+  spotSoftness: 0.35,
+  showLightGizmo: true,
   ambient: 0.45,
   rimStrength: 0,
   supersample: true,
@@ -221,6 +271,23 @@ const DEFAULT_STUDIO3D_STATE: Studio3DState = {
   bakePingPong: false,
   bakeEasing: "linear",
   spinTimelineFrames: false,
+  renderPass: "lit",
+  lightColor: "#fff4d6",
+  ambientColor: "#8ca0c8",
+  lightIntensity: 1.2,
+  specularStrength: 0.35,
+  shininess: 28,
+  celSteps: 0,
+  rimColor: "#cfe4ff",
+  useNormalLayer: true,
+  normalConvention: "opengl",
+  normalStrength: 2.5,
+  heightSource: "hybrid",
+  heightBevelWeight: 0.55,
+  heightContrast: 1.0,
+  heightBlur: 0,
+  depthMode: "volume",
+  depthInvert: false,
 };
 export type TileMode = "map" | "tile";
 export interface TileBrushSelection {
@@ -535,6 +602,14 @@ interface EditorState {
   light2dIntensity: number;
   light2dAmbient: number;
   light2dEmission: number;
+  light2dType: "point" | "directional";
+  light2dAmbientColor: string;
+  light2dSpecular: number;
+  light2dShininess: number;
+  light2dHeightScale: number;
+  light2dAo: number;
+  light2dCelSteps: number;
+  light2dAutoNormal: boolean;
   paletteLutEnabled: boolean;
   paletteLutPresetName: string;
 
@@ -713,7 +788,7 @@ interface EditorState {
   soloLayer: (id: string) => void;
   addLayer: () => void;
   addNamedLayer: (name: string) => string;
-  addMapLayer: (role: "normal" | "emission", name?: string) => string;
+  addMapLayer: (role: "normal" | "height" | "depth" | "emission", name?: string) => string;
   setLayerMapRole: (id: string, role: LayerMapRole) => void;
   addGroupLayer: () => void;
   addTilemapLayer: () => void;
@@ -833,6 +908,14 @@ interface EditorState {
       intensity: number;
       ambient: number;
       emission: number;
+      lightType: "point" | "directional";
+      ambientColor: string;
+      specular: number;
+      shininess: number;
+      heightScale: number;
+      ao: number;
+      celSteps: number;
+      autoNormal: boolean;
     }>
   ) => void;
   setPaletteLutEnabled: (v: boolean) => void;
@@ -1139,6 +1222,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   light2dIntensity: 1.4,
   light2dAmbient: 0.28,
   light2dEmission: 1.2,
+  light2dType: "point",
+  light2dAmbientColor: "#3a4664",
+  light2dSpecular: 0.35,
+  light2dShininess: 24,
+  light2dHeightScale: 0.25,
+  light2dAo: 0.2,
+  light2dCelSteps: 0,
+  light2dAutoNormal: true,
   paletteLutEnabled: false,
   paletteLutPresetName: "PICO-8",
 
@@ -1817,7 +1908,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
   addMapLayer: (role, name) => {
     const id = `layer-${layerCounter++}`;
-    const defaultName = role === "normal" ? "Normal Map" : "Emission Map";
+    const defaultName =
+      role === "normal"
+        ? "Normal Map"
+        : role === "height"
+          ? "Height Map"
+          : role === "depth"
+            ? "Depth Map"
+            : "Emission Map";
     set((s) => {
       const newLayer: LayerItem = {
         id,
@@ -2405,6 +2503,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       light2dIntensity: patch.intensity ?? s.light2dIntensity,
       light2dAmbient: patch.ambient ?? s.light2dAmbient,
       light2dEmission: patch.emission ?? s.light2dEmission,
+      light2dType: patch.lightType ?? s.light2dType,
+      light2dAmbientColor: patch.ambientColor ?? s.light2dAmbientColor,
+      light2dSpecular: patch.specular ?? s.light2dSpecular,
+      light2dShininess: patch.shininess ?? s.light2dShininess,
+      light2dHeightScale: patch.heightScale ?? s.light2dHeightScale,
+      light2dAo: patch.ao ?? s.light2dAo,
+      light2dCelSteps: patch.celSteps ?? s.light2dCelSteps,
+      light2dAutoNormal: patch.autoNormal ?? s.light2dAutoNormal,
     })),
   setPaletteLutEnabled: (paletteLutEnabled) => set({ paletteLutEnabled }),
   setPaletteLutPresetName: (paletteLutPresetName) =>

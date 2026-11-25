@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pause, Play, Square } from "lucide-react";
-import { mat3FromEulerDeg, mat3MulVec } from "../../engine/tools/math3d";
+import {
+  mat3FromEulerDeg,
+  mat3MulVec,
+  mat3TransposeMulVec,
+} from "../../engine/tools/math3d";
 import {
   buildFloorShadowEllipse,
   buildSceneGridLines,
   buildTurntableRing,
+  projectScenePoint,
   type Scene3DCamera,
 } from "../../engine/tools/scene3d";
 import { useEditorStore, type Studio3DZoom } from "../../store/editorStore";
@@ -106,10 +111,24 @@ export function Studio3DViewport() {
   const sceneCanvasRef = useRef<HTMLCanvasElement>(null);
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
   const dragRef = useRef<{
+    mode: "camera" | "lightFree" | "lightX" | "lightY" | "lightZ";
     x: number;
     y: number;
     yaw: number;
     pitch: number;
+    lightPosX: number;
+    lightPosY: number;
+    lightPosZ: number;
+    axisScreenX: number;
+    axisScreenY: number;
+    axisWorldLen: number;
+  } | null>(null);
+  const gizmoHitRef = useRef<{
+    center: { sx: number; sy: number };
+    tipX: { sx: number; sy: number } | null;
+    tipY: { sx: number; sy: number } | null;
+    tipZ: { sx: number; sy: number } | null;
+    axisLen: number;
   } | null>(null);
 
   const [viewSize, setViewSize] = useState({ width: 640, height: 480 });
@@ -407,6 +426,158 @@ export function Studio3DViewport() {
       );
     }
 
+    // 5. Blender-Style Interactive 3D Light Object & XYZ Gizmo
+    if (studio3d.directionalLighting && studio3d.showLightGizmo && studio3d.mode !== "rig") {
+      const lx = studio3d.lightPosX;
+      const ly = studio3d.lightPosY;
+      const lz = studio3d.lightPosZ;
+      const lp = projectScenePoint(lx, ly, lz, cam);
+      const fp = projectScenePoint(lx, cam.floorY, lz, cam);
+      const originPt = projectScenePoint(0, 0, 0, cam);
+
+      if (lp.visible) {
+        ctx.save();
+
+        // Vertical drop-line to floor plane (Blender spatial reference)
+        if (fp.visible) {
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(lp.sx, lp.sy);
+          ctx.lineTo(fp.sx, fp.sy);
+          ctx.strokeStyle = "rgba(255, 224, 130, 0.35)";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.beginPath();
+          ctx.ellipse(fp.sx, fp.sy, 5, 2.5, 0, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(255, 224, 130, 0.45)";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+
+        // Light-type specific 3D visualization
+        if (studio3d.lightType === "spot") {
+          const halfRad = (Math.max(5, Math.min(170, studio3d.spotAngleDeg)) * Math.PI) / 360;
+          const distToOrigin = Math.max(8, Math.hypot(lx, ly, lz));
+          const coneR = Math.tan(halfRad) * distToOrigin * 0.55;
+          const coneOffsets: Array<[number, number, number]> = [
+            [coneR, 0, 0],
+            [-coneR, 0, 0],
+            [0, coneR, 0],
+            [0, -coneR, 0],
+          ];
+          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = "rgba(255, 220, 120, 0.42)";
+          ctx.lineWidth = 1;
+          for (const [ox, oy, oz] of coneOffsets) {
+            const tp = projectScenePoint(ox * 0.5, oy * 0.5, oz * 0.5, cam);
+            if (tp.visible) {
+              ctx.beginPath();
+              ctx.moveTo(lp.sx, lp.sy);
+              ctx.lineTo(tp.sx, tp.sy);
+              ctx.stroke();
+            }
+          }
+          ctx.setLineDash([]);
+        } else if (studio3d.lightType === "sun") {
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(lp.sx, lp.sy);
+          ctx.lineTo(
+            originPt.visible ? originPt.sx : vw / 2,
+            originPt.visible ? originPt.sy : vh / 2
+          );
+          ctx.strokeStyle = "rgba(255, 226, 140, 0.55)";
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+          ctx.setLineDash([]);
+          for (let k = 0; k < 8; k++) {
+            const a = (k / 8) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.moveTo(lp.sx + Math.cos(a) * 9, lp.sy + Math.sin(a) * 9);
+            ctx.lineTo(lp.sx + Math.cos(a) * 14, lp.sy + Math.sin(a) * 14);
+            ctx.strokeStyle = "rgba(255, 230, 150, 0.7)";
+            ctx.lineWidth = 1.2;
+            ctx.stroke();
+          }
+        } else {
+          // Point light dashed range halo
+          ctx.setLineDash([2, 3]);
+          ctx.beginPath();
+          ctx.arc(lp.sx, lp.sy, 14, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(255, 226, 140, 0.5)";
+          ctx.lineWidth = 1.1;
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // 3D XYZ Translation Gizmo Arrows anchored at light position
+        const axisLen = Math.max(8, Math.max(canvasWidth, canvasHeight) * 0.32);
+        const tipX = projectScenePoint(lx + axisLen, ly, lz, cam);
+        const tipY = projectScenePoint(lx, ly - axisLen, lz, cam);
+        const tipZ = projectScenePoint(lx, ly, lz + axisLen, cam);
+
+        const drawAxis = (
+          tip: { sx: number; sy: number; visible: boolean },
+          color: string,
+          label: string
+        ) => {
+          if (!tip.visible) return;
+          ctx.beginPath();
+          ctx.moveTo(lp.sx, lp.sy);
+          ctx.lineTo(tip.sx, tip.sy);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(tip.sx, tip.sy, 4, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+
+          const dxA = tip.sx - lp.sx;
+          const dyA = tip.sy - lp.sy;
+          const lenA = Math.max(1, Math.hypot(dxA, dyA));
+          ctx.font = "700 9px var(--font-mono, monospace)";
+          ctx.fillStyle = color;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(
+            label,
+            tip.sx + (dxA / lenA) * 9,
+            tip.sy + (dyA / lenA) * 9
+          );
+        };
+
+        drawAxis(tipX, "#ef5350", "X");
+        drawAxis(tipY, "#52c46d", "Y");
+        drawAxis(tipZ, "#4c8bf5", "Z");
+
+        // Central Light Bulb
+        ctx.beginPath();
+        ctx.arc(lp.sx, lp.sy, 6.5, 0, Math.PI * 2);
+        ctx.fillStyle = studio3d.lightColor || "#fff4d6";
+        ctx.fill();
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = "#ffffff";
+        ctx.stroke();
+
+        gizmoHitRef.current = {
+          center: { sx: lp.sx, sy: lp.sy },
+          tipX: tipX.visible ? { sx: tipX.sx, sy: tipX.sy } : null,
+          tipY: tipY.visible ? { sx: tipY.sx, sy: tipY.sy } : null,
+          tipZ: tipZ.visible ? { sx: tipZ.sx, sy: tipZ.sy } : null,
+          axisLen,
+        };
+        ctx.restore();
+      } else {
+        gizmoHitRef.current = null;
+      }
+    } else {
+      gizmoHitRef.current = null;
+    }
+
     ctx.restore();
   }, [
     viewSize,
@@ -433,6 +604,15 @@ export function Studio3DViewport() {
         ? "3D Perspective Grid"
         : "Grid Off";
 
+  const passLabel =
+    studio3d.renderPass === "normal"
+      ? "Normal Map"
+      : studio3d.renderPass === "height"
+        ? "Height Map"
+        : studio3d.renderPass === "depth"
+          ? "Depth Map"
+          : "Lit 3D";
+
   return (
     <div
       ref={containerRef}
@@ -440,7 +620,49 @@ export function Studio3DViewport() {
       onMouseDown={(e) => {
         if (e.button !== 0) return;
         patchStudio3D({ autoSpin: false, scrubberPlaying: false });
+        const rect = e.currentTarget.getBoundingClientRect();
+        const localX = e.clientX - rect.left;
+        const localY = e.clientY - rect.top;
+        const gz = gizmoHitRef.current;
+
+        let mode: "camera" | "lightFree" | "lightX" | "lightY" | "lightZ" = "camera";
+        let axisScreenX = 0;
+        let axisScreenY = 0;
+
+        if (studio3d.directionalLighting && gz && studio3d.mode !== "rig") {
+          const distToTip = (tip: { sx: number; sy: number } | null) =>
+            tip ? Math.hypot(localX - tip.sx, localY - tip.sy) : Infinity;
+          const dX = distToTip(gz.tipX);
+          const dY = distToTip(gz.tipY);
+          const dZ = distToTip(gz.tipZ);
+          const minAxisDist = Math.min(dX, dY, dZ);
+
+          if (minAxisDist <= 13) {
+            if (minAxisDist === dX && gz.tipX) {
+              mode = "lightX";
+              axisScreenX = gz.tipX.sx - gz.center.sx;
+              axisScreenY = gz.tipX.sy - gz.center.sy;
+            } else if (minAxisDist === dY && gz.tipY) {
+              mode = "lightY";
+              axisScreenX = gz.tipY.sx - gz.center.sx;
+              axisScreenY = gz.tipY.sy - gz.center.sy;
+            } else if (gz.tipZ) {
+              mode = "lightZ";
+              axisScreenX = gz.tipZ.sx - gz.center.sx;
+              axisScreenY = gz.tipZ.sy - gz.center.sy;
+            }
+          } else if (
+            e.shiftKey ||
+            Math.hypot(localX - gz.center.sx, localY - gz.center.sy) <= 16
+          ) {
+            mode = "lightFree";
+          }
+        } else if (e.shiftKey && studio3d.mode !== "rig") {
+          mode = "lightFree";
+        }
+
         dragRef.current = {
+          mode,
           x: e.clientX,
           y: e.clientY,
           yaw: studio3d.yawDeg,
@@ -448,6 +670,12 @@ export function Studio3DViewport() {
             studio3d.mode === "stack"
               ? studio3d.stackPitchDeg
               : studio3d.pitchDeg,
+          lightPosX: studio3d.lightPosX,
+          lightPosY: studio3d.lightPosY,
+          lightPosZ: studio3d.lightPosZ,
+          axisScreenX,
+          axisScreenY,
+          axisWorldLen: gz?.axisLen ?? 12,
         };
       }}
       onMouseMove={(e) => {
@@ -455,6 +683,47 @@ export function Studio3DViewport() {
         if (!drag) return;
         const dx = e.clientX - drag.x;
         const dy = e.clientY - drag.y;
+        const clampPos = (v: number) => Math.max(-120, Math.min(120, Math.round(v)));
+
+        if (drag.mode === "lightX" || drag.mode === "lightY" || drag.mode === "lightZ") {
+          const lenSq = Math.max(
+            1e-4,
+            drag.axisScreenX * drag.axisScreenX + drag.axisScreenY * drag.axisScreenY
+          );
+          const delta =
+            ((dx * drag.axisScreenX + dy * drag.axisScreenY) / lenSq) *
+            drag.axisWorldLen;
+          if (drag.mode === "lightX") {
+            patchStudio3D({ lightPosX: clampPos(drag.lightPosX + delta) });
+          } else if (drag.mode === "lightY") {
+            // Green Y arrow points UP (-Y in scene space)
+            patchStudio3D({ lightPosY: clampPos(drag.lightPosY - delta) });
+          } else {
+            patchStudio3D({ lightPosZ: clampPos(drag.lightPosZ + delta) });
+          }
+          return;
+        }
+
+        if (drag.mode === "lightFree") {
+          const R = mat3FromEulerDeg(
+            angles.previewYaw,
+            angles.previewPitch,
+            angles.previewRoll
+          );
+          const [dlx, dly, dlz] = mat3TransposeMulVec(
+            R,
+            dx / Math.max(1, pixelScale),
+            dy / Math.max(1, pixelScale),
+            0
+          );
+          patchStudio3D({
+            directionalLighting: true,
+            lightPosX: clampPos(drag.lightPosX + dlx),
+            lightPosY: clampPos(drag.lightPosY + dly),
+            lightPosZ: clampPos(drag.lightPosZ + dlz),
+          });
+          return;
+        }
         const nextYaw = normalizeDeg(drag.yaw + dx * 0.75);
         if (studio3d.mode === "stack") {
           patchStudio3D({
@@ -491,12 +760,13 @@ export function Studio3DViewport() {
         );
         patchStudio3D({ previewZoom: ZOOM_CYCLE[nextIdx] });
       }}
-      title="Drag to orbit 3D scene · Scroll to zoom · Double-click to reset camera"
+      title="Drag to orbit 3D scene · Drag Light orb (or Shift+Drag) to move light · Scroll to zoom · Double-click to reset camera"
     >
       <canvas ref={sceneCanvasRef} className="studio3d-scene-canvas" />
 
       <div className="studio3d-hud-top-left">
         <span className="studio3d-badge">{modeLabel}</span>
+        <span className="studio3d-badge">{passLabel}</span>
         <span className="studio3d-badge studio3d-badge-muted">{gridLabel}</span>
         <span className="studio3d-badge studio3d-badge-mono">
           Y {Math.round(angles.previewYaw)}° · P {Math.round(angles.previewPitch)}° · R{" "}

@@ -370,7 +370,7 @@
 
 .viewport-canvas-frame {
   position: relative;
-  border: 1px solid var(--border-strong);
+  outline: 1px solid var(--border-strong);
   background-color: #1c1c1c;
   background-image:
     linear-gradient(45deg, #242424 25%, transparent 25%),
@@ -2610,6 +2610,18 @@
   color: #80a8ff;
   border-color: #4c6ef5;
   background: rgba(76, 110, 245, 0.14);
+}
+
+.layer-role-badge.height {
+  color: #4ec9b0;
+  border-color: #2c9c84;
+  background: rgba(78, 201, 176, 0.14);
+}
+
+.layer-role-badge.depth {
+  color: #c084fc;
+  border-color: #9333ea;
+  background: rgba(168, 85, 247, 0.14);
 }
 
 .layer-role-badge.emission {

@@ -1144,3 +1144,372 @@ test("scene3d: projectScenePoint, perspective/isometric grids, turntable ring, a
   const shadow = buildFloorShadowEllipse(baseCam, 10, 6, 24);
   assert.equal(shadow.length, 24);
 });
+
+test("render25DSprite: renderPass normal, height, and depth + PBR lighting options", () => {
+  const src = new PixelBuffer(16, 16);
+  for (let y = 4; y <= 11; y++) {
+    for (let x = 4; x <= 11; x++) {
+      src.setPixel(x, y, 140, 140, 140, 255);
+    }
+  }
+
+  // Normal pass at front view: center faces +Z -> (128, 128, 255)
+  const normFront = render25DSprite(
+    src,
+    baseOpts({
+      extrudeDepth: 4,
+      renderPass: "normal",
+      outlineColor: [0, 0, 0, 255],
+    })
+  );
+  // Outline should be bypassed on data passes
+  assert.equal(normFront.getPixel(3, 4)[3], 0);
+  const nfCenter = normFront.getPixel(8, 8);
+  assert.equal(nfCenter[0], 128);
+  assert.equal(nfCenter[1], 128);
+  assert.equal(nfCenter[2], 255);
+
+  // OpenGL vs DirectX pitch tilt flips green channel
+  const normGL = render25DSprite(
+    src,
+    baseOpts({
+      pitchDeg: 35,
+      extrudeDepth: 4,
+      renderPass: "normal",
+      normalConvention: "opengl",
+    })
+  );
+  const normDX = render25DSprite(
+    src,
+    baseOpts({
+      pitchDeg: 35,
+      extrudeDepth: 4,
+      renderPass: "normal",
+      normalConvention: "directx",
+    })
+  );
+  const glC = normGL.getPixel(8, 8);
+  const dxC = normDX.getPixel(8, 8);
+  assert.notEqual(glC[1], 128);
+  assert.ok(Math.abs(glC[1] + dxC[1] - 255) <= 2);
+
+  // Height pass with pillow profile: center > edge
+  const heightPass = render25DSprite(
+    src,
+    baseOpts({
+      extrudeDepth: 6,
+      depthProfile: "pillow",
+      renderPass: "height",
+    })
+  );
+  assert.ok(heightPass.getPixel(8, 8)[0] > heightPass.getPixel(4, 8)[0]);
+
+  // Depth pass tilted 45° yaw: rotated near edge is brighter than far edge, and depthInvert flips it
+  const depthPass = render25DSprite(
+    src,
+    baseOpts({
+      yawDeg: 45,
+      extrudeDepth: 4,
+      renderPass: "depth",
+    })
+  );
+  const depthInv = render25DSprite(
+    src,
+    baseOpts({
+      yawDeg: 45,
+      extrudeDepth: 4,
+      renderPass: "depth",
+      depthInvert: true,
+    })
+  );
+  let minD = 255;
+  let maxD = 0;
+  for (let i = 0; i < depthPass.data.length; i += 4) {
+    if (depthPass.data[i + 3] > 0) {
+      if (depthPass.data[i] < minD) minD = depthPass.data[i];
+      if (depthPass.data[i] > maxD) maxD = depthPass.data[i];
+    }
+  }
+  assert.ok(maxD > minD + 100, "depth pass spans near-to-far range");
+  assert.notDeepEqual(depthPass.data, depthInv.data);
+
+  // Specular + normalMap perturbation
+  const noSpec = render25DSprite(
+    src,
+    baseOpts({
+      directionalLighting: true,
+      lightAzimuthDeg: 0,
+      lightElevationDeg: 0,
+      ambient: 0.2,
+      specularStrength: 0,
+    })
+  );
+  const withSpec = render25DSprite(
+    src,
+    baseOpts({
+      directionalLighting: true,
+      lightAzimuthDeg: 0,
+      lightElevationDeg: 0,
+      ambient: 0.2,
+      specularStrength: 1.0,
+      shininess: 16,
+      lightColor: [255, 255, 255, 255],
+    })
+  );
+  assert.ok(withSpec.getPixel(8, 8)[0] > noSpec.getPixel(8, 8)[0]);
+});
+
+test("renderSpriteStack: renderPass normal, height, and depth", () => {
+  const slices: PixelBuffer[] = [];
+  for (let s = 0; s < 5; s++) {
+    const b = new PixelBuffer(14, 14);
+    for (let y = 4; y <= 9; y++) {
+      for (let x = 4; x <= 9; x++) {
+        b.setPixel(x, y, 180, 120, 80, 255);
+      }
+    }
+    slices.push(b);
+  }
+
+  const normStack = renderSpriteStack(slices, {
+    yawDeg: 0,
+    pitchDeg: 35,
+    sliceSpacing: 1.5,
+    depthShading: false,
+    outlineColor: null,
+    renderPass: "normal",
+  });
+  assert.ok(countOpaque(normStack) > 0);
+
+  const heightStack = renderSpriteStack(slices, {
+    yawDeg: 0,
+    pitchDeg: 45,
+    sliceSpacing: 2,
+    depthShading: false,
+    outlineColor: null,
+    renderPass: "height",
+  });
+  assert.ok(countOpaque(heightStack) > 0);
+
+  const depthStack = renderSpriteStack(slices, {
+    yawDeg: 0,
+    pitchDeg: 45,
+    sliceSpacing: 2,
+    depthShading: false,
+    outlineColor: null,
+    renderPass: "depth",
+  });
+  assert.ok(countOpaque(depthStack) > 0);
+});
+
+test("render25DSprite: custom left/right/top/bottom side sources, mirrorRightFromLeft, sideColor, and backSource", () => {
+  const front = new PixelBuffer(16, 16);
+  for (let y = 4; y <= 11; y++) {
+    for (let x = 4; x <= 11; x++) {
+      front.setPixel(x, y, 200, 200, 200, 255);
+    }
+  }
+
+  const makeSolid = (r: number, g: number, b: number) => {
+    const buf = new PixelBuffer(16, 16);
+    for (let y = 4; y <= 11; y++) {
+      for (let x = 4; x <= 11; x++) {
+        buf.setPixel(x, y, r, g, b, 255);
+      }
+    }
+    return buf;
+  };
+
+  const leftTex = makeSolid(240, 40, 40);
+  const rightTex = makeSolid(40, 220, 60);
+  const topTex = makeSolid(40, 120, 240);
+  const bottomTex = makeSolid(240, 200, 40);
+  const backTex = makeSolid(180, 60, 220);
+
+  // At yaw = 90°, left side faces viewer
+  const viewLeft = render25DSprite(
+    front,
+    baseOpts({
+      yawDeg: 90,
+      extrudeDepth: 8,
+      leftSideSource: leftTex,
+      rightSideSource: rightTex,
+      backSource: backTex,
+    })
+  );
+  const lPx = viewLeft.getPixel(8, 8);
+  assert.ok(lPx[0] > 200 && lPx[1] < 80, "yaw 90° shows red leftSideSource");
+
+  // At yaw = -90°, right side faces viewer
+  const viewRight = render25DSprite(
+    front,
+    baseOpts({
+      yawDeg: -90,
+      extrudeDepth: 8,
+      leftSideSource: leftTex,
+      rightSideSource: rightTex,
+      backSource: backTex,
+    })
+  );
+  const rPx = viewRight.getPixel(8, 8);
+  assert.ok(rPx[1] > 180 && rPx[0] < 80, "yaw -90° shows green rightSideSource");
+
+  // mirrorRightFromLeft uses leftSideSource on right side at yaw = -90°
+  const viewMirroredRight = render25DSprite(
+    front,
+    baseOpts({
+      yawDeg: -90,
+      extrudeDepth: 8,
+      leftSideSource: leftTex,
+      mirrorRightFromLeft: true,
+    })
+  );
+  const mrPx = viewMirroredRight.getPixel(8, 8);
+  assert.ok(mrPx[0] > 200 && mrPx[1] < 80, "mirrorRightFromLeft shows red on right side");
+
+  // At pitch = -90°, top side faces viewer; at pitch = 90°, bottom side faces viewer
+  const viewTop = render25DSprite(
+    front,
+    baseOpts({
+      pitchDeg: -90,
+      extrudeDepth: 8,
+      topSideSource: topTex,
+      bottomSideSource: bottomTex,
+    })
+  );
+  const tPx = viewTop.getPixel(8, 8);
+  assert.ok(tPx[2] > 200 && tPx[0] < 80, "pitch -90° shows blue topSideSource");
+
+  const viewBottom = render25DSprite(
+    front,
+    baseOpts({
+      pitchDeg: 90,
+      extrudeDepth: 8,
+      topSideSource: topTex,
+      bottomSideSource: bottomTex,
+    })
+  );
+  const bPx = viewBottom.getPixel(8, 8);
+  assert.ok(bPx[0] > 200 && bPx[1] > 170 && bPx[2] < 80, "pitch 90° shows yellow bottomSideSource");
+
+  // At yaw = 180°, backSource faces viewer
+  const viewBack = render25DSprite(
+    front,
+    baseOpts({
+      yawDeg: 180,
+      extrudeDepth: 8,
+      leftSideSource: leftTex,
+      backSource: backTex,
+    })
+  );
+  const bkPx = viewBack.getPixel(8, 8);
+  assert.ok(bkPx[0] > 150 && bkPx[2] > 180, "yaw 180° shows purple backSource");
+
+  // sideColor colors side wall at yaw = 90° without altering front at yaw = 0°
+  const viewSideCol = render25DSprite(
+    front,
+    baseOpts({
+      yawDeg: 90,
+      extrudeDepth: 8,
+      sideColor: [30, 190, 210, 255],
+    })
+  );
+  const scPx = viewSideCol.getPixel(8, 8);
+  assert.ok(scPx[1] > 160 && scPx[2] > 180 && scPx[0] < 60, "sideColor colors side wall");
+});
+
+test("render25DSprite: 3D lightPosition supports point, spot, and sun light types", () => {
+  const src = new PixelBuffer(20, 20);
+  for (let y = 4; y <= 15; y++) {
+    for (let x = 4; x <= 15; x++) {
+      src.setPixel(x, y, 200, 200, 200, 255);
+    }
+  }
+
+  // Point light distance attenuation: closer light is brighter than farther light
+  const nearLit = render25DSprite(
+    src,
+    baseOpts({
+      directionalLighting: true,
+      lightType: "point",
+      lightPosition: [0, 0, 8],
+      lightRadius: 20,
+      ambient: 0.15,
+    })
+  );
+  const farLit = render25DSprite(
+    src,
+    baseOpts({
+      directionalLighting: true,
+      lightType: "point",
+      lightPosition: [0, 0, 60],
+      lightRadius: 20,
+      ambient: 0.15,
+    })
+  );
+  assert.ok(
+    nearLit.getPixel(10, 10)[0] > farLit.getPixel(10, 10)[0],
+    "point light falls off with distance"
+  );
+
+  // Point light left vs right shifts lit side on pillow profile
+  const leftLit = render25DSprite(
+    src,
+    baseOpts({
+      extrudeDepth: 6,
+      depthProfile: "pillow",
+      directionalLighting: true,
+      lightType: "point",
+      lightPosition: [-24, 0, 16],
+      lightRadius: 48,
+      ambient: 0.15,
+    })
+  );
+  assert.ok(
+    leftLit.getPixel(5, 10)[0] > leftLit.getPixel(14, 10)[0],
+    "left 3D point light illuminates left side brighter than right side"
+  );
+
+  // Spot light: narrow cone illuminates center while pixels outside cone stay at ambient
+  const spotLit = render25DSprite(
+    src,
+    baseOpts({
+      directionalLighting: true,
+      lightType: "spot",
+      lightPosition: [0, 0, 18],
+      lightRadius: 40,
+      spotAngleDeg: 22,
+      spotSoftness: 0.1,
+      ambient: 0.15,
+    })
+  );
+  assert.ok(
+    spotLit.getPixel(10, 10)[0] > spotLit.getPixel(4, 4)[0] + 40,
+    "spot light illuminates center within cone and drops off outside cone"
+  );
+
+  // Sun light: distance-independent parallel direction
+  const sunNear = render25DSprite(
+    src,
+    baseOpts({
+      directionalLighting: true,
+      lightType: "sun",
+      lightPosition: [-10, -10, 10],
+      ambient: 0.2,
+    })
+  );
+  const sunFar = render25DSprite(
+    src,
+    baseOpts({
+      directionalLighting: true,
+      lightType: "sun",
+      lightPosition: [-100, -100, 100],
+      ambient: 0.2,
+    })
+  );
+  assert.deepEqual(
+    sunNear.data,
+    sunFar.data,
+    "sun light is invariant to distance along same direction"
+  );
+});

@@ -577,6 +577,16 @@ export function LayersPanel() {
                             },
                             {
                               kind: "item" as const,
+                              label: "Role: Height / Displacement Map",
+                              action: () => setLayerMapRole(layer.id, "height"),
+                            },
+                            {
+                              kind: "item" as const,
+                              label: "Role: Depth Map",
+                              action: () => setLayerMapRole(layer.id, "depth"),
+                            },
+                            {
+                              kind: "item" as const,
                               label: "Role: Emission Map",
                               action: () =>
                                 setLayerMapRole(layer.id, "emission"),
@@ -880,6 +890,19 @@ export function LayersPanel() {
                   {layer.mapRole === "normal" && (
                     <span className="layer-role-badge normal" title="Normal Map">
                       N
+                    </span>
+                  )}
+                  {layer.mapRole === "height" && (
+                    <span
+                      className="layer-role-badge height"
+                      title="Height / Displacement Map"
+                    >
+                      H
+                    </span>
+                  )}
+                  {layer.mapRole === "depth" && (
+                    <span className="layer-role-badge depth" title="Depth Map">
+                      D
                     </span>
                   )}
                   {layer.mapRole === "emission" && (

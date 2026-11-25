@@ -1605,10 +1605,18 @@ export class PixelEngine {
       const hasEmission = layers.some(
         (l) => l.kind !== "group" && l.mapRole === "emission" && l.visible
       );
+      const hasHeight = layers.some(
+        (l) => l.kind !== "group" && l.mapRole === "height" && l.visible
+      );
+      const hasDepth = layers.some(
+        (l) => l.kind !== "group" && l.mapRole === "depth" && l.visible
+      );
 
       const albedo = new Uint8ClampedArray(renderList(albedoLayers));
       let normal: Uint8ClampedArray | null = null;
       let emission: Uint8ClampedArray | null = null;
+      let heightMap: Uint8ClampedArray | null = null;
+      let depthMap: Uint8ClampedArray | null = null;
 
       if (hasNormal) {
         const normalLayers = layers.filter(
@@ -1624,6 +1632,22 @@ export class PixelEngine {
           this.compositeFrame(emissionLayers, frameIndex)
         );
       }
+      if (hasHeight) {
+        const heightLayers = layers.filter(
+          (l) => l.kind === "group" || l.mapRole === "height"
+        );
+        heightMap = new Uint8ClampedArray(
+          this.compositeFrame(heightLayers, frameIndex)
+        );
+      }
+      if (hasDepth) {
+        const depthLayers = layers.filter(
+          (l) => l.kind === "group" || l.mapRole === "depth"
+        );
+        depthMap = new Uint8ClampedArray(
+          this.compositeFrame(depthLayers, frameIndex)
+        );
+      }
 
       result = apply2DLighting(
         albedo,
@@ -1631,7 +1655,9 @@ export class PixelEngine {
         emission,
         this.width,
         this.height,
-        opts.light2d
+        opts.light2d,
+        heightMap,
+        depthMap
       );
     } else {
       result = new Uint8ClampedArray(renderList(layers));

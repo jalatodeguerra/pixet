@@ -20,7 +20,15 @@ import { syncHistoryAndCelState } from "../engine/document/historyActions";
 import { PixelBuffer } from "../engine/document/PixelBuffer";
 import { pixelEngine } from "../engine/document/PixelEngine";
 import type { GameBoxKind } from "../engine/gamedev/GameDataEngine";
-import { generateAutoNormalMap } from "../engine/gamedev/shaderPreview";
+import {
+  downloadPixelBufferAsPng,
+  generateDepthMap,
+  generateHeightMap,
+  generateNormalMap,
+  type DepthMapMode,
+  type HeightMapSource,
+  type NormalConvention,
+} from "../engine/gamedev/pbrMaps";
 import { type DataTool, useEditorStore } from "../store/editorStore";
 import { PALETTE_PRESETS } from "../utils/paletteParser";
 
@@ -55,6 +63,14 @@ export function GameDataPanel() {
   const light2dIntensity = useEditorStore((s) => s.light2dIntensity);
   const light2dAmbient = useEditorStore((s) => s.light2dAmbient);
   const light2dEmission = useEditorStore((s) => s.light2dEmission);
+  const light2dType = useEditorStore((s) => s.light2dType);
+  const light2dAmbientColor = useEditorStore((s) => s.light2dAmbientColor);
+  const light2dSpecular = useEditorStore((s) => s.light2dSpecular);
+  const light2dShininess = useEditorStore((s) => s.light2dShininess);
+  const light2dHeightScale = useEditorStore((s) => s.light2dHeightScale);
+  const light2dAo = useEditorStore((s) => s.light2dAo);
+  const light2dCelSteps = useEditorStore((s) => s.light2dCelSteps);
+  const light2dAutoNormal = useEditorStore((s) => s.light2dAutoNormal);
   const setLight2d = useEditorStore((s) => s.setLight2d);
   const paletteLutEnabled = useEditorStore((s) => s.paletteLutEnabled);
   const paletteLutPresetName = useEditorStore((s) => s.paletteLutPresetName);
@@ -64,6 +80,11 @@ export function GameDataPanel() {
   );
 
   const [shaderCollapsed, setShaderCollapsed] = useState(false);
+  const [normalStrength, setNormalStrength] = useState(2.5);
+  const [normalConvention, setNormalConvention] =
+    useState<NormalConvention>("opengl");
+  const [heightSource, setHeightSource] = useState<HeightMapSource>("hybrid");
+  const [depthMode, setDepthMode] = useState<DepthMapMode>("volume");
   const [eventName, setEventName] = useState("");
   const [eventPayload, setEventPayload] = useState("");
 
@@ -126,38 +147,114 @@ export function GameDataPanel() {
     setStatusMessage(`Exported ${base}.gamedata.json`);
   };
 
-  const handleAutoNormal = () => {
+  const getAlbedoBuffer = () => {
     const albedoLayers = layers.filter(
       (l) => l.kind === "group" || !l.mapRole || l.mapRole === "albedo"
     );
     const composited = pixelEngine.compositeFrame(albedoLayers, currentFrame);
-    const albedoBuf = new PixelBuffer(
+    return new PixelBuffer(
       canvasWidth,
       canvasHeight,
       new Uint8ClampedArray(composited)
     );
-    const normalBuf = generateAutoNormalMap(albedoBuf, 2.2);
+  };
 
-    const existingNormal = layers.find(
-      (l) => l.kind === "raster" && l.mapRole === "normal"
+  const writeGeneratedMap = (
+    role: "normal" | "height" | "depth",
+    mapBuf: PixelBuffer,
+    label: string
+  ) => {
+    const currentLayers = useEditorStore.getState().layers;
+    const existing = currentLayers.find(
+      (l) => l.kind === "raster" && l.mapRole === role
     );
-    const targetId =
-      existingNormal?.id ?? addMapLayer("normal", "Normal Map");
+    const defaultTitle =
+      role === "normal"
+        ? "Normal Map"
+        : role === "height"
+          ? "Height Map"
+          : "Depth Map";
+    const targetId = existing?.id ?? addMapLayer(role, defaultTitle);
 
     const dst = pixelEngine.getOrCreateCel(targetId, currentFrame);
-    pixelEngine.history.beginTransaction(
-      targetId,
-      currentFrame,
-      "Auto Normal Map"
-    );
+    pixelEngine.history.beginTransaction(targetId, currentFrame, label);
     pixelEngine.history.captureAllTiles(dst);
-    dst.data.set(normalBuf.data);
+    dst.data.set(mapBuf.data);
     dst.markAllDirty();
     pixelEngine.history.commitTransaction(dst);
     syncHistoryAndCelState(targetId, currentFrame);
     setLight2d({ enabled: true });
     pixelEngine.emitChange();
+  };
+
+  const handleAutoNormal = () => {
+    const albedoBuf = getAlbedoBuffer();
+    const heightLayer = layers.find(
+      (l) => l.kind === "raster" && l.visible && l.mapRole === "height"
+    );
+    const heightCel = heightLayer
+      ? pixelEngine.getCel(heightLayer.id, currentFrame)
+      : undefined;
+    const normalBuf = generateNormalMap(albedoBuf, {
+      strength: normalStrength,
+      convention: normalConvention,
+      heightMap: heightCel && !heightCel.isEmpty() ? heightCel : null,
+    });
+    writeGeneratedMap("normal", normalBuf, "Auto Normal Map");
     setStatusMessage(`Generated Normal Map on frame ${currentFrame + 1}`);
+  };
+
+  const handleAutoHeight = () => {
+    const albedoBuf = getAlbedoBuffer();
+    const heightBuf = generateHeightMap(albedoBuf, { source: heightSource });
+    writeGeneratedMap("height", heightBuf, "Auto Height Map");
+    setStatusMessage(`Generated Height Map on frame ${currentFrame + 1}`);
+  };
+
+  const handleAutoDepth = () => {
+    const albedoBuf = getAlbedoBuffer();
+    const depthBuf = generateDepthMap(albedoBuf, { mode: depthMode });
+    writeGeneratedMap("depth", depthBuf, "Auto Depth Map");
+    setStatusMessage(`Generated Depth Map on frame ${currentFrame + 1}`);
+  };
+
+  const handleGenerateAllMaps = () => {
+    const albedoBuf = getAlbedoBuffer();
+    const heightBuf = generateHeightMap(albedoBuf, { source: heightSource });
+    const normalBuf = generateNormalMap(albedoBuf, {
+      strength: normalStrength,
+      convention: normalConvention,
+      heightMap: heightBuf,
+    });
+    const depthBuf = generateDepthMap(albedoBuf, {
+      mode: depthMode,
+      heightMap: heightBuf,
+    });
+    writeGeneratedMap("height", heightBuf, "Auto Height Map");
+    writeGeneratedMap("normal", normalBuf, "Auto Normal Map");
+    writeGeneratedMap("depth", depthBuf, "Auto Depth Map");
+    setStatusMessage(
+      `Generated Normal, Height & Depth Maps on frame ${currentFrame + 1}`
+    );
+  };
+
+  const handleExportMapsPng = () => {
+    const albedoBuf = getAlbedoBuffer();
+    const base = documentName.replace(/\.pixet$/i, "") || "sprite";
+    const heightBuf = generateHeightMap(albedoBuf, { source: heightSource });
+    const normalBuf = generateNormalMap(albedoBuf, {
+      strength: normalStrength,
+      convention: normalConvention,
+      heightMap: heightBuf,
+    });
+    const depthBuf = generateDepthMap(albedoBuf, {
+      mode: depthMode,
+      heightMap: heightBuf,
+    });
+    downloadPixelBufferAsPng(normalBuf, `${base}_normal.png`);
+    downloadPixelBufferAsPng(heightBuf, `${base}_height.png`);
+    downloadPixelBufferAsPng(depthBuf, `${base}_depth.png`);
+    setStatusMessage(`Exported ${base}_normal/height/depth.png`);
   };
 
   const lutPreset =
@@ -387,7 +484,7 @@ export function GameDataPanel() {
               ) : (
                 <ChevronDown size={12} />
               )}
-              <span>2D Lighting &amp; Palette LUT</span>
+              <span>3D Lighting &amp; PBR Maps</span>
             </button>
 
             {!shaderCollapsed && (
@@ -405,24 +502,140 @@ export function GameDataPanel() {
             <button
               type="button"
               className="mini-btn"
+              title="Add Height / Displacement Map layer"
+              onClick={() => addMapLayer("height", "Height Map")}
+            >
+              <Plus size={11} />
+              <span>Height</span>
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Add Depth Map layer"
+              onClick={() => addMapLayer("depth", "Depth Map")}
+            >
+              <Plus size={11} />
+              <span>Depth</span>
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
               title="Add Emission Map layer"
               onClick={() => addMapLayer("emission", "Emission Map")}
             >
               <Sparkles size={11} />
-              <span>Emission</span>
+              <span>Emit</span>
             </button>
           </div>
 
-          <button
-            type="button"
-            className="mini-btn"
-            style={{ justifyContent: "center" }}
-            title="Generate tangent-space normal map from visible albedo layers"
-            onClick={handleAutoNormal}
-          >
-            <Sun size={11} />
-            <span>Auto Normal from Albedo</span>
-          </button>
+          <div className="rotate3d-grid-2" style={{ marginTop: 4 }}>
+            <label className="modal-field">
+              <span>Normal Format</span>
+              <select
+                className="palette-select"
+                value={normalConvention}
+                onChange={(e) =>
+                  setNormalConvention(e.target.value as NormalConvention)
+                }
+              >
+                <option value="opengl">OpenGL (+Y)</option>
+                <option value="directx">DirectX (-Y)</option>
+              </select>
+            </label>
+            <label className="modal-field">
+              <span>Height Source</span>
+              <select
+                className="palette-select"
+                value={heightSource}
+                onChange={(e) =>
+                  setHeightSource(e.target.value as HeightMapSource)
+                }
+              >
+                <option value="hybrid">Hybrid</option>
+                <option value="luminance">Luminance</option>
+                <option value="bevel">Bevel</option>
+                <option value="pillow">Pillow</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="rotate3d-grid-2" style={{ marginTop: 4 }}>
+            <label className="modal-field">
+              <span>Depth Mode</span>
+              <select
+                className="palette-select"
+                value={depthMode}
+                onChange={(e) => setDepthMode(e.target.value as DepthMapMode)}
+              >
+                <option value="volume">Volume</option>
+                <option value="topDown">Top-Down</option>
+                <option value="isometric">Isometric</option>
+                <option value="radial">Radial</option>
+              </select>
+            </label>
+            <label className="modal-field">
+              <span>Normal Str ({normalStrength.toFixed(1)})</span>
+              <input
+                type="range"
+                className="hsv-range"
+                min={5}
+                max={60}
+                value={Math.round(normalStrength * 10)}
+                onChange={(e) =>
+                  setNormalStrength(Number(e.target.value) / 10)
+                }
+              />
+            </label>
+          </div>
+
+          <div className="rig-tool-row" style={{ marginTop: 4 }}>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Generate tangent-space normal map from visible albedo layers"
+              onClick={handleAutoNormal}
+            >
+              <Sun size={11} />
+              <span>Gen Normal</span>
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Generate displacement/height map from visible albedo layers"
+              onClick={handleAutoHeight}
+            >
+              <span>Gen Height</span>
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Generate depth map from visible albedo layers"
+              onClick={handleAutoDepth}
+            >
+              <span>Gen Depth</span>
+            </button>
+          </div>
+
+          <div className="rig-tool-row" style={{ marginTop: 4 }}>
+            <button
+              type="button"
+              className="mini-btn"
+              style={{ flex: 1, justifyContent: "center" }}
+              onClick={handleGenerateAllMaps}
+            >
+              <Sparkles size={11} />
+              <span>Gen All Maps</span>
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Export Normal, Height, and Depth maps as PNGs"
+              onClick={handleExportMapsPng}
+            >
+              <Download size={11} />
+              <span>PNGs</span>
+            </button>
+          </div>
 
           <div className="rig-option-row">
             <label className="checkbox-inline">
@@ -431,19 +644,54 @@ export function GameDataPanel() {
                 checked={light2dEnabled}
                 onChange={(e) => setLight2d({ enabled: e.target.checked })}
               />
-              <span>2D Point Light Preview</span>
+              <span>Realtime 3D Light</span>
             </label>
-            <input
-              type="color"
-              className="rotate3d-color-input"
-              value={light2dColor}
-              title="Light Color"
-              onChange={(e) => setLight2d({ color: e.target.value })}
-            />
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <input
+                type="color"
+                className="rotate3d-color-input"
+                value={light2dColor}
+                title="Light Color"
+                onChange={(e) => setLight2d({ color: e.target.value })}
+              />
+              <input
+                type="color"
+                className="rotate3d-color-input"
+                value={light2dAmbientColor}
+                title="Ambient Color"
+                onChange={(e) => setLight2d({ ambientColor: e.target.value })}
+              />
+            </div>
           </div>
 
           {light2dEnabled && (
             <div className="hsv-sliders">
+              <div className="rig-tool-row" style={{ marginBottom: 4 }}>
+                <button
+                  type="button"
+                  className={`mini-btn ${light2dType === "point" ? "active" : ""}`}
+                  onClick={() => setLight2d({ lightType: "point" })}
+                >
+                  Point
+                </button>
+                <button
+                  type="button"
+                  className={`mini-btn ${light2dType === "directional" ? "active" : ""}`}
+                  onClick={() => setLight2d({ lightType: "directional" })}
+                >
+                  Directional
+                </button>
+                <label className="checkbox-inline" style={{ marginLeft: "auto" }}>
+                  <input
+                    type="checkbox"
+                    checked={light2dAutoNormal}
+                    onChange={(e) =>
+                      setLight2d({ autoNormal: e.target.checked })
+                    }
+                  />
+                  <span>Auto-N</span>
+                </label>
+              </div>
               <label className="hsv-row">
                 <span className="hsv-label">X</span>
                 <input
@@ -514,6 +762,81 @@ export function GameDataPanel() {
                 />
                 <span className="hsv-val">
                   {Math.round(light2dAmbient * 100)}%
+                </span>
+              </label>
+              <label className="hsv-row">
+                <span className="hsv-label">S</span>
+                <input
+                  type="range"
+                  className="hsv-range"
+                  min={0}
+                  max={150}
+                  value={Math.round(light2dSpecular * 100)}
+                  onChange={(e) =>
+                    setLight2d({ specular: Number(e.target.value) / 100 })
+                  }
+                />
+                <span className="hsv-val">{light2dSpecular.toFixed(1)}</span>
+              </label>
+              <label className="hsv-row">
+                <span className="hsv-label">Sh</span>
+                <input
+                  type="range"
+                  className="hsv-range"
+                  min={4}
+                  max={128}
+                  value={light2dShininess}
+                  onChange={(e) =>
+                    setLight2d({ shininess: Number(e.target.value) })
+                  }
+                />
+                <span className="hsv-val">{light2dShininess}</span>
+              </label>
+              <label className="hsv-row">
+                <span className="hsv-label">H</span>
+                <input
+                  type="range"
+                  className="hsv-range"
+                  min={0}
+                  max={100}
+                  value={Math.round(light2dHeightScale * 100)}
+                  onChange={(e) =>
+                    setLight2d({ heightScale: Number(e.target.value) / 100 })
+                  }
+                />
+                <span className="hsv-val">
+                  {Math.round(light2dHeightScale * 100)}%
+                </span>
+              </label>
+              <label className="hsv-row">
+                <span className="hsv-label">AO</span>
+                <input
+                  type="range"
+                  className="hsv-range"
+                  min={0}
+                  max={100}
+                  value={Math.round(light2dAo * 100)}
+                  onChange={(e) =>
+                    setLight2d({ ao: Number(e.target.value) / 100 })
+                  }
+                />
+                <span className="hsv-val">{Math.round(light2dAo * 100)}%</span>
+              </label>
+              <label className="hsv-row">
+                <span className="hsv-label">Cel</span>
+                <input
+                  type="range"
+                  className="hsv-range"
+                  min={0}
+                  max={6}
+                  step={1}
+                  value={light2dCelSteps}
+                  onChange={(e) =>
+                    setLight2d({ celSteps: Number(e.target.value) })
+                  }
+                />
+                <span className="hsv-val">
+                  {light2dCelSteps < 2 ? "Off" : `${light2dCelSteps}`}
                 </span>
               </label>
               <label className="hsv-row">

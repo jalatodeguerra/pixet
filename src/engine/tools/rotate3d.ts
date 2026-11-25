@@ -17,6 +17,8 @@ import { scale2xEPX } from "./rotsprite.ts";
 export type Rotate3DMode = "extruded" | "stack";
 export type SpinAxis = "yaw" | "pitch" | "roll";
 export type DepthProfile = "slab" | "bevel" | "pillow" | "heightmap";
+export type Render3DPass = "lit" | "normal" | "height" | "depth";
+export type Light3DType = "point" | "spot" | "sun";
 
 export interface Rotate25DOptions {
   pitchDeg: number;
@@ -32,13 +34,36 @@ export interface Rotate25DOptions {
   autoFitBounds?: boolean;
   depthProfile?: DepthProfile;
   heightMap?: PixelBuffer | null;
+  normalMap?: PixelBuffer | null;
   directionalLighting?: boolean;
   lightAzimuthDeg?: number;
   lightElevationDeg?: number;
+  lightType?: Light3DType;
+  lightPosition?: [number, number, number];
+  lightRadius?: number;
+  spotAngleDeg?: number;
+  spotSoftness?: number;
   ambient?: number;
   rimStrength?: number;
+  lightColor?: RGBA;
+  ambientColor?: RGBA;
+  lightIntensity?: number;
+  specularStrength?: number;
+  shininess?: number;
+  celSteps?: number;
+  rimColor?: RGBA;
+  renderPass?: Render3DPass;
+  normalConvention?: "opengl" | "directx";
+  depthInvert?: boolean;
   backSource?: PixelBuffer | null;
   mirrorBack?: boolean;
+  leftSideSource?: PixelBuffer | null;
+  rightSideSource?: PixelBuffer | null;
+  topSideSource?: PixelBuffer | null;
+  bottomSideSource?: PixelBuffer | null;
+  sideSource?: PixelBuffer | null;
+  sideColor?: RGBA | null;
+  mirrorRightFromLeft?: boolean;
   preScaleEPX?: boolean;
   cleanup?: PixelCleanupOptions | null;
 }
@@ -58,7 +83,21 @@ export interface SpriteStackOptions {
   directionalLighting?: boolean;
   lightAzimuthDeg?: number;
   lightElevationDeg?: number;
+  lightType?: Light3DType;
+  lightPosition?: [number, number, number];
+  lightRadius?: number;
+  spotAngleDeg?: number;
+  spotSoftness?: number;
   ambient?: number;
+  lightColor?: RGBA;
+  ambientColor?: RGBA;
+  lightIntensity?: number;
+  specularStrength?: number;
+  shininess?: number;
+  celSteps?: number;
+  renderPass?: Render3DPass;
+  normalConvention?: "opengl" | "directx";
+  depthInvert?: boolean;
   autoFitBounds?: boolean;
   cleanup?: PixelCleanupOptions | null;
 }
@@ -190,6 +229,36 @@ function degToRad(deg: number): number {
 
 function clampByte(v: number): number {
   return Math.max(0, Math.min(255, Math.round(v)));
+}
+
+interface OpaqueBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function computeOpaqueBounds(buf: PixelBuffer): OpaqueBounds | null {
+  const w = buf.width;
+  const h = buf.height;
+  const data = buf.data;
+  let minX = w;
+  let maxX = -1;
+  let minY = h;
+  let maxY = -1;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      if (data[(row + x) * 4 + 3] > 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) return null;
+  return { minX, maxX, minY, maxY };
 }
 
 /**
@@ -361,6 +430,10 @@ interface HitSample {
   b: number;
   a: number;
   t: number;
+  wnx: number;
+  wny: number;
+  wnz: number;
+  normHeight: number;
 }
 
 /**
@@ -423,13 +496,45 @@ export function render25DSprite(
       : rawHeightMap
     : null;
 
+  const rawNormalMap = opts.normalMap ?? null;
+  const sampleNormalMap = rawNormalMap
+    ? useEPX
+      ? scale2xEPX(rawNormalMap)
+      : rawNormalMap
+    : null;
+  const normalData = sampleNormalMap ? sampleNormalMap.data : null;
+  const normalW = sampleNormalMap ? sampleNormalMap.width : sw;
+  const normalH = sampleNormalMap ? sampleNormalMap.height : sh;
+
+  const sideLeft = opts.leftSideSource ?? null;
+  const sideRight =
+    opts.rightSideSource ?? (opts.mirrorRightFromLeft ? sideLeft : null);
+  const sideTop = opts.topSideSource ?? null;
+  const sideBottom = opts.bottomSideSource ?? null;
+  const sideGeneric = opts.sideSource ?? null;
+  const sideColor =
+    opts.sideColor && opts.sideColor[3] > 0 ? opts.sideColor : null;
+  const hasCustomSides = Boolean(
+    depth > 0 &&
+      (sideLeft || sideRight || sideTop || sideBottom || sideGeneric || sideColor)
+  );
+  const boundsCache = new WeakMap<PixelBuffer, OpaqueBounds | null>();
+  const getSideBounds = (buf: PixelBuffer): OpaqueBounds | null => {
+    if (boundsCache.has(buf)) return boundsCache.get(buf) ?? null;
+    const b = computeOpaqueBounds(buf);
+    boundsCache.set(buf, b);
+    return b;
+  };
+
+  const renderPass: Render3DPass = opts.renderPass ?? "lit";
   const depthProfile: DepthProfile = opts.depthProfile ?? "slab";
   const useDirectional = opts.directionalLighting === true;
   const rimStrength = Math.max(0, Math.min(1, opts.rimStrength ?? 0));
   const needsLighting = useDirectional || rimStrength > 0;
   const needsThickness =
     (depth > 0 && depthProfile !== "slab") ||
-    (needsLighting && depthProfile !== "slab");
+    (needsLighting && depthProfile !== "slab") ||
+    (renderPass === "height" && depthProfile !== "slab");
   const thicknessMap = needsThickness
     ? buildThicknessMap(
         sampleSrc,
@@ -447,7 +552,36 @@ export function render25DSprite(
   const lightX = Math.sin(lightAz) * cosEl;
   const lightY = -Math.sin(lightEl);
   const lightZ = Math.cos(lightAz) * cosEl;
-  const ambient = Math.max(0.1, Math.min(1, opts.ambient ?? 0.45));
+  const has3DLight = Array.isArray(opts.lightPosition);
+  const lightPosX = has3DLight ? opts.lightPosition![0] : 0;
+  const lightPosY = has3DLight ? opts.lightPosition![1] : 0;
+  const lightPosZ = has3DLight ? opts.lightPosition![2] : 0;
+  const light3DType: Light3DType = opts.lightType ?? (has3DLight ? "point" : "sun");
+  const lightRadius = Math.max(4, opts.lightRadius ?? 36);
+  const spotHalfRad = degToRad(Math.max(5, Math.min(170, opts.spotAngleDeg ?? 55)) * 0.5);
+  const spotOuterCos = Math.cos(spotHalfRad);
+  const spotInnerCos = Math.cos(
+    spotHalfRad * (1 - Math.max(0, Math.min(0.95, opts.spotSoftness ?? 0.35)))
+  );
+  const viewLocal = has3DLight ? mat3TransposeMulVec(R, 0, 0, 1) : ([0, 0, 1] as [number, number, number]);
+  const sunDirLen = has3DLight ? Math.hypot(lightPosX, lightPosY, lightPosZ) : 1;
+  const sunLx = sunDirLen > 1e-4 ? lightPosX / sunDirLen : 0;
+  const sunLy = sunDirLen > 1e-4 ? lightPosY / sunDirLen : -0.6;
+  const sunLz = sunDirLen > 1e-4 ? lightPosZ / sunDirLen : 0.8;
+  const spotAimLen = has3DLight ? Math.hypot(lightPosX, lightPosY, lightPosZ) : 1;
+  const spotAimX = spotAimLen > 1e-4 ? -lightPosX / spotAimLen : 0;
+  const spotAimY = spotAimLen > 1e-4 ? -lightPosY / spotAimLen : 0;
+  const spotAimZ = spotAimLen > 1e-4 ? -lightPosZ / spotAimLen : -1;
+  const ambient = Math.max(0.05, Math.min(1, opts.ambient ?? 0.45));
+  const lightIntensity = Math.max(0, opts.lightIntensity ?? 1.0);
+  const lightCol = opts.lightColor ?? [255, 255, 255, 255];
+  const ambCol = opts.ambientColor ?? [255, 255, 255, 255];
+  const rimCol = opts.rimColor ?? [255, 255, 255, 255];
+  const specStrength = Math.max(0, opts.specularStrength ?? 0);
+  const shininess = Math.max(4, Math.min(128, opts.shininess ?? 24));
+  const celSteps = opts.celSteps && opts.celSteps >= 2 ? Math.round(opts.celSteps) : 0;
+  const normalYSign = opts.normalConvention === "directx" ? 1 : -1;
+  const depthInvert = opts.depthInvert === true;
 
   // Tight 2D opaque bounding box in sampleSrc space (shared by Ray-AABB and autoFitBounds)
   let minU = sw;
@@ -636,17 +770,84 @@ export function render25DSprite(
     return { u, v, r: baseR, g: baseG, b: baseB, a: alpha, effectiveT };
   };
 
+  const sampleSideWallColor = (
+    nlx: number,
+    nly: number,
+    hit: SolidSample,
+    hitLz: number
+  ): [number, number, number] | null => {
+    if (depth <= 0) return null;
+    const tz = Math.max(0, Math.min(1, (halfDepth - hitLz) / depth));
+    if (Math.abs(nlx) >= Math.abs(nly)) {
+      const buf = (nlx < 0 ? sideLeft : sideRight) ?? sideGeneric;
+      if (buf) {
+        const bounds = getSideBounds(buf);
+        if (bounds) {
+          const uT = nlx < 0 ? tz : 1 - tz;
+          const su = Math.round(bounds.minX + uT * (bounds.maxX - bounds.minX));
+          const sv = Math.max(
+            0,
+            Math.min(buf.height - 1, Math.floor((hit.v * buf.height) / sh))
+          );
+          const sIdx = (sv * buf.width + su) * 4;
+          if (buf.data[sIdx + 3] > 0) {
+            return [buf.data[sIdx], buf.data[sIdx + 1], buf.data[sIdx + 2]];
+          }
+        }
+      }
+    } else {
+      const buf = (nly < 0 ? sideTop : sideBottom) ?? sideGeneric;
+      if (buf) {
+        const bounds = getSideBounds(buf);
+        if (bounds) {
+          const vT = nly < 0 ? tz : 1 - tz;
+          const su = Math.max(
+            0,
+            Math.min(buf.width - 1, Math.floor((hit.u * buf.width) / sw))
+          );
+          const sv = Math.round(bounds.minY + vT * (bounds.maxY - bounds.minY));
+          const sIdx = (sv * buf.width + su) * 4;
+          if (buf.data[sIdx + 3] > 0) {
+            return [buf.data[sIdx], buf.data[sIdx + 1], buf.data[sIdx + 2]];
+          }
+        }
+      }
+    }
+    if (sideColor) {
+      return [sideColor[0], sideColor[1], sideColor[2]];
+    }
+    return null;
+  };
+
   const shadeHit = (
     hit: SolidSample,
+    hitLx: number,
+    hitLy: number,
     hitLz: number,
     isSideWall: boolean,
     dx: number,
     dy: number,
     t: number
   ): HitSample => {
-    let shade = 1;
+    let baseR = hit.r;
+    let baseG = hit.g;
+    let baseB = hit.b;
+    let shadeR = 1;
+    let shadeG = 1;
+    let shadeB = 1;
+    let specAddR = 0;
+    let specAddG = 0;
+    let specAddB = 0;
     let rim = 0;
-    const needNormal = (opts.shadeDepth && depth > 0) || needsLighting;
+
+    let wnx = 0;
+    let wny = 0;
+    let wnz = 1;
+    const needNormal =
+      (opts.shadeDepth && depth > 0) ||
+      needsLighting ||
+      renderPass === "normal" ||
+      (isSideWall && hasCustomSides);
 
     if (needNormal) {
       let nlx = 0;
@@ -676,6 +877,38 @@ export function render25DSprite(
         }
       }
 
+      if (isSideWall && hasCustomSides) {
+        const customSide = sampleSideWallColor(nlx, nly, hit, hitLz);
+        if (customSide) {
+          baseR = customSide[0];
+          baseG = customSide[1];
+          baseB = customSide[2];
+        }
+      }
+
+      // Optional tangent-space normal map perturbation on front/back faces
+      if (normalData && !isSideWall) {
+        const nu =
+          normalW === sw
+            ? hit.u
+            : Math.min(normalW - 1, Math.floor((hit.u * normalW) / sw));
+        const nv =
+          normalH === sh
+            ? hit.v
+            : Math.min(normalH - 1, Math.floor((hit.v * normalH) / sh));
+        const nIdx = (nv * normalW + nu) * 4;
+        if (normalData[nIdx + 3] > 0) {
+          const tnx = (normalData[nIdx] / 255) * 2 - 1;
+          const tnyUp = (normalData[nIdx + 1] / 255) * 2 - 1;
+          const tnz = (normalData[nIdx + 2] / 255) * 2 - 1;
+          // Tangent +Y up maps to local -Y down; flip Z on back face
+          const zSign = nlz >= 0 ? 1 : -1;
+          nlx += tnx;
+          nly += -tnyUp;
+          nlz = zSign * Math.max(0.05, tnz);
+        }
+      }
+
       const rawSlope = Math.hypot(nlx, nly);
       const nLen = Math.hypot(nlx, nly, nlz);
       if (nLen > 1e-6) {
@@ -688,50 +921,144 @@ export function render25DSprite(
         nlz = depth === 0 ? (facingZ >= 0 ? 1 : -1) : hitLz >= 0 ? 1 : -1;
       }
 
-      const [wnx, wny, wnz] = mat3MulVec(R, nlx, nly, nlz);
+      const wVec = mat3MulVec(R, nlx, nly, nlz);
+      wnx = wVec[0];
+      wny = wVec[1];
+      wnz = wVec[2];
 
-      if (opts.shadeDepth && depth > 0) {
-        const depthT = Math.max(
-          0,
-          Math.min(1, (facingZ >= 0 ? hitLz + halfDepth : halfDepth - hitLz) / depth)
-        );
-        const sideCue =
-          0.74 +
-          0.26 * Math.max(0, 0.4 * -wny + 0.55 * Math.abs(wnz) + 0.2 * -wnx);
+      if (renderPass === "lit") {
+        let depthShade = 1;
+        if (opts.shadeDepth && depth > 0) {
+          const depthT = Math.max(
+            0,
+            Math.min(1, (facingZ >= 0 ? hitLz + halfDepth : halfDepth - hitLz) / depth)
+          );
+          const sideCue =
+            0.74 +
+            0.26 * Math.max(0, 0.4 * -wny + 0.55 * Math.abs(wnz) + 0.2 * -wnx);
 
-        if (depthProfile === "slab") {
-          if (isSideWall) {
-            shade = (0.76 + 0.14 * depthT) * sideCue;
+          if (depthProfile === "slab") {
+            if (isSideWall) {
+              depthShade = (0.76 + 0.14 * depthT) * sideCue;
+            }
+          } else {
+            const sideFactor = isSideWall
+              ? Math.max(0.55, Math.min(1, rawSlope))
+              : Math.min(1, rawSlope);
+            const sideShade = (0.78 + 0.14 * depthT) * sideCue;
+            depthShade = 1 - sideFactor * (1 - sideShade);
+          }
+        }
+
+        if (useDirectional) {
+          let diffuse: number;
+          let atten = 1;
+          let spec = 0;
+
+          if (has3DLight) {
+            let lx: number;
+            let ly: number;
+            let lz: number;
+            if (light3DType === "sun") {
+              lx = sunLx;
+              ly = sunLy;
+              lz = sunLz;
+            } else {
+              const dxL = lightPosX - hitLx;
+              const dyL = lightPosY - hitLy;
+              const dzL = lightPosZ - hitLz;
+              const dist = Math.max(1e-3, Math.hypot(dxL, dyL, dzL));
+              lx = dxL / dist;
+              ly = dyL / dist;
+              lz = dzL / dist;
+              const rNorm = dist / lightRadius;
+              atten = 1 / (1 + rNorm * rNorm * 0.65);
+
+              if (light3DType === "spot") {
+                const cosAngle = -(lx * spotAimX + ly * spotAimY + lz * spotAimZ);
+                if (cosAngle <= spotOuterCos) {
+                  atten = 0;
+                } else if (cosAngle < spotInnerCos) {
+                  const u = (cosAngle - spotOuterCos) / Math.max(1e-4, spotInnerCos - spotOuterCos);
+                  atten *= u * u * (3 - 2 * u);
+                }
+              }
+            }
+
+            diffuse = Math.max(0, nlx * lx + nly * ly + nlz * lz);
+            if (celSteps >= 2) {
+              diffuse = Math.round(diffuse * (celSteps - 1)) / (celSteps - 1);
+            }
+            if (specStrength > 0 && diffuse > 0 && atten > 0) {
+              const hx = lx + viewLocal[0];
+              const hy = ly + viewLocal[1];
+              const hz = lz + viewLocal[2];
+              const hInv = 1 / Math.max(1e-5, Math.hypot(hx, hy, hz));
+              const ndoth = Math.max(0, (nlx * hx + nly * hy + nlz * hz) * hInv);
+              spec = Math.pow(ndoth, shininess) * specStrength * lightIntensity * atten;
+            }
+          } else {
+            diffuse = Math.max(0, wnx * lightX + wny * lightY + wnz * lightZ);
+            if (celSteps >= 2) {
+              diffuse = Math.round(diffuse * (celSteps - 1)) / (celSteps - 1);
+            }
+            if (specStrength > 0 && diffuse > 0) {
+              const hx = lightX;
+              const hy = lightY;
+              const hz = lightZ + 1;
+              const hInv = 1 / Math.hypot(hx, hy, hz);
+              const ndoth = Math.max(0, (wnx * hx + wny * hy + wnz * hz) * hInv);
+              spec = Math.pow(ndoth, shininess) * specStrength * lightIntensity;
+            }
+          }
+
+          const lr = lightCol[0] / 255;
+          const lg = lightCol[1] / 255;
+          const lb = lightCol[2] / 255;
+          const ar = ambCol[0] / 255;
+          const ag = ambCol[1] / 255;
+          const ab = ambCol[2] / 255;
+          const diffTerm = (1 - ambient) * diffuse * lightIntensity * atten;
+          shadeR = depthShade * (ambient * ar + diffTerm * lr);
+          shadeG = depthShade * (ambient * ag + diffTerm * lg);
+          shadeB = depthShade * (ambient * ab + diffTerm * lb);
+
+          if (spec > 0) {
+            specAddR = lightCol[0] * spec;
+            specAddG = lightCol[1] * spec;
+            specAddB = lightCol[2] * spec;
           }
         } else {
-          const sideFactor = isSideWall
-            ? Math.max(0.55, Math.min(1, rawSlope))
-            : Math.min(1, rawSlope);
-          const sideShade = (0.78 + 0.14 * depthT) * sideCue;
-          shade = 1 - sideFactor * (1 - sideShade);
+          shadeR = depthShade;
+          shadeG = depthShade;
+          shadeB = depthShade;
         }
-      }
 
-      if (useDirectional) {
-        const diffuse = Math.max(0, wnx * lightX + wny * lightY + wnz * lightZ);
-        shade *= ambient + (1 - ambient) * diffuse;
-      }
-      if (rimStrength > 0) {
-        const grazing = 1 - Math.abs(wnz);
-        rim = rimStrength * grazing * grazing;
+        if (rimStrength > 0) {
+          const grazing = 1 - Math.abs(wnz);
+          rim = rimStrength * grazing * grazing;
+        }
       }
     }
 
-    const litR = hit.r * shade;
-    const litG = hit.g * shade;
-    const litB = hit.b * shade;
+    const normHeight = thicknessMap
+      ? hit.effectiveT
+      : (0.2126 * baseR + 0.7152 * baseG + 0.0722 * baseB) / 255;
+
+    const litR = baseR * shadeR + specAddR;
+    const litG = baseG * shadeG + specAddG;
+    const litB = baseB * shadeB + specAddB;
 
     return {
-      r: clampByte(rim > 0 ? litR + (255 - litR) * rim : litR),
-      g: clampByte(rim > 0 ? litG + (255 - litG) * rim : litG),
-      b: clampByte(rim > 0 ? litB + (255 - litB) * rim : litB),
+      r: clampByte(rim > 0 ? litR + (rimCol[0] - litR) * rim : litR),
+      g: clampByte(rim > 0 ? litG + (rimCol[1] - litG) * rim : litG),
+      b: clampByte(rim > 0 ? litB + (rimCol[2] - litB) * rim : litB),
       a: hit.a,
       t,
+      wnx,
+      wny,
+      wnz,
+      normHeight,
     };
   };
 
@@ -779,9 +1106,11 @@ export function render25DSprite(
       if (Math.abs(dz) < 1e-5) return null;
       const t = -oz / dz;
       if (t <= 0) return null;
-      const hit = sampleSolidAt(ox + t * dx, oy + t * dy, 0);
+      const hitLx = ox + t * dx;
+      const hitLy = oy + t * dy;
+      const hit = sampleSolidAt(hitLx, hitLy, 0);
       if (!hit) return null;
-      return shadeHit(hit, 0, false, dx, dy, t);
+      return shadeHit(hit, hitLx, hitLy, 0, false, dx, dy, t);
     }
 
     // Ray-AABB slab intersection against tight 3D bounds
@@ -879,6 +1208,8 @@ export function render25DSprite(
           }
           prevLz = oz + lo * dz;
         }
+        const hitLx = ox + bestT * dx;
+        const hitLy = oy + bestT * dy;
         const hitLz = oz + bestT * dz;
         const isSideWall =
           depthProfile === "slab"
@@ -886,7 +1217,7 @@ export function render25DSprite(
               (stepIdx > 0 && Math.abs(prevLz) <= halfDepth - 1e-3)
             : (stepIdx === 0 && enterAxis !== 2) ||
               Math.abs(hitLz) < halfDepth * 0.85;
-        return shadeHit(bestSolid, hitLz, isSideWall, dx, dy, bestT);
+        return shadeHit(bestSolid, hitLx, hitLy, hitLz, isSideWall, dx, dy, bestT);
       }
 
       if (t >= tExit) break;
@@ -897,6 +1228,10 @@ export function render25DSprite(
 
     return null;
   };
+
+  const depthBuffer = renderPass === "depth" ? new Float32Array(w * h) : null;
+  let minHitT = Infinity;
+  let maxHitT = -Infinity;
 
   for (let py = 0; py < h; py++) {
     for (let px = 0; px < w; px++) {
@@ -911,16 +1246,53 @@ export function render25DSprite(
       }
 
       if (bestHit) {
-        const oIdx = (py * w + px) * 4;
-        outData[oIdx] = bestHit.r;
-        outData[oIdx + 1] = bestHit.g;
-        outData[oIdx + 2] = bestHit.b;
-        outData[oIdx + 3] = bestHit.a;
+        const pIdx = py * w + px;
+        const oIdx = pIdx * 4;
+        if (renderPass === "normal") {
+          outData[oIdx] = clampByte((bestHit.wnx * 0.5 + 0.5) * 255);
+          outData[oIdx + 1] = clampByte((bestHit.wny * normalYSign * 0.5 + 0.5) * 255);
+          outData[oIdx + 2] = clampByte((bestHit.wnz * 0.5 + 0.5) * 255);
+          outData[oIdx + 3] = bestHit.a;
+        } else if (renderPass === "height") {
+          const hv = clampByte(bestHit.normHeight * 255);
+          outData[oIdx] = hv;
+          outData[oIdx + 1] = hv;
+          outData[oIdx + 2] = hv;
+          outData[oIdx + 3] = bestHit.a;
+        } else if (renderPass === "depth" && depthBuffer) {
+          depthBuffer[pIdx] = bestHit.t;
+          if (bestHit.t < minHitT) minHitT = bestHit.t;
+          if (bestHit.t > maxHitT) maxHitT = bestHit.t;
+          outData[oIdx + 3] = bestHit.a;
+        } else {
+          outData[oIdx] = bestHit.r;
+          outData[oIdx + 1] = bestHit.g;
+          outData[oIdx + 2] = bestHit.b;
+          outData[oIdx + 3] = bestHit.a;
+        }
       }
     }
   }
 
+  if (renderPass === "depth" && depthBuffer && maxHitT >= minHitT) {
+    const span = maxHitT - minHitT;
+    for (let i = 0; i < w * h; i++) {
+      const oIdx = i * 4;
+      if (outData[oIdx + 3] === 0) continue;
+      let norm = span > 1e-4 ? (maxHitT - depthBuffer[i]) / span : 0.5;
+      if (depthInvert) norm = 1 - norm;
+      const dv = clampByte(norm * 255);
+      outData[oIdx] = dv;
+      outData[oIdx + 1] = dv;
+      outData[oIdx + 2] = dv;
+    }
+  }
+
   out.markAllDirty();
+
+  if (renderPass !== "lit") {
+    return out;
+  }
 
   let result = out;
   if (opts.cleanup && hasPixelCleanup(opts.cleanup)) {
@@ -998,6 +1370,7 @@ export function renderSpriteStack(
   const camDist = maxDim * (2.6 - 1.5 * persp);
 
   const reverseOrder = opts.reverseOrder === true;
+  const renderPass: Render3DPass = opts.renderPass ?? "lit";
   const useDirectional = opts.directionalLighting === true;
   const lightAz = degToRad(opts.lightAzimuthDeg ?? -35);
   const lightEl = degToRad(opts.lightElevationDeg ?? 45);
@@ -1005,7 +1378,34 @@ export function renderSpriteStack(
   const lightX = Math.sin(lightAz) * cosEl;
   const lightY = -Math.sin(lightEl);
   const lightZ = Math.cos(lightAz) * cosEl;
-  const ambient = Math.max(0.1, Math.min(1, opts.ambient ?? 0.45));
+  const has3DLight = Array.isArray(opts.lightPosition);
+  const lightPosX = has3DLight ? opts.lightPosition![0] : 0;
+  const lightPosY = has3DLight ? opts.lightPosition![1] : 0;
+  const lightPosZ = has3DLight ? opts.lightPosition![2] : 0;
+  const light3DType: Light3DType = opts.lightType ?? (has3DLight ? "point" : "sun");
+  const lightRadius = Math.max(4, opts.lightRadius ?? 36);
+  const spotHalfRad = degToRad(Math.max(5, Math.min(170, opts.spotAngleDeg ?? 55)) * 0.5);
+  const spotOuterCos = Math.cos(spotHalfRad);
+  const spotInnerCos = Math.cos(
+    spotHalfRad * (1 - Math.max(0, Math.min(0.95, opts.spotSoftness ?? 0.35)))
+  );
+  const sunDirLen = has3DLight ? Math.hypot(lightPosX, lightPosY, lightPosZ) : 1;
+  const sunLx = sunDirLen > 1e-4 ? lightPosX / sunDirLen : 0;
+  const sunLy = sunDirLen > 1e-4 ? lightPosY / sunDirLen : -0.6;
+  const sunLz = sunDirLen > 1e-4 ? lightPosZ / sunDirLen : 0.8;
+  const spotAimLen = has3DLight ? Math.hypot(lightPosX, lightPosY, lightPosZ) : 1;
+  const spotAimX = spotAimLen > 1e-4 ? -lightPosX / spotAimLen : 0;
+  const spotAimY = spotAimLen > 1e-4 ? -lightPosY / spotAimLen : 0;
+  const spotAimZ = spotAimLen > 1e-4 ? -lightPosZ / spotAimLen : -1;
+  const ambient = Math.max(0.05, Math.min(1, opts.ambient ?? 0.45));
+  const lightIntensity = Math.max(0, opts.lightIntensity ?? 1.0);
+  const lightCol = opts.lightColor ?? [255, 255, 255, 255];
+  const ambCol = opts.ambientColor ?? [255, 255, 255, 255];
+  const specStrength = Math.max(0, opts.specularStrength ?? 0);
+  const shininess = Math.max(4, Math.min(128, opts.shininess ?? 24));
+  const celSteps = opts.celSteps && opts.celSteps >= 2 ? Math.round(opts.celSteps) : 0;
+  const normalYSign = opts.normalConvention === "directx" ? 1 : -1;
+  const depthInvert = opts.depthInvert === true;
 
   // Optional auto-fit bounds: project 3D AABB of all opaque slice pixels
   const useAutoFit = opts.autoFitBounds === true;
@@ -1092,14 +1492,80 @@ export function renderSpriteStack(
   const topWnx = hasRoll ? spitch * sroll : 0;
   const topWny = hasRoll ? -spitch * croll : -spitch;
   const topWnz = cpitch;
-  const topDiffuse = Math.max(
-    0,
-    topWnx * lightX + topWny * lightY + topWnz * lightZ
-  );
-  const topLitShade = ambient + (1 - ambient) * topDiffuse;
 
   const outData = out.data;
   const maxSliceIdx = Math.max(1, slices.length - 1);
+  const depthBuffer = renderPass === "depth" ? new Float32Array(w * h) : null;
+  const lr = lightCol[0] / 255;
+  const lg = lightCol[1] / 255;
+  const lb = lightCol[2] / 255;
+  const ar = ambCol[0] / 255;
+  const ag = ambCol[1] / 255;
+  const ab = ambCol[2] / 255;
+
+  const computeStackLighting = (
+    wnx: number,
+    wny: number,
+    wnz: number,
+    worldPosX: number,
+    worldPosY: number,
+    worldPosZ: number,
+    baseShade: number
+  ): { sr: number; sg: number; sb: number; sp: number } => {
+    let lx = lightX;
+    let ly = lightY;
+    let lz = lightZ;
+    let atten = 1;
+
+    if (has3DLight) {
+      if (light3DType === "sun") {
+        lx = sunLx;
+        ly = sunLy;
+        lz = sunLz;
+      } else {
+        const dxL = lightPosX - worldPosX;
+        const dyL = lightPosY - worldPosY;
+        const dzL = lightPosZ - worldPosZ;
+        const dist = Math.max(1e-3, Math.hypot(dxL, dyL, dzL));
+        lx = dxL / dist;
+        ly = dyL / dist;
+        lz = dzL / dist;
+        const rNorm = dist / lightRadius;
+        atten = 1 / (1 + rNorm * rNorm * 0.65);
+
+        if (light3DType === "spot") {
+          const cosAngle = -(lx * spotAimX + ly * spotAimY + lz * spotAimZ);
+          if (cosAngle <= spotOuterCos) {
+            atten = 0;
+          } else if (cosAngle < spotInnerCos) {
+            const u = (cosAngle - spotOuterCos) / Math.max(1e-4, spotInnerCos - spotOuterCos);
+            atten *= u * u * (3 - 2 * u);
+          }
+        }
+      }
+    }
+
+    let diffuse = Math.max(0, wnx * lx + wny * ly + wnz * lz);
+    if (celSteps >= 2) {
+      diffuse = Math.round(diffuse * (celSteps - 1)) / (celSteps - 1);
+    }
+    const diffTerm = (1 - ambient) * diffuse * lightIntensity * atten;
+    let sp = 0;
+    if (specStrength > 0 && diffuse > 0 && atten > 0) {
+      const hx = lx;
+      const hy = ly;
+      const hz = lz + 1;
+      const hInv = 1 / Math.hypot(hx, hy, hz);
+      const ndoth = Math.max(0, (wnx * hx + wny * hy + wnz * hz) * hInv);
+      sp = Math.pow(ndoth, shininess) * specStrength * lightIntensity * atten;
+    }
+    return {
+      sr: baseShade * (ambient * ar + diffTerm * lr),
+      sg: baseShade * (ambient * ag + diffTerm * lg),
+      sb: baseShade * (ambient * ab + diffTerm * lb),
+      sp,
+    };
+  };
 
   for (let sIdx = 0; sIdx < slices.length; sIdx++) {
     const srcSliceIdx = reverseOrder ? slices.length - 1 - sIdx : sIdx;
@@ -1144,56 +1610,95 @@ export function renderSpriteStack(
           const alpha = srcData[pIdx + 3];
           if (alpha === 0) continue;
 
-          let shade = baseShade;
-          if (useDirectional) {
-            if (isTopMost) {
-              shade *= topLitShade;
-            } else {
-              // Extruded side silhouette normal in local slice space
-              const aL = u > 0 && srcData[(v * sw + (u - 1)) * 4 + 3] > 0 ? 1 : 0;
-              const aR =
-                u + 1 < sw && srcData[(v * sw + (u + 1)) * 4 + 3] > 0 ? 1 : 0;
-              const aU =
-                v > 0 && srcData[((v - 1) * sw + u) * 4 + 3] > 0 ? 1 : 0;
-              const aD =
-                v + 1 < sh && srcData[((v + 1) * sw + u) * 4 + 3] > 0 ? 1 : 0;
-              const nlx = -(aR - aL);
-              const nly = -(aD - aU);
+          const oPix = py * w + px;
+          const oIdx = oPix * 4;
 
-              if (nlx === 0 && nly === 0) {
-                shade *= topLitShade;
-              } else {
-                const nLen = Math.hypot(nlx, nly);
-                const ux = nlx / nLen;
-                const uy = nly / nLen;
-                // Forward rotate normal: yaw -> pitch -> roll
-                const nx1 = ux * cyaw - uy * syaw;
-                const ny1 = ux * syaw + uy * cyaw;
-                const ny2 = ny1 * cpitch;
-                const nz2 = ny1 * spitch;
-                const wnx = hasRoll ? nx1 * croll - ny2 * sroll : nx1;
-                const wny = hasRoll ? nx1 * sroll + ny2 * croll : ny2;
-                const wnz = nz2;
-                const diffuse = Math.max(
-                  0,
-                  wnx * lightX + wny * lightY + wnz * lightZ
-                );
-                shade *= ambient + (1 - ambient) * diffuse;
-              }
+          let wnx = topWnx;
+          let wny = topWny;
+          let wnz = topWnz;
+          if (!isTopMost && (useDirectional || renderPass === "normal")) {
+            const aL = u > 0 && srcData[(v * sw + (u - 1)) * 4 + 3] > 0 ? 1 : 0;
+            const aR =
+              u + 1 < sw && srcData[(v * sw + (u + 1)) * 4 + 3] > 0 ? 1 : 0;
+            const aU =
+              v > 0 && srcData[((v - 1) * sw + u) * 4 + 3] > 0 ? 1 : 0;
+            const aD =
+              v + 1 < sh && srcData[((v + 1) * sw + u) * 4 + 3] > 0 ? 1 : 0;
+            const nlx = -(aR - aL);
+            const nly = -(aD - aU);
+            if (nlx !== 0 || nly !== 0) {
+              const nLen = Math.hypot(nlx, nly);
+              const ux = nlx / nLen;
+              const uy = nly / nLen;
+              const nx1 = ux * cyaw - uy * syaw;
+              const ny1 = ux * syaw + uy * cyaw;
+              const ny2 = ny1 * cpitch;
+              const nz2 = ny1 * spitch;
+              wnx = hasRoll ? nx1 * croll - ny2 * sroll : nx1;
+              wny = hasRoll ? nx1 * sroll + ny2 * croll : ny2;
+              wnz = nz2;
             }
           }
 
-          const oIdx = (py * w + px) * 4;
-          outData[oIdx] = clampByte(srcData[pIdx] * shade);
-          outData[oIdx + 1] = clampByte(srcData[pIdx + 1] * shade);
-          outData[oIdx + 2] = clampByte(srcData[pIdx + 2] * shade);
-          outData[oIdx + 3] = alpha;
+          if (renderPass === "normal") {
+            outData[oIdx] = clampByte((wnx * 0.5 + 0.5) * 255);
+            outData[oIdx + 1] = clampByte((wny * normalYSign * 0.5 + 0.5) * 255);
+            outData[oIdx + 2] = clampByte((wnz * 0.5 + 0.5) * 255);
+            outData[oIdx + 3] = alpha;
+          } else if (renderPass === "height") {
+            const hv = clampByte((sIdx / maxSliceIdx) * 255);
+            outData[oIdx] = hv;
+            outData[oIdx + 1] = hv;
+            outData[oIdx + 2] = hv;
+            outData[oIdx + 3] = alpha;
+          } else if (renderPass === "depth" && depthBuffer) {
+            // Camera-space depth: higher zDepth + lower sy (closer to viewer) is nearer
+            depthBuffer[oPix] = zDepth + sy * spitch;
+            outData[oIdx + 3] = alpha;
+          } else if (useDirectional) {
+            const lit = computeStackLighting(wnx, wny, wnz, x3, y3, zDepth, baseShade);
+            outData[oIdx] = clampByte(srcData[pIdx] * lit.sr + lightCol[0] * lit.sp);
+            outData[oIdx + 1] = clampByte(srcData[pIdx + 1] * lit.sg + lightCol[1] * lit.sp);
+            outData[oIdx + 2] = clampByte(srcData[pIdx + 2] * lit.sb + lightCol[2] * lit.sp);
+            outData[oIdx + 3] = alpha;
+          } else {
+            outData[oIdx] = clampByte(srcData[pIdx] * baseShade);
+            outData[oIdx + 1] = clampByte(srcData[pIdx + 1] * baseShade);
+            outData[oIdx + 2] = clampByte(srcData[pIdx + 2] * baseShade);
+            outData[oIdx + 3] = alpha;
+          }
         }
       }
     }
   }
 
+  if (renderPass === "depth" && depthBuffer) {
+    let minD = Infinity;
+    let maxD = -Infinity;
+    for (let i = 0; i < w * h; i++) {
+      if (outData[i * 4 + 3] === 0) continue;
+      const d = depthBuffer[i];
+      if (d < minD) minD = d;
+      if (d > maxD) maxD = d;
+    }
+    const span = maxD - minD;
+    for (let i = 0; i < w * h; i++) {
+      const oIdx = i * 4;
+      if (outData[oIdx + 3] === 0) continue;
+      let norm = span > 1e-4 ? (depthBuffer[i] - minD) / span : 0.5;
+      if (depthInvert) norm = 1 - norm;
+      const dv = clampByte(norm * 255);
+      outData[oIdx] = dv;
+      outData[oIdx + 1] = dv;
+      outData[oIdx + 2] = dv;
+    }
+  }
+
   out.markAllDirty();
+
+  if (renderPass !== "lit") {
+    return out;
+  }
 
   let result = out;
   if (opts.cleanup && hasPixelCleanup(opts.cleanup)) {

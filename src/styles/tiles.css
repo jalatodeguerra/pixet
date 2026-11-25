@@ -225,7 +225,7 @@
 
 .tiles-edit-frame {
   position: relative;
-  border: 1px solid var(--border-strong);
+  outline: 1px solid var(--border-strong);
   background: #141414;
 }
 

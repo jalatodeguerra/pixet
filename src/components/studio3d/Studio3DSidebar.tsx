@@ -1,11 +1,18 @@
 import { useEffect, useMemo } from "react";
-import { Film, RotateCcw, Sparkles } from "lucide-react";
+import { Download, Film, Layers, Paintbrush, Plus, RotateCcw, Sparkles } from "lucide-react";
 import { pixelEngine } from "../../engine/document/PixelEngine";
+import type {
+  DepthMapMode,
+  HeightMapSource,
+  NormalConvention,
+} from "../../engine/gamedev/pbrMaps";
 import type { RigTurntableMode } from "../../engine/rig/export/bake";
 import {
   ROTATE3D_CAMERA_PRESETS,
   TURNTABLE_PRESETS,
   type DepthProfile,
+  type Light3DType,
+  type Render3DPass,
   type SpinAxis,
   type TurntableEasing,
   type TurntablePreset,
@@ -19,6 +26,11 @@ import {
   applyStudio3DCameraPreset,
   applyStudio3DToCurrentFrameAction,
   bakeStudio3DTurntableAction,
+  createCustom3DFaceLayerAction,
+  editCustom3DFaceLayerAction,
+  exportStudio3DPassPngAction,
+  generateAllStudio3DMapsAction,
+  generateStudio3DMapLayerAction,
 } from "./studio3dActions";
 
 const TURNTABLE_PRESET_LIST: readonly TurntablePreset[] = [
@@ -41,10 +53,6 @@ export function Studio3DSidebar() {
   const rigVersion = useEditorStore((s) => s.rigVersion);
   void rigVersion;
 
-  const visibleRasterLayers = useMemo(
-    () => layers.filter((l) => l.kind === "raster" && l.visible),
-    [layers]
-  );
   const allRasterLayers = useMemo(
     () => layers.filter((l) => l.kind === "raster"),
     [layers]
@@ -111,24 +119,160 @@ export function Studio3DSidebar() {
                   <option value="active">Active Layer Only</option>
                 </select>
               </label>
-              <label className="modal-field">
+              <div className="modal-field">
                 <span>Back-Face</span>
-                <select
-                  className="palette-select"
-                  value={studio3d.backFaceChoice}
+                <div style={{ display: "flex", gap: 4 }}>
+                  <select
+                    className="palette-select"
+                    style={{ flex: 1, minWidth: 0 }}
+                    value={studio3d.backFaceChoice}
+                    onChange={(e) =>
+                      patchStudio3D({ backFaceChoice: e.target.value })
+                    }
+                  >
+                    <option value="none">None</option>
+                    <option value="mirror">Mirror Front</option>
+                    {allRasterLayers.map((layer) => (
+                      <option key={layer.id} value={layer.id}>
+                        {layer.name}
+                        {layer.visible ? "" : " (hidden)"}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="icon-action-btn"
+                    title="Create new Back layer"
+                    onClick={() => createCustom3DFaceLayerAction("back")}
+                  >
+                    <Plus size={11} />
+                  </button>
+                  {allRasterLayers.some(
+                    (l) => l.id === studio3d.backFaceChoice
+                  ) && (
+                    <button
+                      type="button"
+                      className="icon-action-btn"
+                      title="Paint Back layer in Draw mode"
+                      onClick={() =>
+                        editCustom3DFaceLayerAction(studio3d.backFaceChoice)
+                      }
+                    >
+                      <Paintbrush size={11} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="rotate3d-subpanel" style={{ marginTop: 6 }}>
+              <div className="rotate3d-group-title" style={{ marginBottom: 4 }}>
+                <span>Custom Sides</span>
+                <input
+                  type="color"
+                  className="rotate3d-color-input"
+                  value={studio3d.sideColorHex}
+                  title="Solid Side Color"
                   onChange={(e) =>
-                    patchStudio3D({ backFaceChoice: e.target.value })
+                    patchStudio3D({ sideColorHex: e.target.value })
                   }
-                >
-                  <option value="none">None</option>
-                  <option value="mirror">Mirror Front</option>
-                  {visibleRasterLayers.map((layer) => (
-                    <option key={layer.id} value={layer.id}>
-                      {layer.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                />
+              </div>
+
+              {(
+                [
+                  {
+                    key: "left",
+                    label: "Left",
+                    value: studio3d.leftSideChoice,
+                    field: "leftSideChoice",
+                    allowMirrorLeft: false,
+                  },
+                  {
+                    key: "right",
+                    label: "Right",
+                    value: studio3d.rightSideChoice,
+                    field: "rightSideChoice",
+                    allowMirrorLeft: true,
+                  },
+                  {
+                    key: "top",
+                    label: "Top",
+                    value: studio3d.topSideChoice,
+                    field: "topSideChoice",
+                    allowMirrorLeft: false,
+                  },
+                  {
+                    key: "bottom",
+                    label: "Bottom",
+                    value: studio3d.bottomSideChoice,
+                    field: "bottomSideChoice",
+                    allowMirrorLeft: false,
+                  },
+                ] as const
+              ).map((side) => {
+                const isLayer = allRasterLayers.some((l) => l.id === side.value);
+                return (
+                  <div
+                    key={side.key}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      marginBottom: 4,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 44,
+                        fontSize: 11,
+                        color: "var(--text-secondary)",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {side.label}
+                    </span>
+                    <select
+                      className="palette-select"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={side.value}
+                      onChange={(e) =>
+                        patchStudio3D({ [side.field]: e.target.value })
+                      }
+                    >
+                      <option value="none">Auto (Edge)</option>
+                      {side.allowMirrorLeft && (
+                        <option value="mirrorLeft">Mirror Left</option>
+                      )}
+                      <option value="solid">Solid Color</option>
+                      {allRasterLayers.map((layer) => (
+                        <option key={layer.id} value={layer.id}>
+                          {layer.name}
+                          {layer.visible ? "" : " (hidden)"}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="icon-action-btn"
+                      title={`Create new ${side.label} side layer`}
+                      onClick={() => createCustom3DFaceLayerAction(side.key)}
+                    >
+                      <Plus size={11} />
+                    </button>
+                    {isLayer && (
+                      <button
+                        type="button"
+                        className="icon-action-btn"
+                        title={`Paint ${side.label} layer in Draw mode`}
+                        onClick={() => editCustom3DFaceLayerAction(side.value)}
+                      >
+                        <Paintbrush size={11} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             <div className="rotate3d-pivot-row">
@@ -508,74 +652,339 @@ export function Studio3DSidebar() {
 
           {studio3d.directionalLighting && (
             <div className="rotate3d-subpanel">
-              <label className="rotate3d-slider-row">
-                <span>Azimuth</span>
-                <input
-                  type="range"
-                  min={-180}
-                  max={180}
-                  value={studio3d.lightAzimuthDeg}
-                  onChange={(e) =>
-                    patchStudio3D({ lightAzimuthDeg: Number(e.target.value) })
-                  }
-                />
-                <span className="rotate3d-val">
-                  {studio3d.lightAzimuthDeg}°
-                </span>
-              </label>
+              {studio3d.mode !== "rig" ? (
+                <>
+                  <div className="mode-hint" style={{ marginBottom: 4 }}>
+                    Drag 3D light bulb or X/Y/Z arrows (or Shift+Drag) to move in 3D
+                  </div>
+                  <div className="rotate3d-btn-row" style={{ marginBottom: 4 }}>
+                    {(["point", "spot", "sun"] as readonly Light3DType[]).map((lt) => (
+                      <button
+                        key={lt}
+                        type="button"
+                        className={`mini-btn ${studio3d.lightType === lt ? "active" : ""}`}
+                        onClick={() => patchStudio3D({ lightType: lt })}
+                      >
+                        {lt === "point" ? "Point" : lt === "spot" ? "Spot" : "Sun"}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      title="Reset 3D Light Position"
+                      onClick={() =>
+                        patchStudio3D({
+                          lightPosX: -18,
+                          lightPosY: -20,
+                          lightPosZ: 24,
+                        })
+                      }
+                    >
+                      <RotateCcw size={10} />
+                    </button>
+                  </div>
+                  <label className="modal-checkbox" style={{ marginBottom: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={studio3d.showLightGizmo}
+                      onChange={(e) =>
+                        patchStudio3D({ showLightGizmo: e.target.checked })
+                      }
+                    />
+                    <span>Show 3D Light Gizmo</span>
+                  </label>
+                </>
+              ) : null}
 
-              <label className="rotate3d-slider-row">
-                <span>Elevation</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={90}
-                  value={studio3d.lightElevationDeg}
-                  onChange={(e) =>
-                    patchStudio3D({ lightElevationDeg: Number(e.target.value) })
-                  }
-                />
-                <span className="rotate3d-val">
-                  {studio3d.lightElevationDeg}°
-                </span>
-              </label>
-
-              {studio3d.mode !== "rig" && (
-                <label className="rotate3d-slider-row">
-                  <span>Ambient</span>
+              <div className="rotate3d-grid-2">
+                <label className="modal-field">
+                  <span>Light Color</span>
                   <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={Math.round(studio3d.ambient * 100)}
+                    type="color"
+                    className="rotate3d-color-input"
+                    value={studio3d.lightColor}
                     onChange={(e) =>
-                      patchStudio3D({ ambient: Number(e.target.value) / 100 })
+                      patchStudio3D({ lightColor: e.target.value })
                     }
                   />
-                  <span className="rotate3d-val">
-                    {Math.round(studio3d.ambient * 100)}%
-                  </span>
                 </label>
+                <label className="modal-field">
+                  <span>Ambient Color</span>
+                  <input
+                    type="color"
+                    className="rotate3d-color-input"
+                    value={studio3d.ambientColor}
+                    onChange={(e) =>
+                      patchStudio3D({ ambientColor: e.target.value })
+                    }
+                  />
+                </label>
+              </div>
+
+              {studio3d.mode === "rig" ? (
+                <>
+                  <label className="rotate3d-slider-row">
+                    <span>Azimuth</span>
+                    <input
+                      type="range"
+                      min={-180}
+                      max={180}
+                      value={studio3d.lightAzimuthDeg}
+                      onChange={(e) =>
+                        patchStudio3D({ lightAzimuthDeg: Number(e.target.value) })
+                      }
+                    />
+                    <span className="rotate3d-val">
+                      {studio3d.lightAzimuthDeg}°
+                    </span>
+                  </label>
+
+                  <label className="rotate3d-slider-row">
+                    <span>Elevation</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={90}
+                      value={studio3d.lightElevationDeg}
+                      onChange={(e) =>
+                        patchStudio3D({ lightElevationDeg: Number(e.target.value) })
+                      }
+                    />
+                    <span className="rotate3d-val">
+                      {studio3d.lightElevationDeg}°
+                    </span>
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label className="rotate3d-slider-row">
+                    <span>Pos X</span>
+                    <input
+                      type="range"
+                      min={-80}
+                      max={80}
+                      value={studio3d.lightPosX}
+                      onChange={(e) =>
+                        patchStudio3D({ lightPosX: Number(e.target.value) })
+                      }
+                    />
+                    <span className="rotate3d-val">{studio3d.lightPosX}</span>
+                  </label>
+
+                  <label className="rotate3d-slider-row">
+                    <span>Height Y</span>
+                    <input
+                      type="range"
+                      min={-80}
+                      max={80}
+                      value={-studio3d.lightPosY}
+                      onChange={(e) =>
+                        patchStudio3D({ lightPosY: -Number(e.target.value) })
+                      }
+                    />
+                    <span className="rotate3d-val">{-studio3d.lightPosY}</span>
+                  </label>
+
+                  <label className="rotate3d-slider-row">
+                    <span>Depth Z</span>
+                    <input
+                      type="range"
+                      min={-80}
+                      max={80}
+                      value={studio3d.lightPosZ}
+                      onChange={(e) =>
+                        patchStudio3D({ lightPosZ: Number(e.target.value) })
+                      }
+                    />
+                    <span className="rotate3d-val">{studio3d.lightPosZ}</span>
+                  </label>
+
+                  {studio3d.lightType !== "sun" && (
+                    <label className="rotate3d-slider-row">
+                      <span>Range</span>
+                      <input
+                        type="range"
+                        min={8}
+                        max={120}
+                        value={studio3d.lightRadius}
+                        onChange={(e) =>
+                          patchStudio3D({ lightRadius: Number(e.target.value) })
+                        }
+                      />
+                      <span className="rotate3d-val">{studio3d.lightRadius}</span>
+                    </label>
+                  )}
+
+                  {studio3d.lightType === "spot" && (
+                    <>
+                      <label className="rotate3d-slider-row">
+                        <span>Cone</span>
+                        <input
+                          type="range"
+                          min={15}
+                          max={120}
+                          value={studio3d.spotAngleDeg}
+                          onChange={(e) =>
+                            patchStudio3D({
+                              spotAngleDeg: Number(e.target.value),
+                            })
+                          }
+                        />
+                        <span className="rotate3d-val">
+                          {studio3d.spotAngleDeg}°
+                        </span>
+                      </label>
+
+                      <label className="rotate3d-slider-row">
+                        <span>Softness</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={Math.round(studio3d.spotSoftness * 100)}
+                          onChange={(e) =>
+                            patchStudio3D({
+                              spotSoftness: Number(e.target.value) / 100,
+                            })
+                          }
+                        />
+                        <span className="rotate3d-val">
+                          {Math.round(studio3d.spotSoftness * 100)}%
+                        </span>
+                      </label>
+                    </>
+                  )}
+                </>
+              )}
+
+              {studio3d.mode !== "rig" && (
+                <>
+                  <label className="rotate3d-slider-row">
+                    <span>Intensity</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={250}
+                      value={Math.round(studio3d.lightIntensity * 100)}
+                      onChange={(e) =>
+                        patchStudio3D({
+                          lightIntensity: Number(e.target.value) / 100,
+                        })
+                      }
+                    />
+                    <span className="rotate3d-val">
+                      {studio3d.lightIntensity.toFixed(1)}
+                    </span>
+                  </label>
+
+                  <label className="rotate3d-slider-row">
+                    <span>Ambient</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(studio3d.ambient * 100)}
+                      onChange={(e) =>
+                        patchStudio3D({ ambient: Number(e.target.value) / 100 })
+                      }
+                    />
+                    <span className="rotate3d-val">
+                      {Math.round(studio3d.ambient * 100)}%
+                    </span>
+                  </label>
+
+                  <label className="rotate3d-slider-row">
+                    <span>Specular</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={150}
+                      value={Math.round(studio3d.specularStrength * 100)}
+                      onChange={(e) =>
+                        patchStudio3D({
+                          specularStrength: Number(e.target.value) / 100,
+                        })
+                      }
+                    />
+                    <span className="rotate3d-val">
+                      {Math.round(studio3d.specularStrength * 100)}%
+                    </span>
+                  </label>
+
+                  <label className="rotate3d-slider-row">
+                    <span>Shininess</span>
+                    <input
+                      type="range"
+                      min={4}
+                      max={128}
+                      value={studio3d.shininess}
+                      onChange={(e) =>
+                        patchStudio3D({ shininess: Number(e.target.value) })
+                      }
+                    />
+                    <span className="rotate3d-val">{studio3d.shininess}</span>
+                  </label>
+
+                  <label className="modal-field">
+                    <span>Cel Shading</span>
+                    <select
+                      className="palette-select"
+                      value={studio3d.celSteps}
+                      onChange={(e) =>
+                        patchStudio3D({ celSteps: Number(e.target.value) })
+                      }
+                    >
+                      <option value={0}>Smooth</option>
+                      <option value={2}>2-Band Toon</option>
+                      <option value={3}>3-Band Toon</option>
+                      <option value={4}>4-Band Toon</option>
+                      <option value={6}>6-Band Toon</option>
+                    </select>
+                  </label>
+                </>
               )}
 
               {studio3d.mode === "extruded" && (
-                <label className="rotate3d-slider-row">
-                  <span>Rim</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={Math.round(studio3d.rimStrength * 100)}
-                    onChange={(e) =>
-                      patchStudio3D({
-                        rimStrength: Number(e.target.value) / 100,
-                      })
-                    }
-                  />
-                  <span className="rotate3d-val">
-                    {Math.round(studio3d.rimStrength * 100)}%
-                  </span>
-                </label>
+                <>
+                  <div className="rotate3d-outline-row">
+                    <label className="rotate3d-slider-row" style={{ flex: 1 }}>
+                      <span>Rim</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={Math.round(studio3d.rimStrength * 100)}
+                        onChange={(e) =>
+                          patchStudio3D({
+                            rimStrength: Number(e.target.value) / 100,
+                          })
+                        }
+                      />
+                      <span className="rotate3d-val">
+                        {Math.round(studio3d.rimStrength * 100)}%
+                      </span>
+                    </label>
+                    <input
+                      type="color"
+                      className="rotate3d-color-input"
+                      value={studio3d.rimColor}
+                      title="Rim Light Color"
+                      onChange={(e) =>
+                        patchStudio3D({ rimColor: e.target.value })
+                      }
+                    />
+                  </div>
+                  <label className="modal-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={studio3d.useNormalLayer}
+                      onChange={(e) =>
+                        patchStudio3D({ useNormalLayer: e.target.checked })
+                      }
+                    />
+                    <span>Use Normal Map Layer</span>
+                  </label>
+                </>
               )}
             </div>
           )}
@@ -666,6 +1075,198 @@ export function Studio3DSidebar() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Group 4b: PBR Map Generation */}
+        <div className="rotate3d-group">
+          <div className="rotate3d-group-title">
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <Layers size={11} />
+              <span>Map Generation</span>
+            </span>
+          </div>
+
+          <label className="modal-field">
+            <span>Preview Pass</span>
+            <select
+              className="palette-select"
+              value={studio3d.renderPass}
+              onChange={(e) =>
+                patchStudio3D({ renderPass: e.target.value as Render3DPass })
+              }
+            >
+              <option value="lit">Lit 3D</option>
+              <option value="normal">Normal Map</option>
+              <option value="height">Height / Displacement</option>
+              <option value="depth">Depth Map</option>
+            </select>
+          </label>
+
+          <div className="rotate3d-grid-2">
+            <label className="modal-field">
+              <span>Normal Format</span>
+              <select
+                className="palette-select"
+                value={studio3d.normalConvention}
+                onChange={(e) =>
+                  patchStudio3D({
+                    normalConvention: e.target.value as NormalConvention,
+                  })
+                }
+              >
+                <option value="opengl">OpenGL (+Y)</option>
+                <option value="directx">DirectX (-Y)</option>
+              </select>
+            </label>
+
+            <label className="modal-field">
+              <span>Height Source</span>
+              <select
+                className="palette-select"
+                value={studio3d.heightSource}
+                onChange={(e) =>
+                  patchStudio3D({
+                    heightSource: e.target.value as HeightMapSource,
+                  })
+                }
+              >
+                <option value="hybrid">Hybrid</option>
+                <option value="luminance">Luminance</option>
+                <option value="bevel">Bevel</option>
+                <option value="pillow">Pillow</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="rotate3d-slider-row">
+            <span>Normal Str</span>
+            <input
+              type="range"
+              min={5}
+              max={60}
+              value={Math.round(studio3d.normalStrength * 10)}
+              onChange={(e) =>
+                patchStudio3D({ normalStrength: Number(e.target.value) / 10 })
+              }
+            />
+            <span className="rotate3d-val">
+              {studio3d.normalStrength.toFixed(1)}
+            </span>
+          </label>
+
+          <label className="rotate3d-slider-row">
+            <span>Contrast</span>
+            <input
+              type="range"
+              min={40}
+              max={250}
+              value={Math.round(studio3d.heightContrast * 100)}
+              onChange={(e) =>
+                patchStudio3D({ heightContrast: Number(e.target.value) / 100 })
+              }
+            />
+            <span className="rotate3d-val">
+              {studio3d.heightContrast.toFixed(1)}×
+            </span>
+          </label>
+
+          <label className="rotate3d-slider-row">
+            <span>Smooth</span>
+            <input
+              type="range"
+              min={0}
+              max={3}
+              step={1}
+              value={studio3d.heightBlur}
+              onChange={(e) =>
+                patchStudio3D({ heightBlur: Number(e.target.value) })
+              }
+            />
+            <span className="rotate3d-val">{studio3d.heightBlur}px</span>
+          </label>
+
+          <div className="rotate3d-grid-2">
+            <label className="modal-field">
+              <span>Depth Mode</span>
+              <select
+                className="palette-select"
+                value={studio3d.depthMode}
+                onChange={(e) =>
+                  patchStudio3D({
+                    depthMode: e.target.value as DepthMapMode,
+                  })
+                }
+              >
+                <option value="volume">Volume</option>
+                <option value="topDown">Top-Down</option>
+                <option value="isometric">Isometric</option>
+                <option value="radial">Radial</option>
+              </select>
+            </label>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-end",
+                paddingBottom: 3,
+              }}
+            >
+              <label className="modal-checkbox">
+                <input
+                  type="checkbox"
+                  checked={studio3d.depthInvert}
+                  onChange={(e) =>
+                    patchStudio3D({ depthInvert: e.target.checked })
+                  }
+                />
+                <span>Invert Depth</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="rotate3d-btn-row">
+            <button
+              type="button"
+              className="mini-btn"
+              onClick={() => generateStudio3DMapLayerAction("normal")}
+            >
+              → Normal
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              onClick={() => generateStudio3DMapLayerAction("height")}
+            >
+              → Height
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              onClick={() => generateStudio3DMapLayerAction("depth")}
+            >
+              → Depth
+            </button>
+          </div>
+
+          <div className="rotate3d-btn-row">
+            <button
+              type="button"
+              className="mini-btn"
+              style={{ flex: 1, justifyContent: "center" }}
+              onClick={generateAllStudio3DMapsAction}
+            >
+              <Sparkles size={11} />
+              <span>Gen All 3 Maps</span>
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              title="Export current preview pass as PNG"
+              onClick={exportStudio3DPassPngAction}
+            >
+              <Download size={11} />
+              <span>PNG</span>
+            </button>
+          </div>
         </div>
 
         {/* Group 5: Turntable Baker */}

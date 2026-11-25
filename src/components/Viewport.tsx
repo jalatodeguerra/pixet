@@ -103,6 +103,14 @@ export function Viewport() {
   const light2dIntensity = useEditorStore((s) => s.light2dIntensity);
   const light2dAmbient = useEditorStore((s) => s.light2dAmbient);
   const light2dEmission = useEditorStore((s) => s.light2dEmission);
+  const light2dType = useEditorStore((s) => s.light2dType);
+  const light2dAmbientColor = useEditorStore((s) => s.light2dAmbientColor);
+  const light2dSpecular = useEditorStore((s) => s.light2dSpecular);
+  const light2dShininess = useEditorStore((s) => s.light2dShininess);
+  const light2dHeightScale = useEditorStore((s) => s.light2dHeightScale);
+  const light2dAo = useEditorStore((s) => s.light2dAo);
+  const light2dCelSteps = useEditorStore((s) => s.light2dCelSteps);
+  const light2dAutoNormal = useEditorStore((s) => s.light2dAutoNormal);
   const paletteLutEnabled = useEditorStore((s) => s.paletteLutEnabled);
   const paletteLutPresetName = useEditorStore((s) => s.paletteLutPresetName);
   const palette = useEditorStore((s) => s.palette);
@@ -241,6 +249,14 @@ export function Viewport() {
             intensity: state.light2dIntensity,
             ambient: state.light2dAmbient,
             emissionStrength: state.light2dEmission,
+            lightType: state.light2dType,
+            ambientColor: state.light2dAmbientColor,
+            specularStrength: state.light2dSpecular,
+            shininess: state.light2dShininess,
+            heightScale: state.light2dHeightScale,
+            aoStrength: state.light2dAo,
+            celSteps: state.light2dCelSteps,
+            autoNormalIfMissing: state.light2dAutoNormal,
           },
           paletteLut: {
             enabled: state.paletteLutEnabled,
@@ -497,6 +513,14 @@ export function Viewport() {
     light2dIntensity,
     light2dAmbient,
     light2dEmission,
+    light2dType,
+    light2dAmbientColor,
+    light2dSpecular,
+    light2dShininess,
+    light2dHeightScale,
+    light2dAo,
+    light2dCelSteps,
+    light2dAutoNormal,
     paletteLutEnabled,
     paletteLutPresetName,
     palette,
