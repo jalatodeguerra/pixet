@@ -7,6 +7,7 @@ import { HistoryPanel } from "./draw/HistoryPanel";
 import { LayersPanel } from "./draw/LayersPanel";
 import { ReferencePanel } from "./draw/ReferencePanel";
 import { RigSidebar } from "./rig/RigSidebar";
+import { Studio3DSidebar } from "./studio3d/Studio3DSidebar";
 import { TilesetBrowserPanel } from "./tiles/TilesetBrowserPanel";
 import { TilesSidebar } from "./tiles/TilesSidebar";
 
@@ -19,6 +20,7 @@ export function RightSidebar() {
 
   const hideDefaultSidebar =
     workspaceMode === "rig" ||
+    workspaceMode === "studio3d" ||
     (workspaceMode === "tiles" && tilesMode === "map");
 
   const hasPinnedIn = (ws: "rig" | "tiles" | "data") =>
@@ -70,6 +72,9 @@ export function RightSidebar() {
           <TilesSidebar />
         </div>
       )}
+
+      {/* Focused 3D Studio Inspector */}
+      {workspaceMode === "studio3d" && <Studio3DSidebar />}
     </aside>
   );
 }

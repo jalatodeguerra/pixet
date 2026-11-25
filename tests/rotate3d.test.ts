@@ -29,6 +29,13 @@ import {
   type SpriteStackOptions,
   type TurntableEasing,
 } from "../src/engine/tools/rotate3d.ts";
+import {
+  buildFloorShadowEllipse,
+  buildSceneGridLines,
+  buildTurntableRing,
+  projectScenePoint,
+  type Scene3DCamera,
+} from "../src/engine/tools/scene3d.ts";
 
 function assertClose(actual: number, expected: number, eps = 1e-5): void {
   assert.ok(
@@ -929,4 +936,211 @@ test("bakeTurntableFrames: animated sourceFrames and backFrames combine with rot
   assert.equal(flipFrames.length, 2);
   assert.deepEqual(flipFrames[0].getPixel(6, 6), [230, 40, 40, 255]);
   assert.deepEqual(flipFrames[1].getPixel(6, 6), [230, 210, 40, 255]);
+});
+
+test("render25DSprite: exact 90° yaw and 90° pitch side views render solid, watertight side profiles", () => {
+  const src = new PixelBuffer(24, 24);
+  for (let y = 6; y <= 17; y++) {
+    for (let x = 6; x <= 17; x++) {
+      src.setPixel(x, y, 200, 140, 90, 255);
+    }
+  }
+
+  for (const profile of ["slab", "bevel", "pillow"] as const) {
+    const sideYaw = render25DSprite(
+      src,
+      baseOpts({
+        yawDeg: 90,
+        extrudeDepth: 8,
+        depthProfile: profile,
+        shadeDepth: true,
+      })
+    );
+    assert.ok(
+      countOpaque(sideYaw) > 0,
+      `Expected non-empty 90° yaw side view for profile=${profile}`
+    );
+
+    // Center row (y=11) must be a continuous horizontal span without internal gaps
+    let minX = 24;
+    let maxX = -1;
+    let rowOpaque = 0;
+    for (let x = 0; x < 24; x++) {
+      if (sideYaw.getPixel(x, 11)[3] > 0) {
+        rowOpaque++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+    assert.equal(
+      rowOpaque,
+      maxX - minX + 1,
+      `Expected continuous horizontal span on 90° yaw for ${profile}, got ${rowOpaque} in [${minX}..${maxX}]`
+    );
+    assert.ok(
+      rowOpaque >= 6,
+      `Expected side thickness >= 6px for extrudeDepth=8 (${profile}), got ${rowOpaque}`
+    );
+  }
+
+  const sidePitch = render25DSprite(
+    src,
+    baseOpts({
+      pitchDeg: 90,
+      extrudeDepth: 8,
+      depthProfile: "slab",
+      shadeDepth: true,
+    })
+  );
+  let colOpaque = 0;
+  let minY = 24;
+  let maxY = -1;
+  for (let y = 0; y < 24; y++) {
+    if (sidePitch.getPixel(11, y)[3] > 0) {
+      colOpaque++;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  assert.equal(colOpaque, maxY - minY + 1);
+  assert.ok(colOpaque >= 6);
+});
+
+test("render25DSprite: grazing 85° yaw renders continuous gap-free side without striping", () => {
+  const src = new PixelBuffer(24, 24);
+  for (let y = 6; y <= 17; y++) {
+    for (let x = 6; x <= 17; x++) {
+      src.setPixel(x, y, 160, 200, 120, 255);
+    }
+  }
+
+  const grazing = render25DSprite(
+    src,
+    baseOpts({
+      yawDeg: 85,
+      extrudeDepth: 8,
+      depthProfile: "slab",
+      shadeDepth: true,
+    })
+  );
+
+  for (let y = 7; y <= 16; y++) {
+    let minX = 24;
+    let maxX = -1;
+    let count = 0;
+    for (let x = 0; x < 24; x++) {
+      if (grazing.getPixel(x, y)[3] > 0) {
+        count++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+    assert.ok(count > 0, `Row ${y} should not be empty at 85° yaw`);
+    assert.equal(
+      count,
+      maxX - minX + 1,
+      `Row ${y} at 85° yaw should have no gaps (${count} vs ${maxX - minX + 1})`
+    );
+  }
+});
+
+test("render25DSprite: shadeDepth preserves front cap color at 0° yaw and shades side walls at 75° yaw", () => {
+  const src = new PixelBuffer(20, 20);
+  for (let y = 5; y <= 14; y++) {
+    for (let x = 5; x <= 14; x++) {
+      src.setPixel(x, y, 200, 160, 120, 255);
+    }
+  }
+
+  // At 0° yaw, front cap pixels retain exact source color
+  const front = render25DSprite(
+    src,
+    baseOpts({
+      yawDeg: 0,
+      extrudeDepth: 6,
+      depthProfile: "slab",
+      shadeDepth: true,
+    })
+  );
+  assert.deepEqual(front.getPixel(10, 10), [200, 160, 120, 255]);
+
+  // At 75° yaw, extruded side wall pixels are shaded darker than front cap (R < 200)
+  const tilted = render25DSprite(
+    src,
+    baseOpts({
+      yawDeg: 75,
+      extrudeDepth: 8,
+      depthProfile: "slab",
+      shadeDepth: true,
+    })
+  );
+  let hasUnmodifiedFront = false;
+  let hasShadedSide = false;
+  for (let x = 0; x < 20; x++) {
+    const px = tilted.getPixel(x, 10);
+    if (px[3] === 0) continue;
+    if (px[0] === 200 && px[1] === 160 && px[2] === 120) {
+      hasUnmodifiedFront = true;
+    } else if (px[0] < 200 && px[0] > 80) {
+      hasShadedSide = true;
+    }
+  }
+  assert.ok(hasUnmodifiedFront, "Expected front cap pixels to stay unmodified");
+  assert.ok(hasShadedSide, "Expected extruded side wall pixels to be shaded");
+});
+
+test("scene3d: projectScenePoint, perspective/isometric grids, turntable ring, and floor shadow", () => {
+  const baseCam: Scene3DCamera = {
+    yawDeg: 35,
+    pitchDeg: 25,
+    rollDeg: 0,
+    perspective: 0.4,
+    canvasWidth: 32,
+    canvasHeight: 32,
+    floorY: 16,
+    viewWidth: 640,
+    viewHeight: 480,
+    pixelScale: 4,
+    gridMode: "perspective",
+  };
+
+  // Origin (0,0,0) always projects to center of viewport
+  const origin = projectScenePoint(0, 0, 0, baseCam);
+  assert.equal(origin.visible, true);
+  assertClose(origin.sx, 320);
+  assertClose(origin.sy, 240);
+
+  // Perspective grid produces minor, major, and X/Y/Z axis lines with valid alpha
+  const perspLines = buildSceneGridLines(baseCam);
+  assert.ok(perspLines.some((l) => l.kind === "minor"));
+  assert.ok(perspLines.some((l) => l.kind === "major"));
+  assert.ok(perspLines.some((l) => l.kind === "axisX"));
+  assert.ok(perspLines.some((l) => l.kind === "axisY"));
+  assert.ok(perspLines.some((l) => l.kind === "axisZ"));
+  assert.ok(perspLines.every((l) => l.alpha > 0 && l.alpha <= 1 && Number.isFinite(l.x1)));
+
+  // Isometric grid uses orthographic projection and includes isoFootprint diamond lines
+  const isoCam: Scene3DCamera = {
+    ...baseCam,
+    yawDeg: 45,
+    pitchDeg: 30,
+    gridMode: "isometric",
+  };
+  const isoLines = buildSceneGridLines(isoCam);
+  assert.ok(isoLines.some((l) => l.kind === "isoFootprint"));
+  assert.ok(isoLines.some((l) => l.kind === "minor"));
+
+  // None grid mode omits floor grid lines while preserving axes when requested
+  const noneLines = buildSceneGridLines({ ...baseCam, gridMode: "none" }, { showAxes: false });
+  assert.equal(noneLines.length, 0);
+
+  // Turntable ring includes closed perimeter points and cardinal angle labels
+  const ring = buildTurntableRing(baseCam, 20, 32);
+  assert.equal(ring.points.length, 33);
+  const labels = ring.ticks.map((t) => t.label).filter(Boolean);
+  assert.deepEqual(labels, ["0°", "90°", "180°", "270°"]);
+
+  // Floor shadow ellipse produces valid polygon points
+  const shadow = buildFloorShadowEllipse(baseCam, 10, 6, 24);
+  assert.equal(shadow.length, 24);
 });

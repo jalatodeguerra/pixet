@@ -902,4 +902,146 @@ test("R3D-6: bakeRigTurntable multidir mode bakes 4 directions x 3-frame clip wi
   assert.notDeepEqual(result.frames[0].data, result.frames[2].data);
 });
 
+test("R3D-7: Setup mode (mode: 'rest') previews 3D bone Yaw/Pitch/Depth/Thickness while pure-2D Setup stays unwarped", () => {
+  const engine = new PixelEngine(32, 32);
+  const layerId = "setup-3d";
+  const cel = engine.getOrCreateCel(layerId, 0);
+  fillRect(cel, 8, 10, 24, 22, [220, 80, 60, 255]);
+
+  const layers: LayerCompositingInfo[] = [
+    { id: layerId, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+  ];
+
+  const bone = engine.rig.addBone({
+    name: "Shield",
+    parentId: null,
+    localX: 16,
+    localY: 16,
+    length: 8,
+    rotationDeg: 0,
+    boundLayerId: layerId,
+  });
+
+  const opts: RigRenderOptions = {
+    pixelSnap: true,
+    rotSprite: false,
+    mode: "rest",
+    perspective3d: 0,
+  };
+
+  // Pure 2D Setup mode matches source cel bit-for-bit
+  const pure2d = new Uint8ClampedArray(engine.compositeRigFrame(layers, 0, opts));
+  assert.deepEqual(pure2d, cel.data);
+
+  // Editing bind yawDeg + extrudeDepth in Setup mode visibly foreshortens and extrudes
+  engine.rig.updateBone(bone.id, { yawDeg: 60, extrudeDepth: 4 });
+  const rotatedRest = new Uint8ClampedArray(engine.compositeRigFrame(layers, 0, opts));
+  assert.notDeepEqual(rotatedRest, pure2d);
+
+  const restSpan = measureOpaqueSpanX(new PixelBuffer(32, 32, rotatedRest));
+  const baseSpan = measureOpaqueSpanX(cel);
+  assert.ok(
+    restSpan > 0 && restSpan < baseSpan - 2,
+    `Expected Setup mode 60° yaw to foreshorten (${restSpan} vs ${baseSpan})`
+  );
+});
+
+test("R3D-7: soft-weighted layer deforms in 3D (yaw, extrudeDepth, Z-sort, rootOrbit) and keeps pure-2D LBS intact", () => {
+  const engine = new PixelEngine(32, 32);
+  const layerId = "soft-3d";
+  const cel = engine.getOrCreateCel(layerId, 0);
+  // Left block (red) near boneA, right block (blue) near boneB
+  fillRect(cel, 6, 12, 13, 20, [240, 50, 50, 255]);
+  fillRect(cel, 19, 12, 26, 20, [50, 90, 240, 255]);
+
+  const layers: LayerCompositingInfo[] = [
+    { id: layerId, kind: "raster", visible: true, opacity: 100, blendMode: "Normal" },
+  ];
+
+  const boneA = engine.rig.addBone({
+    name: "LeftBone",
+    parentId: null,
+    localX: 10,
+    localY: 16,
+    length: 6,
+    rotationDeg: 0,
+  });
+  const boneB = engine.rig.addBone({
+    name: "RightBone",
+    parentId: null,
+    localX: 22,
+    localY: 16,
+    length: 6,
+    rotationDeg: 0,
+  });
+
+  // Assign soft weights (non-hard: 0.75 / 0.25) so weightsAreHard() is false
+  const entries = new Map<number, Array<{ boneId: string; w: number }>>();
+  for (let y = 12; y <= 20; y++) {
+    for (let x = 6; x <= 13; x++) {
+      entries.set(y * 32 + x, [
+        { boneId: boneA.id, w: 0.75 },
+        { boneId: boneB.id, w: 0.25 },
+      ]);
+    }
+    for (let x = 19; x <= 26; x++) {
+      entries.set(y * 32 + x, [
+        { boneId: boneB.id, w: 0.75 },
+        { boneId: boneA.id, w: 0.25 },
+      ]);
+    }
+  }
+  engine.rig.setBoneWeights({ width: 32, height: 32, entries });
+
+  const opts: RigRenderOptions = {
+    pixelSnap: true,
+    rotSprite: false,
+    mode: "pose",
+    autoZSort: true,
+    perspective3d: 0,
+  };
+
+  // Pure 2D pose (rotation only) uses 2D LBS path and rotates without error
+  engine.rig.setPoseOverride(boneA.id, { rotationDeg: 20 }, 0);
+  const out2d = new Uint8ClampedArray(engine.compositeRigFrame(layers, 0, opts));
+  assert.equal(new PixelBuffer(32, 32, out2d).isEmpty(), false);
+
+  // 3D yaw + extrudeDepth on boneA visibly changes output (foreshortens/extrudes left block)
+  engine.rig.setPoseOverride(boneA.id, { rotationDeg: 0, yawDeg: 65 }, 0);
+  engine.rig.updateBone(boneA.id, { extrudeDepth: 6 });
+  const out3d = new Uint8ClampedArray(engine.compositeRigFrame(layers, 0, opts));
+  assert.notDeepEqual(out3d, cel.data);
+
+  // Count opaque pixels in left half (x <= 15): 65° yaw foreshortens red block
+  let leftOpaqueBase = 0;
+  let leftOpaque3d = 0;
+  for (let y = 0; y < 32; y++) {
+    for (let x = 0; x <= 15; x++) {
+      if (cel.data[(y * 32 + x) * 4 + 3] > 0) leftOpaqueBase++;
+      if (out3d[(y * 32 + x) * 4 + 3] > 0) leftOpaque3d++;
+    }
+  }
+  assert.ok(
+    leftOpaque3d > 0 && leftOpaque3d < leftOpaqueBase,
+    `Expected soft-weighted 3D yaw to foreshorten left block (${leftOpaque3d} < ${leftOpaqueBase})`
+  );
+
+  // Overlapping pixels with localZ + rootOrbit swap depth order
+  engine.rig.setPoseOverride(boneA.id, { yawDeg: 0, localX: 16, localZ: 8 }, 0);
+  engine.rig.setPoseOverride(boneB.id, { yawDeg: 0, localX: 16, localZ: -8 }, 0);
+  const outFront = new Uint8ClampedArray(
+    engine.compositeRigFrame(layers, 0, {
+      ...opts,
+      rootOrbit: { yawDeg: 0, pitchDeg: 0, rollDeg: 0, originX: 16, originY: 16 },
+    })
+  );
+  const outOrbit180 = new Uint8ClampedArray(
+    engine.compositeRigFrame(layers, 0, {
+      ...opts,
+      rootOrbit: { yawDeg: 180, pitchDeg: 0, rollDeg: 0, originX: 16, originY: 16 },
+    })
+  );
+  assert.notDeepEqual(outFront, outOrbit180);
+});
+
 

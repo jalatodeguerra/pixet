@@ -65,7 +65,14 @@ const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; badge?: st
   { id: "draw", label: "Draw", icon: Pencil },
   { id: "tiles", label: "Tiles", icon: LayoutGrid, badge: "P2" },
   { id: "rig", label: "Rig", icon: Bone, badge: "P3" },
+  { id: "studio3d", label: "3D Studio", icon: Box },
   { id: "data", label: "Data", icon: Crosshair, badge: "P4" },
+];
+
+const STUDIO3D_MODES: { id: "extruded" | "stack" | "rig"; label: string; hint: string }[] = [
+  { id: "extruded", label: "2.5D", hint: "2.5D extruded spin & volumetric side walls" },
+  { id: "stack", label: "Stack", hint: "Sprite stacking bottom-to-top layers" },
+  { id: "rig", label: "Rig 3D", hint: "Orbit and bake rigged 3D skeleton" },
 ];
 
 const RIG_MODES: { id: RigMode; label: string; hint: string }[] = [
@@ -120,7 +127,8 @@ export function TopBar() {
   const addLayer = useEditorStore((s) => s.addLayer);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
-  const setRotate3dModalOpen = useEditorStore((s) => s.setRotate3dModalOpen);
+  const studio3dMode = useEditorStore((s) => s.studio3d.mode);
+  const patchStudio3D = useEditorStore((s) => s.patchStudio3D);
   const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
   const setCanvasSizeModalOpen = useEditorStore((s) => s.setCanvasSizeModalOpen);
   const dockAllPanels = useEditorStore((s) => s.dockAllPanels);
@@ -241,7 +249,7 @@ export function TopBar() {
       { label: "Offset / Wrap...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "offsetWrap"); } },
       { label: "Scale Sprite...", action: () => { setOpenMenu(null); setFilterModalOpen(true, "scaleSprite"); } },
       { label: "Auto-Crop / Trim", action: () => { autoCropSpriteAction(); setOpenMenu(null); } },
-      { label: "3D Rotate & Turntable...", shortcut: "Ctrl+3", action: () => { setOpenMenu(null); setRotate3dModalOpen(true); } },
+      { label: "3D Studio & Turntable", shortcut: "Ctrl+3", action: () => { setOpenMenu(null); setWorkspaceMode("studio3d"); } },
       { label: "Canvas Size...", action: () => { setOpenMenu(null); setCanvasSizeModalOpen(true); } },
     ],
   };
@@ -361,17 +369,44 @@ export function TopBar() {
             })}
           </div>
         )}
+
+        {workspaceMode === "studio3d" && (
+          <div
+            className="mode-switcher rig-mode-switcher"
+            role="tablist"
+            aria-label="3D Studio Mode"
+          >
+            {STUDIO3D_MODES.map((m) => {
+              const active = studio3dMode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  title={m.hint}
+                  className={`mode-pill ${active ? "active" : ""}`}
+                  onClick={() => patchStudio3D({ mode: m.id })}
+                >
+                  <span>{m.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="topbar-right">
         <button
           type="button"
-          className="mini-btn"
-          title="3D Rotate & Turntable (Ctrl+3)"
-          onClick={() => setRotate3dModalOpen(true)}
+          className={`mini-btn ${workspaceMode === "studio3d" ? "active" : ""}`}
+          title="3D Studio & Turntable (Ctrl+3)"
+          onClick={() =>
+            setWorkspaceMode(workspaceMode === "studio3d" ? "draw" : "studio3d")
+          }
         >
           <Box size={13} />
-          <span>3D Spin</span>
+          <span>3D Studio</span>
         </button>
 
         <button

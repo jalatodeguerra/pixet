@@ -449,6 +449,51 @@ export function render25DSprite(
   const lightZ = Math.cos(lightAz) * cosEl;
   const ambient = Math.max(0.1, Math.min(1, opts.ambient ?? 0.45));
 
+  // Tight 2D opaque bounding box in sampleSrc space (shared by Ray-AABB and autoFitBounds)
+  let minU = sw;
+  let maxU = -1;
+  let minV = sh;
+  let maxV = -1;
+  for (let v = 0; v < sh; v++) {
+    const row = v * sw;
+    for (let u = 0; u < sw; u++) {
+      if (srcData[(row + u) * 4 + 3] > 0) {
+        if (u < minU) minU = u;
+        if (u > maxU) maxU = u;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    }
+  }
+  if (backData) {
+    for (let bv = 0; bv < backH; bv++) {
+      const v = backH === sh ? bv : Math.min(sh - 1, Math.floor((bv * sh) / backH));
+      const row = bv * backW;
+      for (let bu = 0; bu < backW; bu++) {
+        if (backData[(row + bu) * 4 + 3] > 0) {
+          const u =
+            backW === sw
+              ? sw - 1 - bu
+              : Math.max(0, Math.min(sw - 1, sw - 1 - Math.floor((bu * sw) / backW)));
+          if (u < minU) minU = u;
+          if (u > maxU) maxU = u;
+          if (v < minV) minV = v;
+          if (v > maxV) maxV = v;
+        }
+      }
+    }
+  }
+  if (maxU < minU || maxV < minV) {
+    return out;
+  }
+
+  const boxMinX = minU / sampleScale - 0.5 - pivotX;
+  const boxMaxX = (maxU + 1) / sampleScale - 0.5 - pivotX;
+  const boxMinY = minV / sampleScale - 0.5 - pivotY;
+  const boxMaxY = (maxV + 1) / sampleScale - 0.5 - pivotY;
+  const boxMinZ = -halfDepth;
+  const boxMaxZ = halfDepth;
+
   // Optional auto-fit bounds: project 8 corners of opaque 3D AABB
   let fitScale = 1;
   let projCenterX = 0;
@@ -458,68 +503,236 @@ export function render25DSprite(
   const canvasCy = (h - 1) / 2;
 
   if (useAutoFit) {
-    let minX = w;
-    let maxX = -1;
-    let minY = h;
-    let maxY = -1;
-    const origData = src.data;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (origData[(y * w + x) * 4 + 3] > 0) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    if (maxX >= minX && maxY >= minY) {
-      const xs = [minX - 0.5 - pivotX, maxX + 0.5 - pivotX];
-      const ys = [minY - 0.5 - pivotY, maxY + 0.5 - pivotY];
-      const zs = depth > 0 ? [-halfDepth, halfDepth] : [0];
+    const xs = [boxMinX, boxMaxX];
+    const ys = [boxMinY, boxMaxY];
+    const zs = depth > 0 ? [boxMinZ, boxMaxZ] : [0];
 
-      let pMinX = Infinity;
-      let pMaxX = -Infinity;
-      let pMinY = Infinity;
-      let pMaxY = -Infinity;
+    let pMinX = Infinity;
+    let pMaxX = -Infinity;
+    let pMinY = Infinity;
+    let pMaxY = -Infinity;
 
-      for (const lx of xs) {
-        for (const ly of ys) {
-          for (const lz of zs) {
-            const [wx, wy, wz] = mat3MulVec(R, lx, ly, lz);
-            let pxProj = wx;
-            let pyProj = wy;
-            if (usePersp) {
-              const denom = Math.max(1e-3, camDist - wz);
-              pxProj = (wx * camDist) / denom;
-              pyProj = (wy * camDist) / denom;
-            }
-            if (pxProj < pMinX) pMinX = pxProj;
-            if (pxProj > pMaxX) pMaxX = pxProj;
-            if (pyProj < pMinY) pMinY = pyProj;
-            if (pyProj > pMaxY) pMaxY = pyProj;
+    for (const lx of xs) {
+      for (const ly of ys) {
+        for (const lz of zs) {
+          const [wx, wy, wz] = mat3MulVec(R, lx, ly, lz);
+          let pxProj = wx;
+          let pyProj = wy;
+          if (usePersp) {
+            const denom = Math.max(1e-3, camDist - wz);
+            pxProj = (wx * camDist) / denom;
+            pyProj = (wy * camDist) / denom;
           }
+          if (pxProj < pMinX) pMinX = pxProj;
+          if (pxProj > pMaxX) pMaxX = pxProj;
+          if (pyProj < pMinY) pMinY = pyProj;
+          if (pyProj > pMaxY) pMaxY = pyProj;
         }
       }
-
-      const spanX = pMaxX - pMinX;
-      const spanY = pMaxY - pMinY;
-      const scaleX = spanX > 1e-4 ? w / spanX : 1;
-      const scaleY = spanY > 1e-4 ? h / spanY : 1;
-      fitScale = Math.min(1, scaleX, scaleY);
-      projCenterX = (pMinX + pMaxX) / 2;
-      projCenterY = (pMinY + pMaxY) / 2;
     }
+
+    const spanX = pMaxX - pMinX;
+    const spanY = pMaxY - pMinY;
+    const scaleX = spanX > 1e-4 ? w / spanX : 1;
+    const scaleY = spanY > 1e-4 ? h / spanY : 1;
+    fitScale = Math.min(1, scaleX, scaleY);
+    projCenterX = (pMinX + pMaxX) / 2;
+    projCenterY = (pMinY + pMaxY) / 2;
   }
 
   const subOffsets = opts.supersample ? [-0.25, 0.25] : [0];
   const outData = out.data;
-  const numSlices = sliceValues.length;
+  const stepSize = Math.min(0.45, 0.5 / sampleScale);
 
   const readThickness = (ux: number, uy: number): number => {
     if (ux < 0 || uy < 0 || ux >= sw || uy >= sh) return 0;
     if (thicknessMap) return thicknessMap[uy * sw + ux];
     return srcData[(uy * sw + ux) * 4 + 3] > 0 ? 1 : 0;
+  };
+
+  const sobelGradient = (u: number, v: number): [number, number] => {
+    const tl = readThickness(u - 1, v - 1);
+    const tc = readThickness(u, v - 1);
+    const tr = readThickness(u + 1, v - 1);
+    const ml = readThickness(u - 1, v);
+    const mr = readThickness(u + 1, v);
+    const bl = readThickness(u - 1, v + 1);
+    const bc = readThickness(u, v + 1);
+    const br = readThickness(u + 1, v + 1);
+    const gx = tr + 2 * mr + br - (tl + 2 * ml + bl);
+    const gy = bl + 2 * bc + br - (tl + 2 * tc + tr);
+    return [gx, gy];
+  };
+
+  interface SolidSample {
+    u: number;
+    v: number;
+    r: number;
+    g: number;
+    b: number;
+    a: number;
+    effectiveT: number;
+  }
+
+  const sampleSolidAt = (lx: number, ly: number, lz: number): SolidSample | null => {
+    if (depth > 0 && Math.abs(lz) > halfDepth + 1e-4) return null;
+    const sx = lx + pivotX;
+    const sy = ly + pivotY;
+    const u = useEPX ? Math.floor((sx + 0.5) * 2) : Math.round(sx);
+    const v = useEPX ? Math.floor((sy + 0.5) * 2) : Math.round(sy);
+    if (u < 0 || v < 0 || u >= sw || v >= sh) return null;
+
+    const useBack =
+      hasBack &&
+      (depth === 0 ? facingZ < 0 : lz < -1e-4 || (Math.abs(lz) <= 1e-4 && facingZ < 0));
+
+    let baseR: number;
+    let baseG: number;
+    let baseB: number;
+    let alpha: number;
+
+    if (useBack) {
+      if (backData) {
+        const bu =
+          backW === sw
+            ? sw - 1 - u
+            : Math.min(backW - 1, Math.floor(((sw - 1 - u) * backW) / sw));
+        const bv =
+          backH === sh
+            ? v
+            : Math.min(backH - 1, Math.floor((v * backH) / sh));
+        const bIdx = (bv * backW + bu) * 4;
+        alpha = backData[bIdx + 3];
+        if (alpha === 0) return null;
+        baseR = backData[bIdx];
+        baseG = backData[bIdx + 1];
+        baseB = backData[bIdx + 2];
+      } else {
+        const mu = sw - 1 - u;
+        const mIdx = (v * sw + mu) * 4;
+        alpha = srcData[mIdx + 3];
+        if (alpha === 0) return null;
+        baseR = srcData[mIdx];
+        baseG = srcData[mIdx + 1];
+        baseB = srcData[mIdx + 2];
+      }
+    } else {
+      const sIdx = (v * sw + u) * 4;
+      alpha = srcData[sIdx + 3];
+      if (alpha === 0) return null;
+      baseR = srcData[sIdx];
+      baseG = srcData[sIdx + 1];
+      baseB = srcData[sIdx + 2];
+    }
+
+    let effectiveT = 1;
+    if (depth > 0 && thicknessMap) {
+      const normT = thicknessMap[v * sw + u];
+      effectiveT = normT > 0 ? normT : useBack && backData ? 1 : 0;
+      const localHalfZ = halfDepth * effectiveT;
+      if (Math.abs(lz) > localHalfZ + 1e-4) return null;
+    }
+
+    return { u, v, r: baseR, g: baseG, b: baseB, a: alpha, effectiveT };
+  };
+
+  const shadeHit = (
+    hit: SolidSample,
+    hitLz: number,
+    isSideWall: boolean,
+    dx: number,
+    dy: number,
+    t: number
+  ): HitSample => {
+    let shade = 1;
+    let rim = 0;
+    const needNormal = (opts.shadeDepth && depth > 0) || needsLighting;
+
+    if (needNormal) {
+      let nlx = 0;
+      let nly = 0;
+      let nlz = depth === 0 ? (facingZ >= 0 ? 1 : -1) : hitLz >= 0 ? 1 : -1;
+
+      if (depth > 0 && depthProfile === "slab") {
+        if (isSideWall) {
+          const [gx, gy] = sobelGradient(hit.u, hit.v);
+          nlx = -gx;
+          nly = -gy;
+          nlz = 0;
+          if (Math.hypot(nlx, nly) < 1e-5) {
+            nlx = -dx;
+            nly = -dy;
+            nlz = 0;
+          }
+        }
+      } else if (thicknessMap) {
+        const [gx, gy] = sobelGradient(hit.u, hit.v);
+        const hScale = Math.max(1, halfDepth) * (useEPX ? 0.5 : 1) * 0.25;
+        nlx = -gx * hScale;
+        nly = -gy * hScale;
+        if (depth > 0 && Math.abs(hitLz) < halfDepth * 0.25 && hit.effectiveT < 0.4) {
+          const rimT = Math.max(0, Math.min(1, Math.abs(hitLz) / (halfDepth * 0.25)));
+          nlz = (hitLz >= 0 ? 1 : -1) * rimT;
+        }
+      }
+
+      const rawSlope = Math.hypot(nlx, nly);
+      const nLen = Math.hypot(nlx, nly, nlz);
+      if (nLen > 1e-6) {
+        nlx /= nLen;
+        nly /= nLen;
+        nlz /= nLen;
+      } else {
+        nlx = 0;
+        nly = 0;
+        nlz = depth === 0 ? (facingZ >= 0 ? 1 : -1) : hitLz >= 0 ? 1 : -1;
+      }
+
+      const [wnx, wny, wnz] = mat3MulVec(R, nlx, nly, nlz);
+
+      if (opts.shadeDepth && depth > 0) {
+        const depthT = Math.max(
+          0,
+          Math.min(1, (facingZ >= 0 ? hitLz + halfDepth : halfDepth - hitLz) / depth)
+        );
+        const sideCue =
+          0.74 +
+          0.26 * Math.max(0, 0.4 * -wny + 0.55 * Math.abs(wnz) + 0.2 * -wnx);
+
+        if (depthProfile === "slab") {
+          if (isSideWall) {
+            shade = (0.76 + 0.14 * depthT) * sideCue;
+          }
+        } else {
+          const sideFactor = isSideWall
+            ? Math.max(0.55, Math.min(1, rawSlope))
+            : Math.min(1, rawSlope);
+          const sideShade = (0.78 + 0.14 * depthT) * sideCue;
+          shade = 1 - sideFactor * (1 - sideShade);
+        }
+      }
+
+      if (useDirectional) {
+        const diffuse = Math.max(0, wnx * lightX + wny * lightY + wnz * lightZ);
+        shade *= ambient + (1 - ambient) * diffuse;
+      }
+      if (rimStrength > 0) {
+        const grazing = 1 - Math.abs(wnz);
+        rim = rimStrength * grazing * grazing;
+      }
+    }
+
+    const litR = hit.r * shade;
+    const litG = hit.g * shade;
+    const litB = hit.b * shade;
+
+    return {
+      r: clampByte(rim > 0 ? litR + (255 - litR) * rim : litR),
+      g: clampByte(rim > 0 ? litG + (255 - litG) * rim : litG),
+      b: clampByte(rim > 0 ? litB + (255 - litB) * rim : litB),
+      a: hit.a,
+      t,
+    };
   };
 
   const traceSubRay = (px: number, py: number): HitSample | null => {
@@ -553,160 +766,133 @@ export function render25DSprite(
       worldDz = -1;
     }
 
-    // Transform into local sprite space via R^T
+    // Transform into local sprite space via R^T and normalize ray direction
     const [ox, oy, oz] = mat3TransposeMulVec(R, worldOx, worldOy, worldOz);
-    const [dx, dy, dz] = mat3TransposeMulVec(R, worldDx, worldDy, worldDz);
+    const [rawDx, rawDy, rawDz] = mat3TransposeMulVec(R, worldDx, worldDy, worldDz);
+    const dirLen = Math.hypot(rawDx, rawDy, rawDz);
+    if (dirLen < 1e-6) return null;
+    const dx = rawDx / dirLen;
+    const dy = rawDy / dirLen;
+    const dz = rawDz / dirLen;
 
-    if (Math.abs(dz) < 1e-5) return null;
+    if (depth === 0) {
+      if (Math.abs(dz) < 1e-5) return null;
+      const t = -oz / dz;
+      if (t <= 0) return null;
+      const hit = sampleSolidAt(ox + t * dx, oy + t * dy, 0);
+      if (!hit) return null;
+      return shadeHit(hit, 0, false, dx, dy, t);
+    }
 
-    const frontToBack = dz < 0;
-    for (let s = 0; s < numSlices; s++) {
-      const sliceIdx = frontToBack ? numSlices - 1 - s : s;
-      const zSlice = sliceValues[sliceIdx];
-      const t = (zSlice - oz) / dz;
-      if (t <= 0) continue;
+    // Ray-AABB slab intersection against tight 3D bounds
+    let tEnter = -Infinity;
+    let tExit = Infinity;
+    let enterAxis = 2;
 
-      const lx = ox + t * dx + pivotX;
-      const ly = oy + t * dy + pivotY;
-
-      let u: number;
-      let v: number;
-      if (useEPX) {
-        u = Math.floor((lx + 0.5) * 2);
-        v = Math.floor((ly + 0.5) * 2);
-      } else {
-        u = Math.round(lx);
-        v = Math.round(ly);
+    if (Math.abs(dx) < 1e-8) {
+      if (ox < boxMinX || ox > boxMaxX) return null;
+    } else {
+      const inv = 1 / dx;
+      let t0 = (boxMinX - ox) * inv;
+      let t1 = (boxMaxX - ox) * inv;
+      if (t0 > t1) {
+        const tmp = t0;
+        t0 = t1;
+        t1 = tmp;
       }
-      if (u < 0 || v < 0 || u >= sw || v >= sh) continue;
-
-      const useBack =
-        hasBack &&
-        (depth === 0 ? facingZ < 0 : zSlice < 0 || (dz > 0 && s === 0));
-
-      let baseR: number;
-      let baseG: number;
-      let baseB: number;
-      let alpha: number;
-
-      if (useBack) {
-        if (backData) {
-          const bu =
-            backW === sw
-              ? sw - 1 - u
-              : Math.min(backW - 1, Math.floor(((sw - 1 - u) * backW) / sw));
-          const bv =
-            backH === sh
-              ? v
-              : Math.min(backH - 1, Math.floor((v * backH) / sh));
-          const bIdx = (bv * backW + bu) * 4;
-          alpha = backData[bIdx + 3];
-          if (alpha === 0) continue;
-          baseR = backData[bIdx];
-          baseG = backData[bIdx + 1];
-          baseB = backData[bIdx + 2];
-        } else {
-          // mirrorBack with no backSource: mirror src horizontally
-          const mu = sw - 1 - u;
-          const mIdx = (v * sw + mu) * 4;
-          alpha = srcData[mIdx + 3];
-          if (alpha === 0) continue;
-          baseR = srcData[mIdx];
-          baseG = srcData[mIdx + 1];
-          baseB = srcData[mIdx + 2];
-        }
-      } else {
-        const sIdx = (v * sw + u) * 4;
-        alpha = srcData[sIdx + 3];
-        if (alpha === 0) continue;
-        baseR = srcData[sIdx];
-        baseG = srcData[sIdx + 1];
-        baseB = srcData[sIdx + 2];
+      if (t0 > tEnter) {
+        tEnter = t0;
+        enterAxis = 0;
       }
+      if (t1 < tExit) tExit = t1;
+    }
 
-      if (depth > 0 && thicknessMap) {
-        const normT = thicknessMap[v * sw + u];
-        // If backSource has an opaque pixel outside src silhouette, allow full thickness
-        const effectiveT = normT > 0 ? normT : useBack && backData ? 1 : 0;
-        const localHalfZ = halfDepth * effectiveT;
-        if (Math.abs(zSlice) > localHalfZ + 1e-4) continue;
+    if (Math.abs(dy) < 1e-8) {
+      if (oy < boxMinY || oy > boxMaxY) return null;
+    } else {
+      const inv = 1 / dy;
+      let t0 = (boxMinY - oy) * inv;
+      let t1 = (boxMaxY - oy) * inv;
+      if (t0 > t1) {
+        const tmp = t0;
+        t0 = t1;
+        t1 = tmp;
       }
-
-      let shade = 1;
-      if (opts.shadeDepth && depth > 0 && s > 0) {
-        const depthT = 1 - s / Math.max(1, numSlices - 1);
-        shade = 0.62 + 0.26 * depthT;
+      if (t0 > tEnter) {
+        tEnter = t0;
+        enterAxis = 1;
       }
+      if (t1 < tExit) tExit = t1;
+    }
 
-      let rim = 0;
-      if (needsLighting) {
-        let nlx = 0;
-        let nly = 0;
-        let nlz = dz < 0 ? 1 : -1;
+    if (Math.abs(dz) < 1e-8) {
+      if (oz < boxMinZ || oz > boxMaxZ) return null;
+    } else {
+      const inv = 1 / dz;
+      let t0 = (boxMinZ - oz) * inv;
+      let t1 = (boxMaxZ - oz) * inv;
+      if (t0 > t1) {
+        const tmp = t0;
+        t0 = t1;
+        t1 = tmp;
+      }
+      if (t0 > tEnter) {
+        tEnter = t0;
+        enterAxis = 2;
+      }
+      if (t1 < tExit) tExit = t1;
+    }
 
-        if (depth > 0 && s > 0 && depthProfile === "slab") {
-          // Extruded slab side wall: 2D silhouette normal
-          const aL = readThickness(u - 1, v);
-          const aR = readThickness(u + 1, v);
-          const aU = readThickness(u, v - 1);
-          const aD = readThickness(u, v + 1);
-          nlx = -(aR - aL);
-          nly = -(aD - aU);
-          nlz = 0;
-          if (nlx === 0 && nly === 0) {
-            nlx = -dx;
-            nly = -dy;
-            nlz = 0;
+    if (tEnter > tExit || tExit < 0) return null;
+
+    const tStart = Math.max(0, tEnter);
+    let t = tStart;
+    let tPrev = tStart;
+    let stepIdx = 0;
+
+    while (true) {
+      const lx = ox + t * dx;
+      const ly = oy + t * dy;
+      const lz = oz + t * dz;
+      const hit = sampleSolidAt(lx, ly, lz);
+      if (hit) {
+        let bestSolid = hit;
+        let bestT = t;
+        let prevLz = oz + tPrev * dz;
+        if (stepIdx > 0) {
+          let lo = tPrev;
+          let hi = t;
+          for (let b = 0; b < 3; b++) {
+            const mid = (lo + hi) * 0.5;
+            const midHit = sampleSolidAt(
+              ox + mid * dx,
+              oy + mid * dy,
+              oz + mid * dz
+            );
+            if (midHit) {
+              bestSolid = midHit;
+              bestT = mid;
+              hi = mid;
+            } else {
+              lo = mid;
+            }
           }
-        } else if (thicknessMap) {
-          // Sloped cap/profile normal from local thickness gradient
-          const hScale = Math.max(1, halfDepth) * (useEPX ? 0.5 : 1);
-          const hL = readThickness(u - 1, v) * hScale;
-          const hR = readThickness(u + 1, v) * hScale;
-          const hU = readThickness(u, v - 1) * hScale;
-          const hD = readThickness(u, v + 1) * hScale;
-          nlx = -(hR - hL) * 0.5;
-          nly = -(hD - hU) * 0.5;
-          nlz = depth === 0 ? (facingZ >= 0 ? 1 : -1) : zSlice >= 0 ? 1 : -1;
+          prevLz = oz + lo * dz;
         }
-
-        const nLen = Math.hypot(nlx, nly, nlz);
-        if (nLen > 1e-6) {
-          nlx /= nLen;
-          nly /= nLen;
-          nlz /= nLen;
-        } else {
-          nlx = 0;
-          nly = 0;
-          nlz = dz < 0 ? 1 : -1;
-        }
-
-        const [wnx, wny, wnz] = mat3MulVec(R, nlx, nly, nlz);
-        if (useDirectional) {
-          const diffuse = Math.max(
-            0,
-            wnx * lightX + wny * lightY + wnz * lightZ
-          );
-          const litShade = ambient + (1 - ambient) * diffuse;
-          shade *= litShade;
-        }
-        if (rimStrength > 0) {
-          const grazing = 1 - Math.abs(wnz);
-          rim = rimStrength * grazing * grazing;
-        }
+        const hitLz = oz + bestT * dz;
+        const isSideWall =
+          depthProfile === "slab"
+            ? (stepIdx === 0 && enterAxis !== 2) ||
+              (stepIdx > 0 && Math.abs(prevLz) <= halfDepth - 1e-3)
+            : (stepIdx === 0 && enterAxis !== 2) ||
+              Math.abs(hitLz) < halfDepth * 0.85;
+        return shadeHit(bestSolid, hitLz, isSideWall, dx, dy, bestT);
       }
 
-      const litR = baseR * shade;
-      const litG = baseG * shade;
-      const litB = baseB * shade;
-
-      return {
-        r: clampByte(rim > 0 ? litR + (255 - litR) * rim : litR),
-        g: clampByte(rim > 0 ? litG + (255 - litG) * rim : litG),
-        b: clampByte(rim > 0 ? litB + (255 - litB) * rim : litB),
-        a: alpha,
-        t,
-      };
+      if (t >= tExit) break;
+      tPrev = t;
+      t = Math.min(tExit, t + stepSize);
+      stepIdx++;
     }
 
     return null;

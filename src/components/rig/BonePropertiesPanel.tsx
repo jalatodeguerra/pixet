@@ -542,27 +542,40 @@ export function BonePropertiesPanel() {
               />
             </label>
 
-            <div className="rig-inspector-row">
+            <label className="rig-slider-row">
               <span>Depth Z</span>
+              <input
+                type="range"
+                min={-32}
+                max={32}
+                step={0.5}
+                value={round2(activeLocalZ)}
+                onPointerDown={() => beginRigGesture("Set bone depth Z")}
+                onPointerUp={endRigGesture}
+                onPointerCancel={endRigGesture}
+                onChange={(e) =>
+                  handleEditTransform({ localZ: Number(e.target.value) })
+                }
+              />
               <input
                 type="number"
                 step={0.5}
                 className="rig-num-input"
-                style={{ width: 64 }}
+                style={{ width: 46 }}
                 value={round2(activeLocalZ)}
                 onChange={(e) => {
                   const v = Number(e.target.value);
                   if (Number.isFinite(v)) handleEditTransform({ localZ: v });
                 }}
               />
-            </div>
+            </label>
 
             <label className="rig-slider-row">
               <span>Thickness</span>
               <input
                 type="range"
                 min={0}
-                max={12}
+                max={16}
                 step={1}
                 value={Math.round(selectedBone.extrudeDepth ?? 0)}
                 onPointerDown={() => beginRigGesture("Set bone thickness")}
@@ -579,14 +592,14 @@ export function BonePropertiesPanel() {
               <input
                 type="number"
                 min={0}
-                max={12}
+                max={16}
                 className="rig-num-input"
                 style={{ width: 46 }}
                 value={Math.round(selectedBone.extrudeDepth ?? 0)}
                 onChange={(e) => {
                   const v = Number(e.target.value);
                   if (Number.isFinite(v)) {
-                    const clamped = Math.max(0, Math.min(12, Math.round(v)));
+                    const clamped = Math.max(0, Math.min(16, Math.round(v)));
                     mutateRig("Set bone thickness", () =>
                       pixelEngine.rig.updateBone(selectedBone.id, {
                         extrudeDepth: clamped,
@@ -640,6 +653,18 @@ export function BonePropertiesPanel() {
                   ))}
               </select>
             </div>
+
+            {!(
+              Boolean(selectedBone.boundLayerId) ||
+              Boolean(pixelEngine.rig.getBoneMask(selectedBone.id)) ||
+              Boolean(pixelEngine.rig.getBoneWeights()?.entries.size) ||
+              pixelEngine.rig.slots.some((s) => s.boneId === selectedBone.id)
+            ) && (
+              <span className="rotate3d-hint">
+                Bind a layer or run Auto-Weights to deform pixels with this
+                bone.
+              </span>
+            )}
           </div>
 
           <div className="rig-key-actions">

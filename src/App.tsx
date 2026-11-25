@@ -10,7 +10,7 @@ import { RigExportModal } from "./components/rig/RigExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { NewSpriteModal } from "./components/NewSpriteModal";
 import { RightSidebar } from "./components/RightSidebar";
-import { Rotate3DModal } from "./components/Rotate3DModal";
+import { Studio3DViewport } from "./components/studio3d/Studio3DViewport";
 import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
 import { ImportTilesetModal } from "./components/tiles/ImportTilesetModal";
@@ -327,7 +327,9 @@ export function App() {
         if (ctrlKey === "3") {
           e.preventDefault();
           const st = useEditorStore.getState();
-          st.setRotate3dModalOpen(!st.rotate3dModalOpen);
+          st.setWorkspaceMode(
+            st.workspaceMode === "studio3d" ? "draw" : "studio3d"
+          );
           return;
         }
         if (ctrlKey === "i" && e.shiftKey) {
@@ -646,7 +648,7 @@ export function App() {
       <main className="workspace-main">
         <div className="workspace-middle">
           {!panelsCollapsed && <ToolRail />}
-          <Viewport />
+          {workspaceMode === "studio3d" ? <Studio3DViewport /> : <Viewport />}
           {!panelsCollapsed && (
             <>
               <div
@@ -684,7 +686,6 @@ export function App() {
       <StatusBar />
       <ExportModal />
       <RigExportModal />
-      <Rotate3DModal />
       <ImportImageModal />
       <NewSpriteModal />
       <CanvasSizeModal />

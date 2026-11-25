@@ -2873,6 +2873,24 @@ export class RigState {
     return opts.orbit ? applyOrbitToTransforms(result, opts.orbit) : result;
   }
 
+  computeFlatRestTransforms(): Map<string, BoneWorldTransform> {
+    const locals = new Map<string, LocalBonePose>();
+    for (const bone of this.bones) {
+      const bind = bindPoseOf(bone);
+      locals.set(bone.id, {
+        localX: bind.localX,
+        localY: bind.localY,
+        rotationDeg: bind.rotationDeg,
+        scaleX: bind.scaleX,
+        scaleY: bind.scaleY,
+        yawDeg: 0,
+        pitchDeg: 0,
+        localZ: bind.localZ,
+      });
+    }
+    return this.computeFk(locals);
+  }
+
   computeWorldTransforms(
     frame: number,
     mode: "rest" | "pose",

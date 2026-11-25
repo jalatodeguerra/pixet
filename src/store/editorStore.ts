@@ -37,6 +37,13 @@ import {
   computeNextPlaybackFrame,
   type TagDirection,
 } from "../engine/tools/animationHelpers.ts";
+import type {
+  DepthProfile,
+  SpinAxis,
+  TurntableEasing,
+} from "../engine/tools/rotate3d.ts";
+import type { Scene3DGridMode } from "../engine/tools/scene3d.ts";
+import type { RigTurntableMode } from "../engine/rig/export/bake.ts";
 
 export type {
   BlendMode,
@@ -105,7 +112,116 @@ export type ReferenceImageState = {
   locked: boolean;
 };
 
-export type WorkspaceMode = "draw" | "tiles" | "rig" | "data";
+export type WorkspaceMode = "draw" | "tiles" | "rig" | "studio3d" | "data";
+export type Studio3DMode = "extruded" | "stack" | "rig";
+export type Studio3DSourceScope = "visible" | "active";
+export type Studio3DPivotMode = "center" | "bottom" | "custom";
+export type Studio3DPreviewMode = "orbit" | "turntable";
+export type Studio3DZoom = "auto" | 2 | 4 | 6 | 8;
+
+export interface Studio3DState {
+  mode: Studio3DMode;
+  gridMode: Scene3DGridMode;
+  showAxes: boolean;
+  showFloorStage: boolean;
+  sourceScope: Studio3DSourceScope;
+  backFaceChoice: string;
+  pivotMode: Studio3DPivotMode;
+  customPivotX: number;
+  customPivotY: number;
+  rigAutoZSort: boolean;
+  rigBakeMode: RigTurntableMode;
+  rigDirections: number;
+  yawDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
+  perspective: number;
+  autoFitBounds: boolean;
+  depthProfile: DepthProfile;
+  extrudeDepth: number;
+  heightMapLayerId: string;
+  stackPitchDeg: number;
+  sliceSpacing: number;
+  sliceThickness: number;
+  reverseOrder: boolean;
+  shadeDepth: boolean;
+  directionalLighting: boolean;
+  lightAzimuthDeg: number;
+  lightElevationDeg: number;
+  ambient: number;
+  rimStrength: number;
+  supersample: boolean;
+  preScaleEPX: boolean;
+  paletteLock: boolean;
+  removeOrphans: boolean;
+  fillHoles: boolean;
+  outlineEnabled: boolean;
+  outlineHex: string;
+  previewMode: Studio3DPreviewMode;
+  previewZoom: Studio3DZoom;
+  autoSpin: boolean;
+  scrubberFrame: number;
+  scrubberPlaying: boolean;
+  bakeFrameCount: number;
+  spinAxis: SpinAxis;
+  bakeStartDeg: number;
+  bakeSweepDeg: number;
+  bakePingPong: boolean;
+  bakeEasing: TurntableEasing;
+  spinTimelineFrames: boolean;
+}
+
+const DEFAULT_STUDIO3D_STATE: Studio3DState = {
+  mode: "extruded",
+  gridMode: "perspective",
+  showAxes: true,
+  showFloorStage: true,
+  sourceScope: "visible",
+  backFaceChoice: "none",
+  pivotMode: "center",
+  customPivotX: 16,
+  customPivotY: 16,
+  rigAutoZSort: true,
+  rigBakeMode: "pose",
+  rigDirections: 8,
+  yawDeg: 28,
+  pitchDeg: 20,
+  rollDeg: 0,
+  perspective: 0.35,
+  autoFitBounds: false,
+  depthProfile: "slab",
+  extrudeDepth: 4,
+  heightMapLayerId: "",
+  stackPitchDeg: 42,
+  sliceSpacing: 1.5,
+  sliceThickness: 1,
+  reverseOrder: false,
+  shadeDepth: true,
+  directionalLighting: false,
+  lightAzimuthDeg: -35,
+  lightElevationDeg: 45,
+  ambient: 0.45,
+  rimStrength: 0,
+  supersample: true,
+  preScaleEPX: false,
+  paletteLock: false,
+  removeOrphans: false,
+  fillHoles: false,
+  outlineEnabled: false,
+  outlineHex: "#0f0f17",
+  previewMode: "orbit",
+  previewZoom: "auto",
+  autoSpin: false,
+  scrubberFrame: 0,
+  scrubberPlaying: false,
+  bakeFrameCount: 8,
+  spinAxis: "yaw",
+  bakeStartDeg: 0,
+  bakeSweepDeg: 360,
+  bakePingPong: false,
+  bakeEasing: "linear",
+  spinTimelineFrames: false,
+};
 export type TileMode = "map" | "tile";
 export interface TileBrushSelection {
   tilesetIndex: number;
@@ -454,8 +570,11 @@ interface EditorState {
   statusMessage: string | null;
   detachedPanels: Partial<Record<PanelId, FloatingPanelRect>>;
   dockedPanelOrder: Record<WorkspaceMode, PanelId[]>;
+  studio3d: Studio3DState;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
+  patchStudio3D: (patch: Partial<Studio3DState>) => void;
+  resetStudio3DCamera: () => void;
   setActiveTool: (tool: ToolId) => void;
   setBrushSize: (size: number) => void;
   setBrushShape: (shape: BrushShape) => void;
@@ -1106,8 +1225,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   statusMessage: null,
   detachedPanels: initialPanelLayout.detachedPanels,
   dockedPanelOrder: initialPanelLayout.dockedPanelOrder,
+  studio3d: { ...DEFAULT_STUDIO3D_STATE },
 
   setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
+  patchStudio3D: (patch) =>
+    set((s) => ({ studio3d: { ...s.studio3d, ...patch } })),
+  resetStudio3DCamera: () =>
+    set((s) => ({
+      studio3d: {
+        ...s.studio3d,
+        yawDeg: DEFAULT_STUDIO3D_STATE.yawDeg,
+        pitchDeg: DEFAULT_STUDIO3D_STATE.pitchDeg,
+        rollDeg: DEFAULT_STUDIO3D_STATE.rollDeg,
+        perspective:
+          s.studio3d.gridMode === "isometric"
+            ? 0
+            : DEFAULT_STUDIO3D_STATE.perspective,
+        stackPitchDeg: DEFAULT_STUDIO3D_STATE.stackPitchDeg,
+        autoSpin: false,
+      },
+    })),
   setActiveTool: (activeTool) => set({ activeTool }),
   setBrushSize: (size) =>
     set({ brushSize: Math.max(1, Math.min(64, Math.round(size))) }),
@@ -2135,7 +2272,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setDocumentName: (documentName) => set({ documentName }),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
   setRigExportModalOpen: (rigExportModalOpen) => set({ rigExportModalOpen }),
-  setRotate3dModalOpen: (rotate3dModalOpen) => set({ rotate3dModalOpen }),
+  setRotate3dModalOpen: (open) =>
+    set((s) =>
+      open
+        ? { workspaceMode: "studio3d", rotate3dModalOpen: false }
+        : { rotate3dModalOpen: false, workspaceMode: s.workspaceMode }
+    ),
   setNewSpriteModalOpen: (newSpriteModalOpen) => set({ newSpriteModalOpen }),
   setCanvasSizeModalOpen: (canvasSizeModalOpen) => set({ canvasSizeModalOpen }),
   setFilterModalOpen: (filterModalOpen, tab) =>

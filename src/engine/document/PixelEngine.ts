@@ -58,6 +58,11 @@ import type {
   SelectionMask,
 } from "../tools/selection.ts";
 import { resolveOnionSkinFrames } from "../tools/animationHelpers.ts";
+import {
+  mat3ExtractEulerDeg,
+  mat3Mul,
+  mat3Transpose,
+} from "../tools/math3d.ts";
 
 export interface OnionSkinOptions {
   tint?: boolean;
@@ -1022,12 +1027,10 @@ export class PixelEngine {
     }
 
     const rootOrbit = opts.rootOrbit ?? null;
-    const restMap = this.rig.computeWorldTransforms(frameIndex, "rest", false);
+    const restMap = this.rig.computeFlatRestTransforms();
     const poseMap =
       opts.mode === "rest"
-        ? rootOrbit
-          ? this.rig.computeWorldTransforms(frameIndex, "rest", false, rootOrbit)
-          : restMap
+        ? this.rig.computeWorldTransforms(frameIndex, "rest", false, rootOrbit)
         : this.rig.computeWorldTransforms(
             frameIndex,
             "pose",
@@ -1041,6 +1044,37 @@ export class PixelEngine {
       boneById.set(bone.id, bone);
       if (bone.boundLayerId) {
         layerToBoneId.set(bone.boundLayerId, bone.id);
+      }
+    }
+
+    let has3dBoneActivity = Boolean(
+      rootOrbit &&
+        (Math.abs(rootOrbit.yawDeg) > 0.05 ||
+          Math.abs(rootOrbit.pitchDeg) > 0.05)
+    );
+    if (!has3dBoneActivity) {
+      for (const bone of this.rig.bones) {
+        if ((bone.extrudeDepth ?? 0) > 0) {
+          has3dBoneActivity = true;
+          break;
+        }
+        const rest = restMap.get(bone.id);
+        const posed = poseMap.get(bone.id);
+        if (!rest || !posed) continue;
+        if (
+          posed.facingZ < 0 ||
+          Math.abs(posed.z) > 1e-4 ||
+          Math.abs(posed.tipZ) > 1e-4
+        ) {
+          has3dBoneActivity = true;
+          break;
+        }
+        const rDelta = mat3Mul(posed.worldMatrix, mat3Transpose(rest.worldMatrix));
+        const { yawDeg, pitchDeg } = mat3ExtractEulerDeg(rDelta);
+        if (Math.abs(yawDeg) > 0.05 || Math.abs(pitchDeg) > 0.05) {
+          has3dBoneActivity = true;
+          break;
+        }
       }
     }
 
@@ -1156,21 +1190,111 @@ export class PixelEngine {
       }
 
       // R6 soft weights use LBS (inverse-mapped lattice, hole-free sampling).
-      // Hard weights keep the fast per-bone warpLayerByBone3D path below.
+      // When any bone has 3D tilt/extrusion/depth, partition by dominant bone
+      // and route through warpLayerByBone3D so 3D rotation, extrusion, and Z-sort work.
       if (celWeights && !weightsAreHard(celWeights)) {
-        const warped = this.getRigDeformedBuffer(`${deformKey}|lbs`, () =>
-          skinLayerPixels(sourceCel, celWeights, boneTransforms, {
-            pixelSnap: opts.pixelSnap,
-          })
-        );
-        drawItems.push({
-          kind: "buffer",
-          buffer: warped,
-          opacity: effective.opacity,
-          blendMode: layer.blendMode,
-          z: 0,
-          order: drawOrder++,
-        });
+        if (!has3dBoneActivity) {
+          const warped = this.getRigDeformedBuffer(`${deformKey}|lbs`, () =>
+            skinLayerPixels(sourceCel, celWeights, boneTransforms, {
+              pixelSnap: opts.pixelSnap,
+            })
+          );
+          drawItems.push({
+            kind: "buffer",
+            buffer: warped,
+            opacity: effective.opacity,
+            blendMode: layer.blendMode,
+            z: 0,
+            order: drawOrder++,
+          });
+          continue;
+        }
+
+        const pxCount = sourceCel.width * sourceCel.height;
+        const unweighted = new PixelBuffer(sourceCel.width, sourceCel.height);
+        const boneSlices = new Map<string, PixelBuffer>();
+
+        for (let i = 0; i < pxCount; i++) {
+          const pIdx = i * 4;
+          const a = sourceCel.data[pIdx + 3];
+          if (a === 0) continue;
+
+          const infs = celWeights.entries.get(i);
+          let bestBoneId: string | null = null;
+          let bestW = 0;
+          if (infs) {
+            for (const inf of infs) {
+              if (inf.w <= bestW) continue;
+              const candidate = boneById.get(inf.boneId);
+              if (!candidate) continue;
+              if (candidate.boundLayerId && candidate.boundLayerId !== layer.id) {
+                continue;
+              }
+              bestW = inf.w;
+              bestBoneId = inf.boneId;
+            }
+          }
+
+          if (!bestBoneId) {
+            unweighted.data[pIdx] = sourceCel.data[pIdx];
+            unweighted.data[pIdx + 1] = sourceCel.data[pIdx + 1];
+            unweighted.data[pIdx + 2] = sourceCel.data[pIdx + 2];
+            unweighted.data[pIdx + 3] = a;
+            continue;
+          }
+
+          let slice = boneSlices.get(bestBoneId);
+          if (!slice) {
+            slice = new PixelBuffer(sourceCel.width, sourceCel.height);
+            boneSlices.set(bestBoneId, slice);
+          }
+          slice.data[pIdx] = sourceCel.data[pIdx];
+          slice.data[pIdx + 1] = sourceCel.data[pIdx + 1];
+          slice.data[pIdx + 2] = sourceCel.data[pIdx + 2];
+          slice.data[pIdx + 3] = a;
+        }
+
+        if (!unweighted.isEmpty()) {
+          drawItems.push({
+            kind: "buffer",
+            buffer: unweighted,
+            opacity: effective.opacity,
+            blendMode: layer.blendMode,
+            z: 0,
+            order: drawOrder++,
+          });
+        }
+
+        for (const [bId, slice] of boneSlices.entries()) {
+          const b = boneById.get(bId);
+          const rest = restMap.get(bId);
+          const posed = poseMap.get(bId);
+          const backSource = resolveBackSource(b);
+          const backKey = backSource
+            ? `${b?.backLayerId ?? ""}:${backSource.revision}`
+            : "none";
+          const warped =
+            rest && posed
+              ? this.getRigDeformedBuffer(
+                  `${deformKey}|soft3d:${bId}|back:${backKey}`,
+                  () =>
+                    warpLayerByBone3D(slice, rest, posed, opts, {
+                      extrudeDepth: b?.extrudeDepth,
+                      depthProfile: b?.depthProfile,
+                      backSource,
+                    })
+                )
+              : slice;
+          const z = posed ? (posed.z + posed.tipZ) * 0.5 : 0;
+          drawItems.push({
+            kind: "buffer",
+            buffer: warped,
+            opacity: effective.opacity,
+            blendMode: layer.blendMode,
+            z,
+            order: drawOrder++,
+          });
+        }
         continue;
       }
 
