@@ -426,7 +426,21 @@ export function CommandPalette() {
         label: "File: Export Spritesheet...",
         category: "File",
         shortcut: "Ctrl+E",
-        run: () => st().setExportModalOpen(true),
+        run: () => st().setExportModalOpen(true, "sheet"),
+      },
+      {
+        id: "file.exportGif",
+        label: "File: Export GIF...",
+        category: "File",
+        keywords: ["animation", "animated", "gif"],
+        run: () => st().setExportModalOpen(true, "gif"),
+      },
+      {
+        id: "file.exportPngSequence",
+        label: "File: Export PNG Sequence...",
+        category: "File",
+        keywords: ["frames", "png", "zip", "animation"],
+        run: () => st().setExportModalOpen(true, "png_sequence"),
       },
     ];
 

@@ -590,6 +590,7 @@ interface EditorState {
   canvasHeight: number;
   colorMode: "RGBA" | "Indexed";
   exportModalOpen: boolean;
+  exportModalMode: "sheet" | "gif" | "png_sequence";
   rigExportModalOpen: boolean;
   rotate3dModalOpen: boolean;
   newSpriteModalOpen: boolean;
@@ -931,7 +932,10 @@ interface EditorState {
   setCurrentFilePath: (path: string | null) => void;
   setDocumentName: (name: string) => void;
   setDocumentDirty: (dirty: boolean) => void;
-  setExportModalOpen: (open: boolean) => void;
+  setExportModalOpen: (
+    open: boolean,
+    mode?: "sheet" | "gif" | "png_sequence"
+  ) => void;
   setRigExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
   setNewSpriteModalOpen: (open: boolean) => void;
@@ -1251,6 +1255,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   canvasHeight: 32,
   colorMode: "RGBA",
   exportModalOpen: false,
+  exportModalMode: "sheet",
   rigExportModalOpen: false,
   rotate3dModalOpen: false,
   newSpriteModalOpen: false,
@@ -2506,7 +2511,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setDocumentName: (documentName) => set({ documentName }),
   setDocumentDirty: (isDocumentDirty) =>
     set((s) => (s.isDocumentDirty === isDocumentDirty ? s : { isDocumentDirty })),
-  setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
+  setExportModalOpen: (exportModalOpen, mode) =>
+    set(
+      exportModalOpen
+        ? { exportModalOpen, exportModalMode: mode ?? "sheet" }
+        : { exportModalOpen }
+    ),
   setRigExportModalOpen: (rigExportModalOpen) => set({ rigExportModalOpen }),
   setRotate3dModalOpen: (open) =>
     set((s) =>
