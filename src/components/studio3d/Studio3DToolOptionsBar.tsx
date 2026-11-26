@@ -15,7 +15,7 @@ import {
 } from "./studio3dActions";
 import {
   Model3DToolOptionsBar,
-  Studio3DWorkspaceKindSwitcher,
+  Studio3DModeSwitcher,
 } from "./Model3DToolOptionsBar";
 
 const PASS_OPTIONS: readonly { id: Render3DPass; label: string }[] = [
@@ -46,9 +46,7 @@ export function Studio3DToolOptionsBar() {
 
   return (
     <div className="tool-options-bar">
-      <div className="options-group">
-        <Studio3DWorkspaceKindSwitcher />
-      </div>
+      <Studio3DModeSwitcher />
 
       <div className="option-divider" />
 

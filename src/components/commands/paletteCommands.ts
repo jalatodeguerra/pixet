@@ -667,22 +667,6 @@ export function buildPaletteCommands(): LegacyPaletteCommand[] {
     };
 
     const model3dCmds: LegacyPaletteCommand[] = [
-      ...(
-        [
-          ["model", "Model"],
-          ["tile", "Tile"],
-          ["uv", "UV"],
-          ["paint", "Paint"],
-          ["animate", "Animate"],
-          ["bake", "Bake"],
-        ] as const satisfies readonly [Model3DSubMode, string][]
-      ).map(([subMode, label]) => ({
-        id: `model3d.mode.${subMode}`,
-        label: `3D Model: Switch to Low-Poly 3D (${label})`,
-        category: "3D Model",
-        keywords: ["lowpoly", "3d", "model", subMode, label.toLowerCase()],
-        run: () => switchToLowPolySubMode(subMode),
-      })),
       {
         id: "model3d.addCuboid",
         label: "3D Model: Add Cuboid",

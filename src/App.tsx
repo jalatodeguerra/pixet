@@ -87,6 +87,10 @@ import {
   findRecoverableWork,
   initDocumentLifecycle,
 } from "./engine/io/documentLifecycle";
+import {
+  getStudio3DFlatMode,
+  studio3DFlatModeShowsTimeline,
+} from "./engine/model3d/studio3dModes";
 import { loadShowOnStartup } from "./engine/io/recentFiles";
 
 export function App() {
@@ -94,16 +98,20 @@ export function App() {
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
   const timelineHeight = useEditorStore((s) => s.timelineHeight);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
-  const studio3dKind = useEditorStore((s) => s.studio3d.workspaceKind);
-  const studio3dSubMode = useEditorStore((s) => s.studio3d.subMode);
+  const studio3dFlatMode = useEditorStore((s) =>
+    getStudio3DFlatMode({
+      workspaceKind: s.studio3d.workspaceKind,
+      mode: s.studio3d.mode,
+      subMode: s.studio3d.subMode,
+    })
+  );
   // The sprite timeline is irrelevant in Nodes and in the low-poly modeller
   // (except its Animate sub-mode, which reuses this dock for 3D keyframes).
   const showTimeline =
     workspaceMode !== "nodes" &&
     !(
       workspaceMode === "studio3d" &&
-      studio3dKind === "lowpoly3d" &&
-      studio3dSubMode !== "animate"
+      !studio3DFlatModeShowsTimeline(studio3dFlatMode)
     );
   const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
   const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
