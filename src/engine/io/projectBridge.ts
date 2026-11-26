@@ -42,6 +42,7 @@ import {
 } from "./documentState.ts";
 import { clearRecoveryEntry } from "./recovery.ts";
 import { confirmDiscardChanges } from "./unsavedChanges.ts";
+import { forgetRecentFile, recordRecentFile } from "./recentFiles.ts";
 import { exportBrowserSpritesheet } from "../export/exportActions.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
@@ -709,6 +710,7 @@ export async function saveProjectAction(saveAs = false): Promise<boolean> {
     state.setCurrentFilePath(targetPath);
     state.setDocumentName(fileName);
     state.setStatusMessage(`Saved ${fileName}`);
+    recordRecentFile(targetPath);
     finishSave();
     return true;
   } catch (err) {
@@ -718,8 +720,6 @@ export async function saveProjectAction(saveAs = false): Promise<boolean> {
 }
 
 export async function openProjectAction(): Promise<void> {
-  const state = useEditorStore.getState();
-
   if (!isTauriRuntime()) {
     const input = document.createElement("input");
     input.type = "file";
@@ -763,23 +763,34 @@ export async function openProjectAction(): Promise<void> {
     filters: [{ name: "Pixet Project", extensions: ["pixet"] }],
   });
   if (!selected || typeof selected !== "string") return;
-  if (!(await confirmDiscardChanges())) return;
+  await openProjectFromPath(selected);
+}
 
+/**
+ * Opens a project at a known path (desktop) without showing a file dialog.
+ * Gated by the unsaved-changes prompt. Returns true when it was loaded.
+ */
+export async function openProjectFromPath(path: string): Promise<boolean> {
+  const state = useEditorStore.getState();
+  if (!isTauriRuntime()) return false;
+  if (!(await confirmDiscardChanges())) return false;
+
+  const name = extractBasename(path);
   try {
-    const transfer = await invoke<ProjectTransfer>("open_project", {
-      path: selected,
-    });
-    if (loadProjectTransferSafely(transfer, selected, extractBasename(selected))) {
+    const transfer = await invoke<ProjectTransfer>("open_project", { path });
+    if (loadProjectTransferSafely(transfer, path, name)) {
       markDocumentReplaced();
-      useEditorStore
-        .getState()
-        .setStatusMessage(`Opened ${extractBasename(selected)}`);
+      recordRecentFile(path);
+      useEditorStore.getState().setStatusMessage(`Opened ${name}`);
+      return true;
     }
   } catch (err) {
+    forgetRecentFile(path);
     state.setStatusMessage(
-      `Could not open ${extractBasename(selected)}: ${String(err)}. Your current document was not changed.`
+      `Could not open ${name}: ${String(err)}. Your current document was not changed.`
     );
   }
+  return false;
 }
 
 export async function importAsepriteAction(): Promise<void> {

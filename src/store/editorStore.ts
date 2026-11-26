@@ -594,6 +594,7 @@ interface EditorState {
   rigExportModalOpen: boolean;
   rotate3dModalOpen: boolean;
   newSpriteModalOpen: boolean;
+  startScreenOpen: boolean;
   canvasSizeModalOpen: boolean;
   filterModalOpen: boolean;
   filterModalTab: string;
@@ -939,6 +940,7 @@ interface EditorState {
   setRigExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
   setNewSpriteModalOpen: (open: boolean) => void;
+  setStartScreenOpen: (open: boolean) => void;
   setCanvasSizeModalOpen: (open: boolean) => void;
   setFilterModalOpen: (open: boolean, tab?: string) => void;
   setCanvasSize: (w: number, h: number) => void;
@@ -1259,6 +1261,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigExportModalOpen: false,
   rotate3dModalOpen: false,
   newSpriteModalOpen: false,
+  startScreenOpen: false,
   canvasSizeModalOpen: false,
   filterModalOpen: false,
   filterModalTab: "outline",
@@ -2525,6 +2528,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         : { rotate3dModalOpen: false, workspaceMode: s.workspaceMode }
     ),
   setNewSpriteModalOpen: (newSpriteModalOpen) => set({ newSpriteModalOpen }),
+  setStartScreenOpen: (startScreenOpen) => set({ startScreenOpen }),
   setCanvasSizeModalOpen: (canvasSizeModalOpen) => set({ canvasSizeModalOpen }),
   setFilterModalOpen: (filterModalOpen, tab) =>
     set((s) => ({

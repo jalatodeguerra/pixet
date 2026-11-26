@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
 import { FilePlus2, X } from "lucide-react";
-import { hexToRgba } from "../engine/document/PixelBuffer";
-import { pixelEngine } from "../engine/document/PixelEngine";
-import { commitFloatingSelection } from "../engine/document/selectionActions";
-import { syncTimelineCels } from "../engine/document/timelineActions";
-import { resetRigHistory } from "../engine/rig/rigActions";
-import { markDocumentReplaced } from "../engine/io/projectBridge";
+import { createNewDocument } from "../engine/io/newDocument";
 import { confirmDiscardChanges } from "../engine/io/unsavedChanges";
 import { useEditorStore } from "../store/editorStore";
 
@@ -16,7 +11,6 @@ const SIZE_PRESETS = [16, 32, 64, 128, 256];
 export function NewSpriteModal() {
   const open = useEditorStore((s) => s.newSpriteModalOpen);
   const setOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
-  const secondaryColor = useEditorStore((s) => s.secondaryColor);
 
   const [name, setName] = useState("untitled.pixet");
   const [width, setWidth] = useState(32);
@@ -40,64 +34,13 @@ export function NewSpriteModal() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!(await confirmDiscardChanges())) return;
-    commitFloatingSelection();
-    const state = useEditorStore.getState();
-
-    const w = Math.max(1, Math.min(1024, Math.round(width) || 32));
-    const h = Math.max(1, Math.min(1024, Math.round(height) || 32));
-    const cleanName = name.trim() || "untitled";
-    const docName = cleanName.toLowerCase().endsWith(".pixet")
-      ? cleanName
-      : `${cleanName}.pixet`;
-
-    pixelEngine.resetForDocument(w, h);
-    resetRigHistory();
-    state.bumpModel3DVersion();
-    const cel = pixelEngine.getOrCreateCel("layer-1", 0);
-
-    if (bgFill !== "transparent") {
-      const fillHex = bgFill === "white" ? "#ffffff" : secondaryColor;
-      const [r, g, b, a] = hexToRgba(fillHex, 255);
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          cel.setPixel(x, y, r, g, b, a);
-        }
-      }
-      cel.markAllDirty();
-    }
-
-    state.loadProjectState({
-      documentName: docName,
-      filePath: null,
-      canvasWidth: w,
-      canvasHeight: h,
+    createNewDocument({
+      name,
+      width,
+      height,
       colorMode,
-      paletteName: state.paletteName,
-      palette: state.palette,
-      layers: [
-        {
-          id: "layer-1",
-          name: "Layer 1",
-          kind: "raster",
-          visible: true,
-          locked: false,
-          opacity: 100,
-          alphaLock: false,
-          blendMode: "Normal",
-          parentId: null,
-          cels: { 0: !cel.isEmpty() },
-        },
-      ],
-      frames: [
-        { id: "frame-new-1", index: 0, durationMs: Math.round(1000 / state.fps) },
-      ],
-      tags: [],
+      background: bgFill,
     });
-
-    syncTimelineCels();
-    pixelEngine.emitChange();
-    markDocumentReplaced();
-    state.setStatusMessage(`Created "${docName}" (${w}×${h})`);
     setOpen(false);
   };
 

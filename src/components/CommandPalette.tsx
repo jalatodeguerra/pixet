@@ -397,6 +397,13 @@ export function CommandPalette() {
 
     const fileCmds: ActionCommandEntry[] = [
       {
+        id: "help.welcome",
+        label: "Help: Welcome Screen",
+        category: "Help",
+        keywords: ["welcome", "start", "samples", "help", "new"],
+        run: () => st().setStartScreenOpen(true),
+      },
+      {
         id: "file.new",
         label: "File: New Sprite...",
         category: "File",

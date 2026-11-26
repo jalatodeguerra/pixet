@@ -101,7 +101,12 @@ import {
 } from "./engine/model3d/tileStamp";
 import type { SelectionGranularity } from "./engine/model3d/types";
 import { DocumentDialogs } from "./components/DocumentDialogs";
-import { initDocumentLifecycle } from "./engine/io/documentLifecycle";
+import { StartScreen } from "./components/StartScreen";
+import {
+  findRecoverableWork,
+  initDocumentLifecycle,
+} from "./engine/io/documentLifecycle";
+import { loadShowOnStartup } from "./engine/io/recentFiles";
 
 export function App() {
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
@@ -190,6 +195,19 @@ export function App() {
     initDocumentLifecycle();
   }, []);
 
+  // Welcome screen on launch, unless a crash-recovery prompt is pending
+  // (DocumentDialogs opens it after the recovery entry is discarded).
+  useEffect(() => {
+    let cancelled = false;
+    if (!loadShowOnStartup()) return;
+    void findRecoverableWork().then((entry) => {
+      if (!cancelled && !entry) useEditorStore.getState().setStartScreenOpen(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Auto-clear transient status messages
   useEffect(() => {
     if (!statusMessage) return;
@@ -265,7 +283,7 @@ export function App() {
 
     const onKeyDown = (e: KeyboardEvent) => {
       const stNow = useEditorStore.getState();
-      if (stNow.keybindingsModalOpen) {
+      if (stNow.keybindingsModalOpen || stNow.startScreenOpen) {
         return;
       }
 
@@ -1266,6 +1284,7 @@ export function App() {
         <RigExportModal />
         <ImportImageModal />
         <NewSpriteModal />
+        <StartScreen />
         <CanvasSizeModal />
         <FilterModal />
         <ImportTilesetModal />
