@@ -21,6 +21,8 @@ export class RigHistory {
   readonly limit: number;
   private undoEntries: RigHistoryEntry[] = [];
   private redoEntries: RigHistoryEntry[] = [];
+  /** Fired after a new undo step was actually recorded (not for no-op pushes). */
+  onCommit?: (label: string) => void;
 
   constructor(limit = DEFAULT_RIG_HISTORY_LIMIT) {
     this.limit = Math.max(1, Math.floor(limit));
@@ -44,6 +46,12 @@ export class RigHistory {
     while (this.undoEntries.length > this.limit) {
       this.undoEntries.shift();
     }
+    this.redoEntries = [];
+    this.onCommit?.(label);
+  }
+
+  /** Drops redo steps (a newer edit elsewhere in the unified timeline). */
+  clearRedo(): void {
     this.redoEntries = [];
   }
 

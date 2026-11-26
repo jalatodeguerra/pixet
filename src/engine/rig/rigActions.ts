@@ -5,6 +5,10 @@ import { RigHistory } from "./RigHistory.ts";
 /** Singleton rig undo stack, shared by every UI entry point. */
 export const rigHistory = new RigHistory(100);
 
+// Every real rig undo step is mirrored into the unified undo timeline.
+rigHistory.onCommit = (label) => pixelEngine.undoCoordinator.record("rig", label);
+pixelEngine.undoCoordinator.onRedoCleared(() => rigHistory.clearRedo());
+
 let gestureDepth = 0;
 
 function pushSnapshot(label: string): void {
@@ -12,27 +16,14 @@ function pushSnapshot(label: string): void {
 }
 
 /**
- * Refreshes the toolbar/menu undo flags. In rig mode rig edits take priority,
- * but pixel history is still reachable when the rig stack is empty.
+ * Refreshes the toolbar/menu undo flags from the unified undo timeline, so
+ * they are identical in every workspace.
  */
 export function syncRigHistoryFlags(): void {
-  const store = useEditorStore.getState();
-  const canBaseUndo =
-    pixelEngine.history.canUndo ||
-    pixelEngine.tilemapHistory.canUndo ||
-    pixelEngine.model3dHistory.canUndo;
-  const canBaseRedo =
-    pixelEngine.history.canRedo ||
-    pixelEngine.tilemapHistory.canRedo ||
-    pixelEngine.model3dHistory.canRedo;
-  if (store.workspaceMode === "rig") {
-    store.setHistoryFlags(
-      rigHistory.canUndo || canBaseUndo,
-      rigHistory.canRedo || canBaseRedo
-    );
-    return;
-  }
-  store.setHistoryFlags(canBaseUndo, canBaseRedo);
+  const coordinator = pixelEngine.undoCoordinator;
+  useEditorStore
+    .getState()
+    .setHistoryFlags(coordinator.canUndo, coordinator.canRedo);
 }
 
 /**

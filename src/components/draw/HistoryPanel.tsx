@@ -7,7 +7,19 @@ import {
   performRedo,
   performUndo,
 } from "../../engine/document/historyActions";
+import {
+  undoKindWorkspace,
+  type UndoWorkspace,
+} from "../../engine/history/UndoCoordinator";
 import { useEditorStore } from "../../store/editorStore";
+
+const WORKSPACE_TAGS: Record<UndoWorkspace, string> = {
+  draw: "Draw",
+  tiles: "Tiles",
+  rig: "Rig",
+  studio3d: "3D",
+  nodes: "Nodes",
+};
 
 export function HistoryPanel() {
   const canUndo = useEditorStore((s) => s.canUndo);
@@ -91,7 +103,12 @@ export function HistoryPanel() {
                 >
                   <span className="draw-history-index">{entry.index + 1}</span>
                   <span className="draw-history-label">{entry.label}</span>
-                  <span className="draw-history-kind">{entry.kind}</span>
+                  <span
+                    className="draw-history-kind"
+                    data-workspace={undoKindWorkspace(entry.kind)}
+                  >
+                    {WORKSPACE_TAGS[undoKindWorkspace(entry.kind)]}
+                  </span>
                 </button>
               );
             })}

@@ -1010,10 +1010,6 @@ export function bakeModel3DToCurrentFrameAction(
   cel.markAllDirty();
   pixelEngine.history.commitTransaction(cel);
 
-  state.setHistoryFlags(
-    pixelEngine.history.canUndo,
-    pixelEngine.history.canRedo
-  );
   syncHistoryAndCelState(targetLayerId, frameIdx);
   syncTimelineCels();
   pixelEngine.emitChange();

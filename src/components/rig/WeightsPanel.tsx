@@ -10,6 +10,7 @@ import {
   getBoneInfluenceColor,
   heatmapRampColor,
 } from "../../engine/rig/RigEngine";
+import { autoWeightRigAction } from "../../engine/rig/rigCommands";
 import { mutateRig } from "../../engine/rig/rigActions";
 import { falloffAt } from "../../engine/rig/skinning";
 import { useEditorStore } from "../../store/editorStore";
@@ -25,7 +26,6 @@ import { RigPanelSection } from "./RigPanelSection";
 export function WeightsPanel() {
   const rigVersion = useEditorStore((s) => s.rigVersion);
   const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
-  const selectedBoneIds = useEditorStore((s) => s.selectedBoneIds);
   const setSelectedBoneId = useEditorStore((s) => s.setSelectedBoneId);
   const rigTool = useEditorStore((s) => s.rigTool);
   const setRigTool = useEditorStore((s) => s.setRigTool);
@@ -109,39 +109,7 @@ export function WeightsPanel() {
     bones.find((b) => b.id === selectedBoneId) ?? bones[0] ?? null;
 
   const handleAutoWeight = () => {
-    if (bones.length === 0) {
-      setStatusMessage("Add bones before auto-weighting");
-      return;
-    }
-    const targetBoneIds = rigAutoWeightSelectedOnly
-      ? selectedBoneIds.length > 0
-        ? selectedBoneIds
-        : selectedBone
-          ? [selectedBone.id]
-          : undefined
-      : undefined;
-    if (rigAutoWeightSelectedOnly && (!targetBoneIds || targetBoneIds.length === 0)) {
-      setStatusMessage("Select at least one bone for Selected-Only auto-weight");
-      return;
-    }
-    const selectionMask =
-      rigAutoWeightRespectSelection && pixelEngine.selection
-        ? pixelEngine.selection.mask
-        : null;
-
-    mutateRig(`Auto-weight (${rigAutoWeightMethod})`, () => {
-      const composited = pixelEngine.compositeFrame(layers, currentFrame);
-      const buf = new PixelBuffer(canvasWidth, canvasHeight, composited);
-      pixelEngine.rig.autoAssignBoneWeights(buf, currentFrame, {
-        method: rigAutoWeightMethod,
-        power: rigAutoWeightPower,
-        colorPenalty: rigAutoWeightColorPenalty,
-        selectionMask,
-        targetBoneIds,
-        respectLockedBones: true,
-      });
-    });
-    setStatusMessage(`Auto-weighted pixels (${rigAutoWeightMethod})`);
+    autoWeightRigAction();
   };
 
   useEffect(() => {

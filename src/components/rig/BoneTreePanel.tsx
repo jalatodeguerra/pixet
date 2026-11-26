@@ -20,6 +20,7 @@ import {
   type Bone,
   getBoneInfluenceColor,
 } from "../../engine/rig/RigEngine";
+import { addRigBoneAction, createStarterRigAction } from "../../engine/rig/rigCommands";
 import { mutateRig } from "../../engine/rig/rigActions";
 import {
   getBoneSubtreeIds,
@@ -109,9 +110,7 @@ export function BoneTreePanel() {
   const rigShowBones = useEditorStore((s) => s.rigShowBones);
   const toggleRigShowBones = useEditorStore((s) => s.toggleRigShowBones);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
-  const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const currentFrame = useEditorStore((s) => s.currentFrame);
-  const layers = useEditorStore((s) => s.layers);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
   const openContextMenu = useEditorStore((s) => s.openContextMenu);
 
@@ -148,45 +147,12 @@ export function BoneTreePanel() {
     [bones, collapsedIds, searchQuery, rigVersion]
   );
 
-  const rasterLayers = useMemo(
-    () => layers.filter((l) => l.kind === "raster"),
-    [layers]
-  );
-
   const handleStarterRig = () => {
-    if (!setupMode) {
-      setStatusMessage("Starter rig is only available in Setup mode");
-      return;
-    }
-    let rootId: string | null = null;
-    mutateRig("Create starter rig", () => {
-      rootId = pixelEngine.rig.seedStarterRig(
-        canvasWidth,
-        canvasHeight,
-        rasterLayers.map((l) => l.id)
-      ).id;
-    });
-    if (rootId) setSelectedBoneId(rootId);
-    setStatusMessage("Created starter 2-bone idle rig");
+    createStarterRigAction();
   };
 
   const handleAddBone = (parentOverride?: Bone | null) => {
-    if (!setupMode) {
-      setStatusMessage("Add Bone is only available in Setup mode");
-      return;
-    }
-    const parent = parentOverride !== undefined ? parentOverride : selectedBone;
-    const bone = mutateRig("Add bone", () =>
-      pixelEngine.rig.addBone({
-        parentId: parent ? parent.id : null,
-        localX: parent ? parent.length : Math.round(canvasWidth / 2),
-        localY: parent ? 0 : Math.round(canvasHeight / 2),
-        length: Math.max(4, Math.round(canvasHeight * 0.2)),
-        rotationDeg: parent ? 0 : -90,
-        boundLayerId: null,
-      })
-    );
-    setSelectedBoneId(bone.id);
+    addRigBoneAction(parentOverride);
   };
 
   const handleDeleteBone = (boneId: string) => {

@@ -1,7 +1,13 @@
 import { pixelEngine } from "./PixelEngine.ts";
 import { commitFloatingSelection } from "./selectionActions.ts";
 import { useEditorStore } from "../../store/editorStore.ts";
-import type { UndoHistoryEntry } from "../history/UndoCoordinator.ts";
+import {
+  undoKindWorkspace,
+  type UndoEntryInfo,
+  type UndoHistoryEntry,
+  type UndoKind,
+  type UndoWorkspace,
+} from "../history/UndoCoordinator.ts";
 import { rigHistory, syncRigHistoryFlags } from "../rig/rigActions.ts";
 
 export function syncHistoryAndCelState(
@@ -32,136 +38,138 @@ function keepRigSelectionValid(): void {
   }
 }
 
-export function performUndo(): void {
-  commitFloatingSelection();
+const WORKSPACE_NAMES: Record<UndoWorkspace, string> = {
+  draw: "Draw",
+  tiles: "Tiles",
+  rig: "Rig",
+  studio3d: "3D Studio",
+  nodes: "Nodes",
+};
+
+/** "Undo: Label" in the entry's own workspace, "Undo (Rig): Label" elsewhere. */
+export function formatHistoryStatus(
+  verb: "Undo" | "Redo",
+  kind: UndoKind,
+  label: string,
+  workspaceMode: string
+): string {
+  const ws = undoKindWorkspace(kind);
+  if (ws === workspaceMode) return `${verb}: ${label}`;
+  return `${verb} (${WORKSPACE_NAMES[ws]}): ${label}`;
+}
+
+type Direction = "undo" | "redo";
+
+/**
+ * Applies one coordinator entry to the domain history it belongs to. Returns
+ * the label on success or null when the payload no longer exists (orphan).
+ */
+function applyEntry(dir: Direction, entry: UndoEntryInfo): string | null {
   const store = useEditorStore.getState();
-  if (store.workspaceMode === "nodes") {
-    const cur = pixelEngine.nodes.getActiveGraph();
-    if (cur) {
-      const undone = pixelEngine.nodesHistory.undo(cur);
-      if (undone) {
-        pixelEngine.nodes.replaceActiveGraph(undone.graph);
-        store.bumpNodesVersion();
-        syncHistoryAndCelState();
-        store.setStatusMessage(`Undo: ${undone.label}`);
-        return;
-      }
-    }
-  }
-  if (store.workspaceMode === "rig") {
-    const label = rigHistory.undo(pixelEngine.rig);
-    if (label !== null) {
+  switch (entry.kind) {
+    case "rig": {
+      const label =
+        dir === "undo"
+          ? rigHistory.undo(pixelEngine.rig)
+          : rigHistory.redo(pixelEngine.rig);
+      if (label === null) return null;
       keepRigSelectionValid();
       store.bumpRigVersion();
       pixelEngine.emitChange();
-      syncRigHistoryFlags();
-      store.setStatusMessage(`Undo: ${label}`);
-      return;
+      return label;
     }
-  }
-  const nextKind = pixelEngine.undoCoordinator.peekUndo();
-  if (nextKind === "model3d") {
-    pixelEngine.undoCoordinator.popUndo();
-    const label = pixelEngine.model3dHistory.undo(pixelEngine.model3d);
-    if (label !== null) {
+    case "nodes": {
+      const hist = pixelEngine.nodesHistory;
+      const graphId =
+        entry.ref ??
+        (dir === "undo" ? hist.peekUndoGraphId() : hist.peekRedoGraphId());
+      const target = pixelEngine.nodes.graphs.find((g) => g.id === graphId);
+      if (!target) {
+        hist.discardTop(dir);
+        return null;
+      }
+      const res = dir === "undo" ? hist.undo(target) : hist.redo(target);
+      if (!res) return null;
+      // Replaces the graph recorded for this entry, not just the active one.
+      pixelEngine.nodes.replaceActiveGraph(res.graph);
+      store.bumpNodesVersion();
+      return res.label;
+    }
+    case "model3d": {
+      const label =
+        dir === "undo"
+          ? pixelEngine.model3dHistory.undo(pixelEngine.model3d)
+          : pixelEngine.model3dHistory.redo(pixelEngine.model3d);
+      if (label === null) return null;
       store.bumpModel3DVersion();
       pixelEngine.emitChange();
-      syncHistoryAndCelState();
-      store.setStatusMessage(`Undo: ${label}`);
-      return;
+      return label;
     }
-  }
-  if (nextKind === "cells" || nextKind === "tileset") {
-    pixelEngine.undoCoordinator.popUndo();
-    const res = pixelEngine.tilemapHistory.undo(pixelEngine);
-    if (res) {
+    case "cells":
+    case "tileset": {
+      const res =
+        dir === "undo"
+          ? pixelEngine.tilemapHistory.undo(pixelEngine)
+          : pixelEngine.tilemapHistory.redo(pixelEngine);
+      if (!res) return null;
       if (res.layerId !== undefined) store.selectLayer(res.layerId);
       if (res.frameIndex !== undefined) store.setCurrentFrame(res.frameIndex);
       store.bumpTilesetVersion();
       pixelEngine.emitChange();
-      syncHistoryAndCelState();
-      store.setStatusMessage(`Undo: ${res.label}`);
-      return;
+      return res.label;
+    }
+    case "pixels": {
+      const res = dir === "undo" ? pixelEngine.undo() : pixelEngine.redo();
+      if (!res) return null;
+      store.selectLayer(res.layerId);
+      store.setCurrentFrame(res.frameIndex);
+      syncHistoryAndCelState(res.layerId, res.frameIndex);
+      return res.label;
     }
   }
-  if (nextKind === "pixels") {
-    pixelEngine.undoCoordinator.popUndo();
-  }
-  const res = pixelEngine.undo();
-  if (!res) {
-    syncRigHistoryFlags();
+}
+
+function step(dir: Direction): void {
+  commitFloatingSelection();
+  const coordinator = pixelEngine.undoCoordinator;
+  const store = useEditorStore.getState();
+  for (;;) {
+    const entry =
+      dir === "undo" ? coordinator.peekUndoEntry() : coordinator.peekRedoEntry();
+    if (!entry) break;
+    const label = applyEntry(dir, entry);
+    if (label === null) {
+      // The domain history no longer holds this step: drop the orphan, go on.
+      if (dir === "undo") coordinator.popUndoEntry(true);
+      else coordinator.popRedoEntry(true);
+      continue;
+    }
+    if (dir === "undo") coordinator.popUndoEntry();
+    else coordinator.popRedoEntry();
+    syncHistoryAndCelState();
+    store.setStatusMessage(
+      formatHistoryStatus(
+        dir === "undo" ? "Undo" : "Redo",
+        entry.kind,
+        label,
+        store.workspaceMode
+      )
+    );
     return;
   }
-  store.selectLayer(res.layerId);
-  store.setCurrentFrame(res.frameIndex);
-  syncHistoryAndCelState(res.layerId, res.frameIndex);
-  store.setStatusMessage(`Undo: ${res.label}`);
+  syncRigHistoryFlags();
+}
+
+/**
+ * Undoes the newest step of the single chronological timeline, whichever
+ * workspace it belongs to. The user stays in the current workspace.
+ */
+export function performUndo(): void {
+  step("undo");
 }
 
 export function performRedo(): void {
-  commitFloatingSelection();
-  const store = useEditorStore.getState();
-  if (store.workspaceMode === "nodes") {
-    const cur = pixelEngine.nodes.getActiveGraph();
-    if (cur) {
-      const redone = pixelEngine.nodesHistory.redo(cur);
-      if (redone) {
-        pixelEngine.nodes.replaceActiveGraph(redone.graph);
-        store.bumpNodesVersion();
-        syncHistoryAndCelState();
-        store.setStatusMessage(`Redo: ${redone.label}`);
-        return;
-      }
-    }
-  }
-  if (store.workspaceMode === "rig") {
-    const label = rigHistory.redo(pixelEngine.rig);
-    if (label !== null) {
-      keepRigSelectionValid();
-      store.bumpRigVersion();
-      pixelEngine.emitChange();
-      syncRigHistoryFlags();
-      store.setStatusMessage(`Redo: ${label}`);
-      return;
-    }
-  }
-  const nextKind = pixelEngine.undoCoordinator.peekRedo();
-  if (nextKind === "model3d") {
-    pixelEngine.undoCoordinator.popRedo();
-    const label = pixelEngine.model3dHistory.redo(pixelEngine.model3d);
-    if (label !== null) {
-      store.bumpModel3DVersion();
-      pixelEngine.emitChange();
-      syncHistoryAndCelState();
-      store.setStatusMessage(`Redo: ${label}`);
-      return;
-    }
-  }
-  if (nextKind === "cells" || nextKind === "tileset") {
-    pixelEngine.undoCoordinator.popRedo();
-    const res = pixelEngine.tilemapHistory.redo(pixelEngine);
-    if (res) {
-      if (res.layerId !== undefined) store.selectLayer(res.layerId);
-      if (res.frameIndex !== undefined) store.setCurrentFrame(res.frameIndex);
-      store.bumpTilesetVersion();
-      pixelEngine.emitChange();
-      syncHistoryAndCelState();
-      store.setStatusMessage(`Redo: ${res.label}`);
-      return;
-    }
-  }
-  if (nextKind === "pixels") {
-    pixelEngine.undoCoordinator.popRedo();
-  }
-  const res = pixelEngine.redo();
-  if (!res) {
-    syncRigHistoryFlags();
-    return;
-  }
-  store.selectLayer(res.layerId);
-  store.setCurrentFrame(res.frameIndex);
-  syncHistoryAndCelState(res.layerId, res.frameIndex);
-  store.setStatusMessage(`Redo: ${res.label}`);
+  step("redo");
 }
 
 export function getHistorySnapshot(): {

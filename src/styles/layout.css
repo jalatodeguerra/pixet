@@ -4602,3 +4602,28 @@
     grid-template-columns: 1fr;
   }
 }
+
+.draw-cmd-group {
+  padding: 6px 10px 2px;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.draw-cmd-group:first-child {
+  border-top: 0;
+}
+
+.draw-keybinds-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 6px 2px;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--bg-root);
+}

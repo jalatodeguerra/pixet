@@ -12,6 +12,7 @@ import {
   generateHeightMap,
   generateNormalMap,
 } from "../../engine/gamedev/pbrMaps";
+import { syncRigHistoryFlags } from "../../engine/rig/rigActions";
 import { bakeRigTurntable } from "../../engine/rig/export/bake";
 import type { PixelCleanupOptions } from "../../engine/rig/pixelCleanup";
 import {
@@ -582,10 +583,7 @@ export function applyStudio3DToCurrentFrameAction(): void {
   cel.markAllDirty();
   pixelEngine.history.commitTransaction(cel);
 
-  state.setHistoryFlags(
-    pixelEngine.history.canUndo,
-    pixelEngine.history.canRedo
-  );
+  syncRigHistoryFlags();
   syncTimelineCels();
   pixelEngine.emitChange();
   state.setStatusMessage(
