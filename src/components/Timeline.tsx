@@ -140,6 +140,7 @@ export function Timeline() {
   const layers = useEditorStore((s) => s.layers);
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const timelineHeight = useEditorStore((s) => s.timelineHeight);
+  const timelineHeightManual = useEditorStore((s) => s.timelineHeightManual);
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const rigMode = useEditorStore((s) => s.rigMode);
@@ -294,8 +295,14 @@ export function Timeline() {
 
   return (
     <section
-      className="timeline-dock"
-      style={{ height: timelineCollapsed ? 30 : timelineHeight }}
+      className="timeline-dock tl-dock"
+      style={
+        timelineCollapsed
+          ? { height: 30 }
+          : timelineHeightManual
+            ? { height: timelineHeight }
+            : { height: "auto", minHeight: 96, maxHeight: "40vh" }
+      }
       aria-label="Animation Timeline"
     >
       <div className="timeline-toolbar">

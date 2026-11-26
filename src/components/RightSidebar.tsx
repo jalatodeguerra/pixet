@@ -25,7 +25,7 @@ export function RightSidebar() {
     workspaceMode === "nodes" ||
     (workspaceMode === "tiles" && tilesMode === "map");
 
-  const hasPinnedIn = (ws: "rig" | "tiles" | "data") =>
+  const hasPinnedIn = (ws: "rig" | "tiles") =>
     Object.entries(detachedPanels).some(
       ([id, rect]) =>
         Boolean(rect?.pinned) && PANEL_WORKSPACE_MAP[id as PanelId] === ws
@@ -33,7 +33,6 @@ export function RightSidebar() {
 
   const showRigSidebar = workspaceMode === "rig";
   const showTilesSidebar = workspaceMode === "tiles" && tilesMode === "map";
-  const showDataPanel = workspaceMode === "data";
 
   return (
     <aside
@@ -48,17 +47,12 @@ export function RightSidebar() {
           tilesMode === "tile" &&
           !tilesetBrowserDocked && <TilesetBrowserPanel />}
 
-        {(showDataPanel || hasPinnedIn("data")) && (
-          <div className={showDataPanel ? "sidebar-section-stack" : "is-hidden"}>
-            <GameDataPanel />
-          </div>
-        )}
-
         <ColorPalettePanel />
         {workspaceMode === "draw" && <BrushPanel />}
         {workspaceMode === "draw" && <ReferencePanel />}
         {workspaceMode === "draw" && <HistoryPanel />}
         <LayersPanel />
+        {workspaceMode === "draw" && <GameDataPanel />}
       </div>
 
       {/* Focused Rig Inspector in Rig Mode (or hidden when pinned panels exist) */}

@@ -9,6 +9,8 @@ import {
   resizePixelBufferNearest,
   sliceSpritesheet,
 } from "../engine/io/imageImport";
+import { markDocumentReplaced } from "../engine/io/projectBridge";
+import { confirmDiscardChanges } from "../engine/io/unsavedChanges";
 import { resetRigHistory } from "../engine/rig/rigActions";
 import {
   type FrameItem,
@@ -272,7 +274,8 @@ export function ImportImageModal() {
     setSelectedCells(new Set());
   };
 
-  const handleImport = () => {
+  const handleImport = async () => {
+    if (mode !== "layer" && !(await confirmDiscardChanges())) return;
     commitFloatingSelection();
     const state = useEditorStore.getState();
 
@@ -373,14 +376,12 @@ export function ImportImageModal() {
           frames: nextFrames,
           tags: [],
         });
-        state.setZoom(
-          Math.max(1, Math.min(16, Math.floor(384 / Math.max(fw, fh))))
-        );
         syncTimelineCels();
         pixelEngine.emitChange();
         state.setStatusMessage(
           `Imported ${nextLayers.length} layers (${maxFrames} frames, ${fw}×${fh})`
         );
+        markDocumentReplaced();
         setPending(null);
         return;
       }
@@ -440,12 +441,12 @@ export function ImportImageModal() {
         frames: nextFrames,
         tags: [],
       });
-      state.setZoom(Math.max(1, Math.min(16, Math.floor(384 / Math.max(fw, fh)))));
       syncTimelineCels();
       pixelEngine.emitChange();
       state.setStatusMessage(
         `Sliced "${pending.name}" into ${sliced.length} frames (${fw}×${fh})`
       );
+      markDocumentReplaced();
       setPending(null);
       return;
     }
@@ -493,10 +494,10 @@ export function ImportImageModal() {
       ],
       tags: [],
     });
-    state.setZoom(Math.max(1, Math.min(16, Math.floor(384 / Math.max(w, h)))));
     syncTimelineCels();
     pixelEngine.emitChange();
     state.setStatusMessage(`Opened "${pending.name}" (${w}×${h})`);
+    markDocumentReplaced();
     setPending(null);
   };
 

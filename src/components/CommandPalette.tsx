@@ -94,6 +94,38 @@ export function CommandPalette() {
 
     const viewCmds: ActionCommandEntry[] = [
       {
+        id: "view.zoomFit",
+        label: "View: Fit to Window",
+        category: "View",
+        shortcut: "Ctrl+0",
+        keywords: ["zoom", "fit", "screen", "reset"],
+        run: () => st().fitZoomToWindow(),
+      },
+      {
+        id: "view.zoomActual",
+        label: "View: Actual Size (1:1)",
+        category: "View",
+        shortcut: "Ctrl+1",
+        keywords: ["zoom", "100%", "actual", "pixel"],
+        run: () => st().zoomActualSize(),
+      },
+      {
+        id: "view.zoomIn",
+        label: "View: Zoom In",
+        category: "View",
+        shortcut: "+",
+        keywords: ["zoom", "magnify", "larger"],
+        run: () => st().zoomStep(1),
+      },
+      {
+        id: "view.zoomOut",
+        label: "View: Zoom Out",
+        category: "View",
+        shortcut: "-",
+        keywords: ["zoom", "smaller"],
+        run: () => st().zoomStep(-1),
+      },
+      {
         id: "view.flipH",
         label: "View: Flip Horizontal",
         category: "View",

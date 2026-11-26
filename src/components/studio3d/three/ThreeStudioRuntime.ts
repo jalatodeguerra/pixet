@@ -11,15 +11,37 @@ class ThreeStudioRuntime {
   private width = 1;
   private height = 1;
   private pixelRatio = 1;
+  private lost = false;
+
+  /** True while the GL context is lost (between webglcontextlost and restore). */
+  isContextLost(): boolean {
+    return this.lost;
+  }
 
   getRenderer(): THREE.WebGLRenderer {
     if (this.renderer) return this.renderer;
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: false,
-      alpha: true,
-      powerPreference: "high-performance",
-      preserveDrawingBuffer: false,
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: false,
+        alpha: true,
+        powerPreference: "high-performance",
+        preserveDrawingBuffer: false,
+      });
+    } catch (err) {
+      console.error("Could not create the Three.js WebGL renderer", err);
+      throw new Error("3D view needs WebGL2; it isn't available");
+    }
+    renderer.domElement.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      this.lost = true;
+    });
+    renderer.domElement.addEventListener("webglcontextrestored", () => {
+      // Three re-initialises its own state; the render loop resumes drawing.
+      this.lost = false;
+      renderer.setPixelRatio(this.pixelRatio);
+      renderer.setSize(this.width, this.height, false);
     });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NoToneMapping;

@@ -36,6 +36,10 @@ export const KEYBINDING_ACTIONS: KeybindingActionDef[] = [
   // Commands
   { id: "view.flipH", label: "Flip View Horizontal", category: "View" },
   { id: "view.flipV", label: "Flip View Vertical", category: "View" },
+  { id: "view.zoomFit", label: "Fit to Window", category: "View" },
+  { id: "view.zoomActual", label: "Actual Size (1:1)", category: "View" },
+  { id: "view.zoomIn", label: "Zoom In", category: "View" },
+  { id: "view.zoomOut", label: "Zoom Out", category: "View" },
   { id: "view.commandPalette", label: "Command Palette", category: "View" },
   { id: "edit.freeTransform", label: "Free Transform", category: "Edit" },
   { id: "edit.captureBrush", label: "Capture Custom Brush", category: "Edit" },
@@ -69,6 +73,10 @@ export const PIXET_DEFAULT_KEYBINDINGS: KeybindingMap = {
 
   "view.flipH": "h",
   "view.flipV": "shift+h",
+  "view.zoomFit": "ctrl+0",
+  "view.zoomActual": "ctrl+1",
+  "view.zoomIn": "ctrl+=",
+  "view.zoomOut": "ctrl+-",
   "view.commandPalette": "ctrl+k",
   "edit.freeTransform": "ctrl+t",
   "edit.captureBrush": "ctrl+b",
@@ -102,6 +110,10 @@ export const ASEPRITE_KEYBINDINGS: KeybindingMap = {
 
   "view.flipH": "h",
   "view.flipV": "shift+h",
+  "view.zoomFit": "ctrl+0",
+  "view.zoomActual": "ctrl+1",
+  "view.zoomIn": "ctrl+=",
+  "view.zoomOut": "ctrl+-",
   "view.commandPalette": "ctrl+k",
   "edit.freeTransform": "ctrl+t",
   "edit.captureBrush": "ctrl+b",

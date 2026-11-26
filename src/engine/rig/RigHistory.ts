@@ -1,4 +1,5 @@
 import type { RigSnapshot } from "./RigEngine.ts";
+import { markDirty } from "../io/documentState.ts";
 
 export interface RigHistoryHost {
   toSnapshot(): RigSnapshot;
@@ -38,6 +39,7 @@ export class RigHistory {
     const snapshot = this.capture(rig);
     const top = this.undoEntries[this.undoEntries.length - 1];
     if (top && top.snapshot === snapshot) return;
+    markDirty();
     this.undoEntries.push({ label, snapshot });
     while (this.undoEntries.length > this.limit) {
       this.undoEntries.shift();
@@ -49,6 +51,7 @@ export class RigHistory {
   undo(rig: RigHistoryHost): string | null {
     const entry = this.undoEntries.pop();
     if (!entry) return null;
+    markDirty();
     this.redoEntries.push({ label: entry.label, snapshot: this.capture(rig) });
     while (this.redoEntries.length > this.limit) {
       this.redoEntries.shift();
@@ -61,6 +64,7 @@ export class RigHistory {
   redo(rig: RigHistoryHost): string | null {
     const entry = this.redoEntries.pop();
     if (!entry) return null;
+    markDirty();
     this.undoEntries.push({ label: entry.label, snapshot: this.capture(rig) });
     while (this.undoEntries.length > this.limit) {
       this.undoEntries.shift();

@@ -11,6 +11,7 @@ import {
   TilesetRegistry,
   type TilesetRegistrySnapshot,
 } from "./Tileset.ts";
+import { markDirty } from "../io/documentState.ts";
 
 export interface CellDelta {
   col: number;
@@ -192,6 +193,7 @@ export class TilemapHistory {
   }
 
   private pushEntry(entry: TilemapHistoryEntry): void {
+    markDirty();
     this.undoStack.push(entry);
     this.redoStack.length = 0;
 
@@ -231,6 +233,7 @@ export class TilemapHistory {
       for (const d of entry.deltas) {
         tm.setCell(d.col, d.row, d.before);
       }
+      markDirty();
       this.redoStack.push(entry);
       return {
         kind: "cells",
@@ -241,6 +244,7 @@ export class TilemapHistory {
     }
 
     restoreTilemapHistorySnapshot(target, entry.before);
+    markDirty();
     this.redoStack.push(entry);
     return { kind: "tileset", label: entry.label };
   }
@@ -261,6 +265,7 @@ export class TilemapHistory {
       for (const d of entry.deltas) {
         tm.setCell(d.col, d.row, d.after);
       }
+      markDirty();
       this.undoStack.push(entry);
       return {
         kind: "cells",
@@ -271,6 +276,7 @@ export class TilemapHistory {
     }
 
     restoreTilemapHistorySnapshot(target, entry.after);
+    markDirty();
     this.undoStack.push(entry);
     return { kind: "tileset", label: entry.label };
   }

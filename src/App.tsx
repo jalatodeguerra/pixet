@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CanvasSizeModal } from "./components/CanvasSizeModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
@@ -99,12 +100,25 @@ import {
   type TileCursorStepDir,
 } from "./engine/model3d/tileStamp";
 import type { SelectionGranularity } from "./engine/model3d/types";
+import { DocumentDialogs } from "./components/DocumentDialogs";
+import { initDocumentLifecycle } from "./engine/io/documentLifecycle";
 
 export function App() {
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
   const timelineHeight = useEditorStore((s) => s.timelineHeight);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const studio3dKind = useEditorStore((s) => s.studio3d.workspaceKind);
+  const studio3dSubMode = useEditorStore((s) => s.studio3d.subMode);
+  // The sprite timeline is irrelevant in Nodes and in the low-poly modeller
+  // (except its Animate sub-mode, which reuses this dock for 3D keyframes).
+  const showTimeline =
+    workspaceMode !== "nodes" &&
+    !(
+      workspaceMode === "studio3d" &&
+      studio3dKind === "lowpoly3d" &&
+      studio3dSubMode !== "animate"
+    );
   const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
   const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
   const setTimelineHeight = useEditorStore((s) => s.setTimelineHeight);
@@ -171,6 +185,11 @@ export function App() {
     return () => window.clearTimeout(id);
   }, [isPlaying, currentFrame, frames, fps, nextFrame]);
 
+  // Dirty tracking, autosave, recovery and close guards
+  useEffect(() => {
+    initDocumentLifecycle();
+  }, []);
+
   // Auto-clear transient status messages
   useEffect(() => {
     if (!statusMessage) return;
@@ -190,6 +209,22 @@ export function App() {
       const st = useEditorStore.getState();
       if (actionId === "view.commandPalette") {
         st.setCommandPaletteOpen(!st.commandPaletteOpen);
+        return true;
+      }
+      if (actionId === "view.zoomFit") {
+        st.fitZoomToWindow();
+        return true;
+      }
+      if (actionId === "view.zoomActual") {
+        st.zoomActualSize();
+        return true;
+      }
+      if (actionId === "view.zoomIn") {
+        st.zoomStep(1);
+        return true;
+      }
+      if (actionId === "view.zoomOut") {
+        st.zoomStep(-1);
         return true;
       }
       if (actionId === "edit.freeTransform") {
@@ -730,6 +765,7 @@ export function App() {
           boundAction === "layer.mergeDown" ||
           boundAction === "view.flipH" ||
           boundAction === "view.flipV" ||
+          boundAction.startsWith("view.zoom") ||
           (stNow.workspaceMode !== "rig" &&
             !(stNow.workspaceMode === "tiles" && stNow.tilesMode === "map") &&
             boundAction.startsWith("tool.")))
@@ -969,12 +1005,12 @@ export function App() {
       }
 
       if (e.key === "=" || e.key === "+") {
-        state.setZoom(state.zoom + 1);
+        state.zoomStep(1);
         return;
       }
 
       if (e.key === "-") {
-        state.setZoom(state.zoom - 1);
+        state.zoomStep(-1);
         return;
       }
 
@@ -1164,32 +1200,42 @@ export function App() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <TopBar />
-      <ToolOptionsBar />
+      <ErrorBoundary name="Top bar" fallback="region">
+        <TopBar />
+        <ToolOptionsBar />
+      </ErrorBoundary>
 
       <main className="workspace-main">
         <div className="workspace-middle">
-          {!panelsCollapsed && workspaceMode !== "nodes" && <ToolRail />}
-          {workspaceMode === "nodes" ? (
-            <NodesWorkspace />
-          ) : workspaceMode === "studio3d" ? (
-            <Studio3DViewport />
-          ) : (
-            <Viewport />
+          {!panelsCollapsed && workspaceMode !== "nodes" && (
+            <ErrorBoundary name="Tool rail" fallback="region">
+              <ToolRail />
+            </ErrorBoundary>
           )}
+          <ErrorBoundary key={workspaceMode} name="Viewport" fallback="region">
+            {workspaceMode === "nodes" ? (
+              <NodesWorkspace />
+            ) : workspaceMode === "studio3d" ? (
+              <Studio3DViewport />
+            ) : (
+              <Viewport />
+            )}
+          </ErrorBoundary>
           {!panelsCollapsed && (
             <>
               <div
                 className={`resizer-vertical ${draggingRight ? "dragging" : ""}`}
                 onMouseDown={() => setDraggingRight(true)}
               />
-              <RightSidebar />
+              <ErrorBoundary name="Sidebar" fallback="region">
+                <RightSidebar />
+              </ErrorBoundary>
             </>
           )}
           <div id="floating-panels-root" className="floating-panels-root" />
         </div>
 
-        {!panelsCollapsed && (
+        {!panelsCollapsed && showTimeline && (
           <>
             {!timelineCollapsed && (
               <div
@@ -1205,23 +1251,28 @@ export function App() {
                 <TilesetBrowserPanel docked />
               </div>
             ) : (
-              <Timeline />
+              <ErrorBoundary name="Timeline" fallback="region">
+                <Timeline />
+              </ErrorBoundary>
             )}
           </>
         )}
       </main>
 
+      <DocumentDialogs />
       <StatusBar />
-      <ExportModal />
-      <RigExportModal />
-      <ImportImageModal />
-      <NewSpriteModal />
-      <CanvasSizeModal />
-      <FilterModal />
-      <ImportTilesetModal />
-      <CommandPalette />
-      <KeybindingsModal />
-      <ContextMenu />
+      <ErrorBoundary name="Dialogs" fallback="region">
+        <ExportModal />
+        <RigExportModal />
+        <ImportImageModal />
+        <NewSpriteModal />
+        <CanvasSizeModal />
+        <FilterModal />
+        <ImportTilesetModal />
+        <CommandPalette />
+        <KeybindingsModal />
+        <ContextMenu />
+      </ErrorBoundary>
       {isDragOver && (
         <div className="dropzone-overlay">
           <div className="dropzone-card">

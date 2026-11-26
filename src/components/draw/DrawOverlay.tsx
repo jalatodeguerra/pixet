@@ -90,6 +90,7 @@ export function DrawOverlay({
   dragPreview?: DrawDragPreview;
 }) {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const dataToolActive = useEditorStore((s) => s.dataToolActive);
   const tilesMode = useEditorStore((s) => s.tilesMode);
   const activeTool = useEditorStore((s) => s.activeTool);
   const cursorPos = useEditorStore((s) => s.cursorPos);
@@ -134,7 +135,7 @@ export function DrawOverlay({
     activeTool === "shading";
   const footprintEnabled =
     workspaceMode !== "rig" &&
-    workspaceMode !== "data" &&
+    !dataToolActive &&
     !isTilesMap &&
     !freeTransformActive &&
     isFootprintTool &&

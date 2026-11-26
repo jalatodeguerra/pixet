@@ -1,4 +1,5 @@
 import type { PixelBuffer, RGBA } from "../document/PixelBuffer.ts";
+import { markDirty } from "../io/documentState.ts";
 
 export const TILE_SIZE = 64;
 
@@ -214,6 +215,8 @@ export class TileHistory {
 
     if (celDeltas.length === 0) return false;
 
+    markDirty();
+
     this.undoStack.push({
       label: tx.label,
       layerId: celDeltas[0].layerId,
@@ -312,6 +315,8 @@ export class TileHistory {
 
     if (changedTiles.length === 0) return false;
 
+    markDirty();
+
     this.undoStack.push({
       label: tx.label,
       layerId: tx.layerId,
@@ -352,6 +357,8 @@ export class TileHistory {
       }
     }
 
+    markDirty();
+
     this.redoStack.push(entry);
     return {
       layerId: entry.layerId,
@@ -379,6 +386,8 @@ export class TileHistory {
         writeRegion(buffer, tile.x, tile.y, tile.w, tile.h, tile.after);
       }
     }
+
+    markDirty();
 
     this.undoStack.push(entry);
     return {

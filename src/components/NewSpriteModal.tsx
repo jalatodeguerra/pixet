@@ -5,6 +5,8 @@ import { pixelEngine } from "../engine/document/PixelEngine";
 import { commitFloatingSelection } from "../engine/document/selectionActions";
 import { syncTimelineCels } from "../engine/document/timelineActions";
 import { resetRigHistory } from "../engine/rig/rigActions";
+import { markDocumentReplaced } from "../engine/io/projectBridge";
+import { confirmDiscardChanges } from "../engine/io/unsavedChanges";
 import { useEditorStore } from "../store/editorStore";
 
 type BgFill = "transparent" | "secondary" | "white";
@@ -35,8 +37,9 @@ export function NewSpriteModal() {
 
   if (!open) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!(await confirmDiscardChanges())) return;
     commitFloatingSelection();
     const state = useEditorStore.getState();
 
@@ -91,9 +94,9 @@ export function NewSpriteModal() {
       tags: [],
     });
 
-    state.setZoom(Math.max(1, Math.min(16, Math.floor(384 / Math.max(w, h)))));
     syncTimelineCels();
     pixelEngine.emitChange();
+    markDocumentReplaced();
     state.setStatusMessage(`Created "${docName}" (${w}×${h})`);
     setOpen(false);
   };

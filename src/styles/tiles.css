@@ -22,7 +22,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: 0;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 2px 7px;
   cursor: pointer;
 }
@@ -58,7 +58,7 @@
 
 .tiles-prop-label {
   width: 48px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
@@ -68,7 +68,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: 0;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 5px;
   min-width: 0;
 }
@@ -93,7 +93,7 @@
   padding: 3px 5px;
   border: 1px solid transparent;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
 }
 
@@ -161,7 +161,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: 0;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 2px 6px;
   cursor: pointer;
 }

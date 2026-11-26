@@ -144,18 +144,31 @@ export function NodesToolOptionsBar() {
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (!file) return;
-              void file.text().then((txt) => {
-                const parsed = JSON.parse(txt) as { graph?: NodeGraph };
-                if (parsed.graph) {
+              const say = (m: string) => useEditorStore.getState().setStatusMessage(m);
+              void file
+                .text()
+                .then((txt) => {
+                  const parsed = JSON.parse(txt) as { graph?: NodeGraph } | null;
+                  if (!parsed || typeof parsed !== "object" || !parsed.graph) {
+                    say(`Could not import ${file.name}: no node graph found.`);
+                    return;
+                  }
                   const ext = deserializeNodesExt({ schemaVersion: 1, graphs: [parsed.graph] });
                   if (ext.graphs[0]) {
                     ext.graphs[0].id = nextNodeId("graph");
                     pixelEngine.nodes.replaceActiveGraph(ext.graphs[0]);
                     getNodeEvaluator().markAllDirty();
                     bumpNodesVersion();
+                    say(`Imported graph from ${file.name}`);
                   }
-                }
-              });
+                })
+                .catch((err: unknown) => {
+                  say(
+                    `Could not import ${file.name}: ${
+                      err instanceof SyntaxError ? "not a valid graph file" : String(err)
+                    }`
+                  );
+                });
               e.target.value = "";
             }}
           />

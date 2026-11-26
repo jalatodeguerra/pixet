@@ -40,6 +40,8 @@ const BOX_COLORS: Record<GameBoxKind, string> = {
 
 export function GameDataPanel() {
   const dataTool = useEditorStore((s) => s.dataTool);
+  const dataToolActive = useEditorStore((s) => s.dataToolActive);
+  const openSignal = useEditorStore((s) => s.gameDataPanelOpenSignal);
   const setDataTool = useEditorStore((s) => s.setDataTool);
   const showOverlay = useEditorStore((s) => s.showGameDataOverlay);
   const toggleShowOverlay = useEditorStore((s) => s.toggleShowGameDataOverlay);
@@ -271,6 +273,8 @@ export function GameDataPanel() {
   return (
     <DockablePanelSection
       id="game-data"
+      defaultOpen={false}
+      openSignal={openSignal}
       title={`Game Data (F${currentFrame + 1})`}
       icon={<Crosshair size={12} />}
       actions={
@@ -302,7 +306,7 @@ export function GameDataPanel() {
                 <button
                   key={t.id}
                   type="button"
-                  className={`mini-btn ${dataTool === t.id ? "active" : ""}`}
+                  className={`mini-btn ${dataToolActive && dataTool === t.id ? "active" : ""}`}
                   onClick={() => setDataTool(t.id)}
                 >
                   <Icon size={11} />

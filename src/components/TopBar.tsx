@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   Bone,
   Box,
-  Crosshair,
   Download,
   LayoutGrid,
   PanelRightClose,
@@ -62,13 +61,12 @@ interface MenuItem {
   action: () => void;
 }
 
-const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; badge?: string }[] = [
+const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; }[] = [
   { id: "draw", label: "Draw", icon: Pencil },
-  { id: "tiles", label: "Tiles", icon: LayoutGrid, badge: "P2" },
-  { id: "rig", label: "Rig", icon: Bone, badge: "P3" },
+  { id: "tiles", label: "Tiles", icon: LayoutGrid },
+  { id: "rig", label: "Rig", icon: Bone },
   { id: "studio3d", label: "3D Studio", icon: Box },
   { id: "nodes", label: "Nodes", icon: Workflow },
-  { id: "data", label: "Data", icon: Crosshair, badge: "P4" },
 ];
 
 const STUDIO3D_MODES: { id: "extruded" | "stack" | "rig"; label: string; hint: string }[] = [
@@ -123,13 +121,15 @@ export function TopBar() {
   const toggleShowRulers = useEditorStore((s) => s.toggleShowRulers);
   const toggleShowCustomGrid = useEditorStore((s) => s.toggleShowCustomGrid);
   const clearGuides = useEditorStore((s) => s.clearGuides);
-  const setZoom = useEditorStore((s) => s.setZoom);
-  const zoom = useEditorStore((s) => s.zoom);
+  const zoomStep = useEditorStore((s) => s.zoomStep);
+  const fitZoomToWindow = useEditorStore((s) => s.fitZoomToWindow);
+  const zoomActualSize = useEditorStore((s) => s.zoomActualSize);
   const swapColors = useEditorStore((s) => s.swapColors);
   const addLayer = useEditorStore((s) => s.addLayer);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
   const studio3dMode = useEditorStore((s) => s.studio3d.mode);
+  const studio3dWorkspaceKind = useEditorStore((s) => s.studio3d.workspaceKind);
   const patchStudio3D = useEditorStore((s) => s.patchStudio3D);
   const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
   const setCanvasSizeModalOpen = useEditorStore((s) => s.setCanvasSizeModalOpen);
@@ -221,9 +221,10 @@ export function TopBar() {
       { label: "Reset Panel Layout", action: () => { resetPanelLayout(); setOpenMenu(null); } },
       { label: "Toggle Timeline", action: () => { toggleTimelineCollapsed(); setOpenMenu(null); } },
       { label: "Toggle Floating Preview", action: () => { toggleFloatingPreview(); setOpenMenu(null); } },
-      { label: "Zoom In", shortcut: "+", action: () => { setZoom(zoom + 2); setOpenMenu(null); } },
-      { label: "Zoom Out", shortcut: "-", action: () => { setZoom(zoom - 2); setOpenMenu(null); } },
-      { label: "Reset Zoom (12x)", action: () => { setZoom(12); setOpenMenu(null); } },
+      { label: "Zoom In", shortcut: "+", action: () => { zoomStep(1); setOpenMenu(null); } },
+      { label: "Zoom Out", shortcut: "-", action: () => { zoomStep(-1); setOpenMenu(null); } },
+      { label: "Fit to Window", shortcut: "Ctrl+0", action: () => { fitZoomToWindow(); setOpenMenu(null); } },
+      { label: "Actual Size (1:1)", shortcut: "Ctrl+1", action: () => { zoomActualSize(); setOpenMenu(null); } },
     ],
     Sprite: [
       { label: "New Layer", action: () => { addLayer(); setOpenMenu(null); } },
@@ -316,12 +317,15 @@ export function TopBar() {
               >
                 <Icon size={13} />
                 <span>{m.label}</span>
-                {m.badge && <span className="mode-badge">{m.badge}</span>}
               </button>
             );
           })}
         </div>
 
+      </div>
+
+      <div className="topbar-right">
+        <div className="topbar-submode-slot">
         {workspaceMode === "tiles" && (
           <div
             className="mode-switcher tiles-mode-switcher"
@@ -372,7 +376,7 @@ export function TopBar() {
           </div>
         )}
 
-        {workspaceMode === "studio3d" && (
+        {workspaceMode === "studio3d" && studio3dWorkspaceKind !== "lowpoly3d" && (
           <div
             className="mode-switcher rig-mode-switcher"
             role="tablist"
@@ -396,20 +400,7 @@ export function TopBar() {
             })}
           </div>
         )}
-      </div>
-
-      <div className="topbar-right">
-        <button
-          type="button"
-          className={`mini-btn ${workspaceMode === "studio3d" ? "active" : ""}`}
-          title="3D Studio & Turntable (Ctrl+3)"
-          onClick={() =>
-            setWorkspaceMode(workspaceMode === "studio3d" ? "draw" : "studio3d")
-          }
-        >
-          <Box size={13} />
-          <span>3D Studio</span>
-        </button>
+        </div>
 
         <button
           type="button"

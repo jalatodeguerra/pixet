@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronDown,
@@ -22,6 +22,8 @@ export interface DockablePanelSectionProps {
   icon?: ReactNode;
   actions?: ReactNode;
   defaultOpen?: boolean;
+  /** When this number increases (and is > 0), the section expands. */
+  openSignal?: number;
   style?: CSSProperties;
   children: ReactNode;
 }
@@ -64,10 +66,14 @@ export function DockablePanelSection({
   icon,
   actions,
   defaultOpen = true,
+  openSignal = 0,
   style,
   children,
 }: DockablePanelSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (openSignal > 0) setOpen(true);
+  }, [openSignal]);
 
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const detachedPanels = useEditorStore((s) => s.detachedPanels);

@@ -27,6 +27,11 @@ import {
   mapFlippedPoint,
 } from "../engine/tools/viewChecks";
 import { useEditorStore } from "../store/editorStore";
+import {
+  computeFitZoom,
+  panForZoomAtCursor,
+  stepZoom,
+} from "../engine/ui/zoom";
 import { PALETTE_PRESETS } from "../utils/paletteParser";
 import { DrawOverlay } from "./draw/DrawOverlay";
 import { RulersOverlay } from "./draw/RulersOverlay";
@@ -39,10 +44,17 @@ import { useTilePointer } from "./tiles/useTilePointer";
 
 export function Viewport() {
   const documentName = useEditorStore((s) => s.documentName);
+  const isDocumentDirty = useEditorStore((s) => s.isDocumentDirty);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const zoom = useEditorStore((s) => s.zoom);
   const setZoom = useEditorStore((s) => s.setZoom);
+  const zoomIsFit = useEditorStore((s) => s.zoomIsFit);
+  const viewResetNonce = useEditorStore((s) => s.viewResetNonce);
+  const viewportSize = useEditorStore((s) => s.viewportSize);
+  const setViewportSize = useEditorStore((s) => s.setViewportSize);
+  const applyFitZoom = useEditorStore((s) => s.applyFitZoom);
+  const fitZoomToWindow = useEditorStore((s) => s.fitZoomToWindow);
   const showGrid = useEditorStore((s) => s.showGrid);
   const setCursorPos = useEditorStore((s) => s.setCursorPos);
   const activeTool = useEditorStore((s) => s.activeTool);
@@ -94,6 +106,7 @@ export function Viewport() {
   const showFloatingPreview = useEditorStore((s) => s.showFloatingPreview);
   const toggleFloatingPreview = useEditorStore((s) => s.toggleFloatingPreview);
   const showGameDataOverlay = useEditorStore((s) => s.showGameDataOverlay);
+  const dataToolActive = useEditorStore((s) => s.dataToolActive);
   const gameDataVersion = useEditorStore((s) => s.gameDataVersion);
   const light2dEnabled = useEditorStore((s) => s.light2dEnabled);
   const light2dX = useEditorStore((s) => s.light2dX);
@@ -410,6 +423,15 @@ export function Viewport() {
       window.devicePixelRatio || 1
     );
     renderCanvas();
+    renderer.onContextRestored = () => {
+      const st = useEditorStore.getState();
+      renderer.resize(
+        st.canvasWidth * st.zoom,
+        st.canvasHeight * st.zoom,
+        window.devicePixelRatio || 1
+      );
+      renderCanvas();
+    };
 
     const unsub = pixelEngine.subscribe(renderCanvas);
     return () => {
@@ -625,11 +647,60 @@ export function Viewport() {
     return () => window.clearInterval(id);
   }, [animateTilesPreview]);
 
+  const wheelAccumRef = useRef(0);
+
+  // Track the stage size so Fit can use it.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const report = () => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        setViewportSize({ w: Math.floor(r.width), h: Math.floor(r.height) });
+      }
+    };
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [setViewportSize]);
+
+  // Recentre on explicit view resets (Fit, Actual Size, new document).
+  useEffect(() => {
+    setPan({ x: 0, y: 0 });
+  }, [viewResetNonce]);
+
+  // Auto-fit while the user has not zoomed manually since the last fit.
+  useEffect(() => {
+    if (!zoomIsFit || !viewportSize) return;
+    applyFitZoom(
+      computeFitZoom(canvasWidth, canvasHeight, viewportSize.w, viewportSize.h)
+    );
+    setPan({ x: 0, y: 0 });
+  }, [
+    zoomIsFit,
+    viewportSize,
+    canvasWidth,
+    canvasHeight,
+    viewResetNonce,
+    applyFitZoom,
+  ]);
+
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const delta = e.deltaY < 0 ? 1 : -1;
-    const step = zoom >= 16 ? 2 : 1;
-    setZoom(zoom + delta * step);
+    wheelAccumRef.current += e.deltaY;
+    if (Math.abs(wheelAccumRef.current) < 40) return;
+    const direction: 1 | -1 = wheelAccumRef.current < 0 ? 1 : -1;
+    wheelAccumRef.current = 0;
+    const next = stepZoom(zoom, direction);
+    if (next === zoom) return;
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (rect) {
+      const dx = e.clientX - (rect.left + rect.width / 2);
+      const dy = e.clientY - (rect.top + rect.height / 2);
+      setPan((p) => panForZoomAtCursor(p, dx, dy, zoom, next));
+    }
+    setZoom(next);
   };
 
   const handleStageMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -674,7 +745,7 @@ export function Viewport() {
       return;
     }
 
-    if (state.workspaceMode === "data") {
+    if (state.workspaceMode === "draw" && state.dataToolActive) {
       if (e.button !== 0) return;
       const { x: px, y: py } = getPixelCoords(e);
       const clampedX = Math.max(0, Math.min(state.canvasWidth - 1, px));
@@ -892,14 +963,14 @@ export function Viewport() {
 
   const gameDataOverlay = useMemo(() => {
     void gameDataVersion;
-    if (workspaceMode !== "data" && !showGameDataOverlay) {
+    if (!showGameDataOverlay && !dataToolActive) {
       return { boxes: [], sockets: [] };
     }
     return {
       boxes: pixelEngine.gameData.getBoxesAtFrame(currentFrame),
       sockets: pixelEngine.gameData.getSocketsAtFrame(currentFrame),
     };
-  }, [workspaceMode, showGameDataOverlay, currentFrame, gameDataVersion]);
+  }, [showGameDataOverlay, dataToolActive, currentFrame, gameDataVersion]);
 
   const isTilesMap = workspaceMode === "tiles" && tilesMode === "map";
   const dragPreview = drawPointer.dragPreview;
@@ -909,8 +980,8 @@ export function Viewport() {
   const flipScaleY = isDrawMode && viewFlipV ? -1 : 1;
   const frameTransform =
     flipScaleX === -1 || flipScaleY === -1
-      ? `translate(${pan.x}px, ${pan.y}px) scale(${flipScaleX}, ${flipScaleY})`
-      : `translate(${pan.x}px, ${pan.y}px)`;
+      ? `translate(${pan.x}px, ${pan.y}px) translate(-50%, -50%) scale(${flipScaleX}, ${flipScaleY})`
+      : `translate(${pan.x}px, ${pan.y}px) translate(-50%, -50%)`;
 
   const showRefOverlay = Boolean(isDrawMode && referenceImage && referenceImage.visible);
   const refImgElement = showRefOverlay && referenceImage && (
@@ -941,6 +1012,11 @@ export function Viewport() {
       <div className="document-tabs">
         <div className="doc-tab">
           <span className="doc-tab-dot" />
+          {isDocumentDirty && (
+            <span className="doc-tab-dirty" title="Unsaved changes" aria-label="Unsaved changes">
+              {"\u2022"}
+            </span>
+          )}
           <span>{documentName}</span>
           <span
             style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
@@ -969,6 +1045,9 @@ export function Viewport() {
           className={`viewport-canvas-frame ${frameBackdropClass}`}
           style={{
             ...frameBackdropStyle,
+            position: "absolute",
+            left: "50%",
+            top: "50%",
             width: canvasWidth * zoom,
             height: canvasHeight * zoom,
             transform: frameTransform,
@@ -1112,7 +1191,7 @@ export function Viewport() {
               />
             )}
 
-          {(workspaceMode === "data" || showGameDataOverlay) &&
+          {(dataToolActive || showGameDataOverlay) &&
             (gameDataOverlay.boxes.length > 0 ||
               gameDataOverlay.sockets.length > 0 ||
               dataDraftBox) && (
@@ -1170,7 +1249,7 @@ export function Viewport() {
             className="icon-action-btn"
             style={{ width: 20, height: 20 }}
             title="Zoom Out (-)"
-            onClick={() => setZoom(zoom - 1)}
+            onClick={() => setZoom(stepZoom(zoom, -1))}
           >
             <Minus size={12} />
           </button>
@@ -1180,9 +1259,18 @@ export function Viewport() {
             className="icon-action-btn"
             style={{ width: 20, height: 20 }}
             title="Zoom In (+)"
-            onClick={() => setZoom(zoom + 1)}
+            onClick={() => setZoom(stepZoom(zoom, 1))}
           >
             <Plus size={12} />
+          </button>
+          <button
+            type="button"
+            className={`menu-btn zoom-fit-btn ${zoomIsFit ? "active" : ""}`}
+            style={{ padding: "1px 5px", fontSize: 10 }}
+            title="Fit to Window (Ctrl+0)"
+            onClick={fitZoomToWindow}
+          >
+            Fit
           </button>
           {(pan.x !== 0 || pan.y !== 0) && (
             <button
