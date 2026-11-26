@@ -70,12 +70,6 @@ export const RIG_TOOL_BY_ID = new Map<RigTool, RigToolDef>(
   RIG_TOOL_DEFS.map((def) => [def.id, def])
 );
 
-/** Keyboard key (lowercase) -> rig tool. Only active in Rig workspace mode. */
-export const RIG_TOOL_SHORTCUTS: Record<string, RigTool> = {};
-for (const def of RIG_TOOL_DEFS) {
-  RIG_TOOL_SHORTCUTS[def.shortcut.toLowerCase()] = def.id;
-}
-
 /** Groups drawn with a separator between them in the rail. */
 export const RIG_TOOL_GROUPS: { ids: RigTool[]; dividerAfter?: boolean }[] = [
   { ids: ["select", "translate", "scale", "rotate3d"], dividerAfter: true },

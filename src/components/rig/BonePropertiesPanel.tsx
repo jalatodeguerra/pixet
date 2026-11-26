@@ -7,6 +7,7 @@ import {
   endRigGesture,
   mutateRig,
 } from "../../engine/rig/rigActions";
+import { keyRigPoseAction } from "../../engine/rig/rigCommands";
 import {
   isDescendantBone,
   reparentBonePreserveWorld,
@@ -28,7 +29,6 @@ export function BonePropertiesPanel() {
   const layers = useEditorStore((s) => s.layers);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
-  const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
   const setupMode = rigMode === "setup";
   const bones = pixelEngine.rig.bones;
@@ -134,12 +134,7 @@ export function BonePropertiesPanel() {
 
   const handleSetKeyframe = () => {
     if (!selectedBone || setupMode) return;
-    mutateRig("Set keyframe", () =>
-      pixelEngine.rig.setKeyframe(selectedBone.id, currentFrame, "easeInOut")
-    );
-    setStatusMessage(
-      `Keyframed "${selectedBone.name}" on frame ${currentFrame + 1}`
-    );
+    keyRigPoseAction();
   };
 
   const handleDeleteKeyframe = () => {

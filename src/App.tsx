@@ -20,15 +20,15 @@ import { ToolOptionsBar } from "./components/ToolOptionsBar";
 import { ToolRail } from "./components/ToolRail";
 import { TopBar } from "./components/TopBar";
 import { Viewport } from "./components/Viewport";
+import { commandRegistry, type CommandDef } from "./engine/config/commands";
+import { formatEventToChord } from "./engine/config/keybindings";
 import {
-  formatEventToChord,
-  resolveActionForChord,
-} from "./engine/config/keybindings";
+  currentCommandContext,
+  ensureCommandsRegistered,
+} from "./components/commands/appCommands";
 import { pixelEngine } from "./engine/document/PixelEngine";
 import { performRedo, performUndo } from "./engine/document/historyActions";
-import { mergeDownLayerAction } from "./engine/document/layerActions";
 import {
-  captureCustomBrushFromSelectionAction,
   commitFloatingSelection,
   copySelection,
   copySelectionToNewLayer,
@@ -42,7 +42,6 @@ import {
   selectAllCanvas,
 } from "./engine/document/selectionActions";
 import {
-  beginFreeTransformAction,
   cancelFreeTransformAction,
   commitFreeTransformAction,
 } from "./engine/document/transformActions";
@@ -55,13 +54,7 @@ import {
   isSupportedImageFile,
   pickImageFileForImport,
 } from "./engine/io/imageImport";
-import { useEditorStore, type ToolId } from "./store/editorStore";
-import { DRAW_TOOL_BY_ID } from "./components/draw/drawTools";
-import {
-  RIG_TOOL_BY_ID,
-  RIG_TOOL_SHORTCUTS,
-  rigToolDisabledReason,
-} from "./components/rig/rigTools";
+import { useEditorStore } from "./store/editorStore";
 import { TilesetBrowserPanel } from "./components/tiles/TilesetBrowserPanel";
 import {
   deleteSelectedElements,
@@ -74,25 +67,12 @@ import {
   deleteTileSelectionCells,
 } from "./components/tiles/TileToolOptionsBar";
 import { deleteSelectedObject } from "./engine/document/objectActions";
-import { TILE_TOOL_SHORTCUTS } from "./components/tiles/tileTools";
-import { packCell, rotateCellCW, unpackCell } from "./engine/tiles/cell";
-import {
-  flipBrushH,
-  flipBrushV,
-  rotateBrushCW,
-} from "./engine/tiles/mapTools";
 import {
   createModelClip,
   recordNodeTransformKeyframes,
 } from "./engine/model3d/animEval";
 import { flipQuadDiagonal, mirrorNode } from "./engine/model3d/meshOps";
 import { mutateModel3D } from "./engine/model3d/model3dActions";
-import {
-  duplicateSelection,
-  removeNodes,
-  toggleBypassNodes,
-} from "./engine/nodes/NodeGraph";
-import { mutateActiveNodeGraph } from "./engine/nodes/nodeActions";
 import {
   cycleTileCursorPlane,
   flipTileCursor,
@@ -224,62 +204,13 @@ export function App() {
         target.tagName === "TEXTAREA" ||
         target.tagName === "SELECT");
 
-    const runKeybindingAction = (actionId: string): boolean => {
-      const st = useEditorStore.getState();
-      if (actionId === "view.commandPalette") {
-        st.setCommandPaletteOpen(!st.commandPaletteOpen);
-        return true;
-      }
-      if (actionId === "view.zoomFit") {
-        st.fitZoomToWindow();
-        return true;
-      }
-      if (actionId === "view.zoomActual") {
-        st.zoomActualSize();
-        return true;
-      }
-      if (actionId === "view.zoomIn") {
-        st.zoomStep(1);
-        return true;
-      }
-      if (actionId === "view.zoomOut") {
-        st.zoomStep(-1);
-        return true;
-      }
-      if (actionId === "edit.freeTransform") {
-        beginFreeTransformAction();
-        return true;
-      }
-      if (actionId === "edit.captureBrush") {
-        captureCustomBrushFromSelectionAction();
-        return true;
-      }
-      if (actionId === "layer.mergeDown") {
-        mergeDownLayerAction();
-        return true;
-      }
-      if (actionId === "view.flipH") {
-        if (st.workspaceMode === "draw") {
-          st.toggleViewFlipH();
-          return true;
-        }
-        return false;
-      }
-      if (actionId === "view.flipV") {
-        if (st.workspaceMode === "draw") {
-          st.toggleViewFlipV();
-          return true;
-        }
-        return false;
-      }
-      if (actionId.startsWith("tool.")) {
-        const toolId = actionId.slice(5) as ToolId;
-        if (DRAW_TOOL_BY_ID.has(toolId)) {
-          st.setActiveTool(toolId);
-          return true;
-        }
-      }
-      return false;
+    ensureCommandsRegistered();
+
+    /** Runs a registry command if it is currently enabled. */
+    const runCommand = (cmd: CommandDef): boolean => {
+      if (!commandRegistry.isEnabled(cmd)) return false;
+      cmd.run();
+      return true;
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -289,11 +220,12 @@ export function App() {
       }
 
       const chord = formatEventToChord(e);
-      const boundAction = chord
-        ? resolveActionForChord(chord, stNow.keybindings)
+      const cmdCtx = currentCommandContext();
+      const boundCmd = chord
+        ? commandRegistry.resolve(chord, cmdCtx, stNow.keybindings)
         : null;
 
-      if (boundAction === "view.commandPalette") {
+      if (boundCmd?.id === "view.commandPalette") {
         if (stNow.commandPaletteOpen || !isEditable(e.target)) {
           e.preventDefault();
           stNow.setCommandPaletteOpen(!stNow.commandPaletteOpen);
@@ -308,6 +240,21 @@ export function App() {
       // Nodes workspace keyboard isolation (runs before Draw tool shortcuts)
       if (stNow.workspaceMode === "nodes") {
         const lower = e.key.toLowerCase();
+        // Registered node commands (Shift+A add, Ctrl+A/D, Delete, M, P).
+        const nodeCmd = chord
+          ? commandRegistry.resolve(chord, cmdCtx, stNow.keybindings, {
+              looseShift: true,
+            })
+          : null;
+        if (nodeCmd) {
+          if (commandRegistry.isEnabled(nodeCmd)) {
+            e.preventDefault();
+            nodeCmd.run();
+          } else if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+          }
+          return;
+        }
         if ((e.ctrlKey || e.metaKey) && !e.altKey) {
           if (lower === "z") {
             e.preventDefault();
@@ -325,74 +272,12 @@ export function App() {
             void saveProjectAction(e.shiftKey);
             return;
           }
-          if (lower === "a") {
-            e.preventDefault();
-            const g = pixelEngine.nodes.getActiveGraph();
-            if (g) {
-              stNow.patchNodesUi({ selectedNodeIds: g.nodes.map((n) => n.id) });
-            }
-            return;
-          }
-          if (lower === "d") {
-            e.preventDefault();
-            const sel = stNow.nodesUi.selectedNodeIds;
-            if (sel.length > 0) {
-              let created: string[] = [];
-              mutateActiveNodeGraph("Duplicate Nodes", (g) => {
-                const res = duplicateSelection(g, sel);
-                created = res.createdNodeIds;
-                return res.graph;
-              });
-              if (created.length > 0) {
-                stNow.patchNodesUi({ selectedNodeIds: created });
-              }
-            }
-            return;
-          }
         }
 
-        if ((e.shiftKey && lower === "a") || e.key === "/") {
-          e.preventDefault();
-          stNow.patchNodesUi({
-            quickAddOpen: true,
-            quickAddPos: { x: Math.round(window.innerWidth * 0.4), y: Math.round(window.innerHeight * 0.35) },
-            pendingWireFrom: null,
-          });
-          return;
-        }
         if (e.key === "Escape") {
           e.preventDefault();
           stNow.patchNodesUi({ quickAddOpen: false, pendingWireFrom: null, selectedNodeIds: [] });
           return;
-        }
-        if (e.key === "Delete" || e.key === "Backspace") {
-          const sel = stNow.nodesUi.selectedNodeIds;
-          if (sel.length > 0) {
-            e.preventDefault();
-            mutateActiveNodeGraph("Delete Nodes", (g) => removeNodes(g, sel));
-            stNow.patchNodesUi({ selectedNodeIds: [] });
-          }
-          return;
-        }
-        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-          if (lower === "m") {
-            const sel = stNow.nodesUi.selectedNodeIds;
-            if (sel.length > 0) {
-              e.preventDefault();
-              mutateActiveNodeGraph("Toggle Bypass", (g) => toggleBypassNodes(g, sel), sel);
-            }
-            return;
-          }
-          if (lower === "p") {
-            const sel = stNow.nodesUi.selectedNodeIds;
-            if (sel.length === 1) {
-              e.preventDefault();
-              stNow.patchNodesUi({
-                pinnedNodeId: stNow.nodesUi.pinnedNodeId === sel[0] ? null : sel[0],
-              });
-            }
-            return;
-          }
         }
         return;
       }
@@ -776,20 +661,8 @@ export function App() {
         return;
       }
 
-      if (
-        boundAction &&
-        (e.ctrlKey || e.metaKey || e.altKey) &&
-        (boundAction === "edit.freeTransform" ||
-          boundAction === "edit.captureBrush" ||
-          boundAction === "layer.mergeDown" ||
-          boundAction === "view.flipH" ||
-          boundAction === "view.flipV" ||
-          boundAction.startsWith("view.zoom") ||
-          (stNow.workspaceMode !== "rig" &&
-            !(stNow.workspaceMode === "tiles" && stNow.tilesMode === "map") &&
-            boundAction.startsWith("tool.")))
-      ) {
-        if (runKeybindingAction(boundAction)) {
+      if (boundCmd && (e.ctrlKey || e.metaKey || e.altKey)) {
+        if (runCommand(boundCmd)) {
           e.preventDefault();
           return;
         }
@@ -1044,101 +917,29 @@ export function App() {
 
       // Rig workspace shortcuts replace the drawing tool shortcuts entirely.
       if (state.workspaceMode === "rig") {
-        const rigTool = RIG_TOOL_SHORTCUTS[key];
-        if (rigTool) {
-          const def = RIG_TOOL_BY_ID.get(rigTool);
-          const reason = def ? rigToolDisabledReason(def, state.rigMode) : null;
-          if (def && reason) {
-            state.setStatusMessage(`${def.label}: ${reason}`);
-            return;
-          }
-          state.setRigTool(rigTool);
-          return;
-        }
+        const rigCmd = chord
+          ? commandRegistry.resolve(chord, cmdCtx, state.keybindings, {
+              looseShift: true,
+            })
+          : null;
+        if (rigCmd) runCommand(rigCmd);
         // Never fall through to drawing tool shortcuts in the rig workspace.
         return;
       }
 
-      // Tiles Map workspace shortcuts replace drawing shortcuts.
+      // Tiles Map workspace shortcuts (tools, brush flip/rotate) replace
+      // drawing shortcuts.
       if (state.workspaceMode === "tiles" && state.tilesMode === "map") {
-        if (e.key === "Escape") {
-          state.setTileSelection([]);
-          return;
-        }
-        if (key === "x") {
-          if (state.tileBrush) {
-            const flipped = flipBrushH({
-              cols: state.tileBrush.cols,
-              rows: state.tileBrush.rows,
-              cells: new Uint32Array(state.tileBrush.cells),
-            });
-            state.setTileBrush({
-              tilesetIndex: state.tileBrush.tilesetIndex,
-              cols: flipped.cols,
-              rows: flipped.rows,
-              cells: Array.from(flipped.cells),
-            });
-          } else {
-            state.setTileBrushFlags({
-              ...state.tileBrushFlags,
-              flipH: !state.tileBrushFlags.flipH,
-            });
-          }
-          return;
-        }
-        if (key === "y") {
-          if (state.tileBrush) {
-            const flipped = flipBrushV({
-              cols: state.tileBrush.cols,
-              rows: state.tileBrush.rows,
-              cells: new Uint32Array(state.tileBrush.cells),
-            });
-            state.setTileBrush({
-              tilesetIndex: state.tileBrush.tilesetIndex,
-              cols: flipped.cols,
-              rows: flipped.rows,
-              cells: Array.from(flipped.cells),
-            });
-          } else {
-            state.setTileBrushFlags({
-              ...state.tileBrushFlags,
-              flipV: !state.tileBrushFlags.flipV,
-            });
-          }
-          return;
-        }
-        if (key === "z") {
-          if (state.tileBrush) {
-            const rotated = rotateBrushCW({
-              cols: state.tileBrush.cols,
-              rows: state.tileBrush.rows,
-              cells: new Uint32Array(state.tileBrush.cells),
-            });
-            state.setTileBrush({
-              tilesetIndex: state.tileBrush.tilesetIndex,
-              cols: rotated.cols,
-              rows: rotated.rows,
-              cells: Array.from(rotated.cells),
-            });
-          } else {
-            const packed = packCell(0, 1, state.tileBrushFlags);
-            const rot = unpackCell(rotateCellCW(packed));
-            state.setTileBrushFlags({
-              flipH: rot.flipH,
-              flipV: rot.flipV,
-              flipD: rot.flipD,
-            });
-          }
-          return;
-        }
-        const mappedTileTool = TILE_TOOL_SHORTCUTS[key];
-        if (mappedTileTool) {
-          state.setTileTool(mappedTileTool);
-        }
+        const tileCmd = chord
+          ? commandRegistry.resolve(chord, cmdCtx, state.keybindings, {
+              looseShift: true,
+            })
+          : null;
+        if (tileCmd) runCommand(tileCmd);
         return;
       }
 
-      if (boundAction && runKeybindingAction(boundAction)) {
+      if (boundCmd && runCommand(boundCmd)) {
         e.preventDefault();
       }
     };

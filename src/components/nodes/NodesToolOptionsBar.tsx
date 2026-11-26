@@ -22,6 +22,8 @@ const BASE_RES: Array<NodeGraph["baseResolution"]> = [32, 64, 128, 256, 512, 102
 
 export function NodesToolOptionsBar() {
   useEditorStore((s) => s.nodesVersion);
+  const canUndo = useEditorStore((s) => s.canUndo);
+  const canRedo = useEditorStore((s) => s.canRedo);
   const bumpNodesVersion = useEditorStore((s) => s.bumpNodesVersion);
   const showThumbnails = useEditorStore((s) => s.nodesUi.showThumbnails);
   const patchNodesUi = useEditorStore((s) => s.patchNodesUi);
@@ -42,7 +44,7 @@ export function NodesToolOptionsBar() {
           type="button"
           className="icon-action-btn"
           title="Undo (Ctrl+Z)"
-          disabled={!pixelEngine.nodesHistory.canUndo()}
+          disabled={!canUndo}
           onClick={performUndo}
         >
           <Undo2 size={13} />
@@ -51,7 +53,7 @@ export function NodesToolOptionsBar() {
           type="button"
           className="icon-action-btn"
           title="Redo (Ctrl+Shift+Z)"
-          disabled={!pixelEngine.nodesHistory.canRedo()}
+          disabled={!canRedo}
           onClick={performRedo}
         >
           <Redo2 size={13} />

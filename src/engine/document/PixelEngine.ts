@@ -183,7 +183,16 @@ export class PixelEngine {
   readonly tilemapHistory = new TilemapHistory(100, 50);
   readonly model3dHistory = new Model3DHistory(100);
   readonly nodesHistory = new NodeHistory(100);
-  readonly undoCoordinator = new UndoCoordinator(200);
+  readonly undoCoordinator = new UndoCoordinator(200, [
+    // Mirror each domain history's own cap so the coordinator never keeps an
+    // entry whose payload the domain history already dropped.
+    { kinds: ["pixels"], limit: 100 },
+    { kinds: ["cells"], limit: 100 },
+    { kinds: ["tileset"], limit: 50 },
+    { kinds: ["model3d"], limit: 100 },
+    { kinds: ["rig"], limit: 100 },
+    { kinds: ["nodes"], limit: 100 },
+  ]);
 
   get tileset(): Tileset {
     return this.tilesetRegistry.tilesets[0];
@@ -220,6 +229,9 @@ export class PixelEngine {
       this.undoCoordinator.record("pixels", label);
     this.tilemapHistory.onCommit = (kind, label) =>
       this.undoCoordinator.record(kind, label);
+    this.nodesHistory.onCommit = (label, graphId) =>
+      this.undoCoordinator.record("nodes", label, graphId);
+    this.undoCoordinator.onRedoCleared(() => this.nodesHistory.clearRedo());
     this.tileset.seedStarterTiles();
   }
 

@@ -33,6 +33,7 @@ import {
   type KeybindingMap,
   type KeybindingPreset,
 } from "../engine/config/keybindings.ts";
+import { migrateKeybindingIds } from "../engine/config/commands.ts";
 import {
   computeNextPlaybackFrame,
   type TagDirection,
@@ -1142,13 +1143,15 @@ function loadInitialKeybindings(): KeybindingMap {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return base;
     }
+    const stored: KeybindingMap = {};
     for (const [actionId, chord] of Object.entries(
       parsed as Record<string, unknown>
     )) {
       if (typeof chord !== "string") continue;
-      base[actionId] = chord === "" ? "" : normalizeChordString(chord);
+      stored[actionId] = chord === "" ? "" : normalizeChordString(chord);
     }
-    return base;
+    // Overrides saved under a renamed command id move to the current id.
+    return { ...base, ...migrateKeybindingIds(stored) };
   } catch {
     return base;
   }
@@ -1601,13 +1604,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         return false;
       }
-      const next: KeybindingMap = { ...PIXET_DEFAULT_KEYBINDINGS };
+      const imported: KeybindingMap = {};
       for (const [actionId, chord] of Object.entries(
         parsed as Record<string, unknown>
       )) {
         if (typeof chord !== "string") continue;
-        next[actionId] = chord.trim() === "" ? "" : normalizeChordString(chord);
+        imported[actionId] =
+          chord.trim() === "" ? "" : normalizeChordString(chord);
       }
+      const next: KeybindingMap = {
+        ...PIXET_DEFAULT_KEYBINDINGS,
+        ...migrateKeybindingIds(imported),
+      };
       persistKeybindings(next);
       set({ keybindings: next });
       return true;

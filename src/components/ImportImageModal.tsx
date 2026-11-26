@@ -11,7 +11,7 @@ import {
 } from "../engine/io/imageImport";
 import { markDocumentReplaced } from "../engine/io/projectBridge";
 import { confirmDiscardChanges } from "../engine/io/unsavedChanges";
-import { resetRigHistory } from "../engine/rig/rigActions";
+import { resetRigHistory, syncRigHistoryFlags } from "../engine/rig/rigActions";
 import {
   type FrameItem,
   type LayerItem,
@@ -297,10 +297,7 @@ export function ImportImageModal() {
       cel.data.set(placed.data);
       cel.markAllDirty();
       pixelEngine.history.commitTransaction(cel);
-      state.setHistoryFlags(
-        pixelEngine.history.canUndo,
-        pixelEngine.history.canRedo
-      );
+      syncRigHistoryFlags();
       syncTimelineCels();
       pixelEngine.emitChange();
       state.setStatusMessage(

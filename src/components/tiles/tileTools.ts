@@ -60,7 +60,3 @@ export const TILE_TOOL_GROUPS: Array<{
 export const TILE_TOOL_BY_ID = new Map<TileTool, TileToolDef>(
   TILE_TOOLS.map((t) => [t.id, t])
 );
-
-export const TILE_TOOL_SHORTCUTS: Record<string, TileTool> = Object.fromEntries(
-  TILE_TOOLS.map((t) => [t.shortcut.toLowerCase(), t.id])
-);

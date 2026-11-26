@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Keyboard, RotateCcw, X } from "lucide-react";
 import {
-  findKeybindingConflicts,
+  commandRegistry,
+  describeChordScope,
+  type CommandDef,
+} from "../../engine/config/commands";
+import {
   formatChordForDisplay,
   formatEventToChord,
-  KEYBINDING_ACTIONS,
 } from "../../engine/config/keybindings";
 import { useEditorStore } from "../../store/editorStore";
+import { ensureCommandsRegistered } from "../commands/appCommands";
 
 export function KeybindingsModal() {
   const open = useEditorStore((s) => s.keybindingsModalOpen);
@@ -72,29 +76,49 @@ export function KeybindingsModal() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [open, recordingId, setKeybinding, setOpen]);
 
+  ensureCommandsRegistered();
+
+  // Conflicts are per workspace scope: the same chord in two different
+  // workspaces is fine, the same chord twice in one workspace is not.
   const conflicts = useMemo(
-    () => findKeybindingConflicts(keybindings),
+    () => commandRegistry.findConflicts(keybindings),
     [keybindings]
   );
 
   const conflictActionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const c of conflicts) {
-      for (const id of c.actionIds) ids.add(id);
+      for (const id of c.commandIds) ids.add(id);
     }
     return ids;
   }, [conflicts]);
 
-  const filteredActions = useMemo(() => {
+  const groupedActions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return KEYBINDING_ACTIONS;
-    return KEYBINDING_ACTIONS.filter(
-      (a) =>
-        a.label.toLowerCase().includes(q) ||
+    const all = commandRegistry.all().filter((a) => {
+      if (!q) return true;
+      const chord = commandRegistry.displayChord(a, keybindings);
+      return (
+        a.title.toLowerCase().includes(q) ||
         a.category.toLowerCase().includes(q) ||
         a.id.toLowerCase().includes(q) ||
-        (keybindings[a.id] ?? "").toLowerCase().includes(q)
-    );
+        chord.toLowerCase().includes(q)
+      );
+    });
+    const order: string[] = [];
+    const byCat = new Map<string, CommandDef[]>();
+    for (const a of all) {
+      const list = byCat.get(a.category);
+      if (list) list.push(a);
+      else {
+        byCat.set(a.category, [a]);
+        order.push(a.category);
+      }
+    }
+    return order.map((category) => ({
+      category,
+      items: byCat.get(category) ?? [],
+    }));
   }, [searchQuery, keybindings]);
 
   if (!open) return null;
@@ -190,7 +214,7 @@ export function KeybindingsModal() {
                 {conflicts
                   .map(
                     (c) =>
-                      `${formatChordForDisplay(c.chord)} (${c.actionIds.length})`
+                      `${formatChordForDisplay(c.chord)} (${c.commandIds.length})`
                   )
                   .join(", ")}
               </span>
@@ -229,46 +253,57 @@ export function KeybindingsModal() {
           )}
 
           <div className="draw-keybinds-list">
-            {filteredActions.map((act) => {
-              const chord = keybindings[act.id] ?? "";
-              const isRecording = recordingId === act.id;
-              const hasConflict = conflictActionIds.has(act.id);
-              return (
-                <div
-                  key={act.id}
-                  className={`draw-keybinds-row ${hasConflict ? "conflict" : ""}`}
-                >
-                  <div className="draw-keybinds-meta">
-                    <span className="draw-keybinds-cat">{act.category}</span>
-                    <span className="draw-keybinds-label">{act.label}</span>
-                  </div>
-                  <div className="draw-keybinds-controls">
-                    {hasConflict && (
-                      <span
-                        className="draw-keybinds-conflict-badge"
-                        title="Shortcut conflict"
-                      >
-                        Conflict
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      className={`draw-keybinds-chord-btn ${isRecording ? "recording" : ""}`}
-                      title="Click then press shortcut (Backspace to clear, Esc to cancel)"
-                      onClick={() =>
-                        setRecordingId(isRecording ? null : act.id)
-                      }
+            {groupedActions.map((group) => (
+              <div key={group.category} role="group" aria-label={group.category}>
+                <div className="draw-keybinds-group">{group.category}</div>
+                {group.items.map((act) => {
+                  const chord = commandRegistry.effectiveChord(act, keybindings);
+                  const display = commandRegistry.displayChord(act, keybindings);
+                  const fixedOnly = !chord && display !== "";
+                  const isRecording = recordingId === act.id;
+                  const hasConflict = conflictActionIds.has(act.id);
+                  return (
+                    <div
+                      key={act.id}
+                      className={`draw-keybinds-row ${hasConflict ? "conflict" : ""}`}
                     >
-                      {isRecording
-                        ? "Press key..."
-                        : chord
-                          ? formatChordForDisplay(chord)
-                          : "Unbound"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                      <div className="draw-keybinds-meta">
+                        <span className="draw-keybinds-cat">
+                          {describeChordScope(act)}
+                        </span>
+                        <span className="draw-keybinds-label">{act.title}</span>
+                      </div>
+                      <div className="draw-keybinds-controls">
+                        {hasConflict && (
+                          <span
+                            className="draw-keybinds-conflict-badge"
+                            title="Shortcut conflict in this workspace"
+                          >
+                            Conflict
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className={`draw-keybinds-chord-btn ${isRecording ? "recording" : ""}`}
+                          title="Click then press shortcut (Backspace to clear, Esc to cancel)"
+                          onClick={() =>
+                            setRecordingId(isRecording ? null : act.id)
+                          }
+                        >
+                          {isRecording
+                            ? "Press key..."
+                            : chord
+                              ? formatChordForDisplay(chord)
+                              : fixedOnly
+                                ? `${display} (fixed)`
+                                : "Unbound"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
 
           <div className="modal-footer">
