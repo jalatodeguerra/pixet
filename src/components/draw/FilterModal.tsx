@@ -4,6 +4,7 @@ import { hexToRgba, PixelBuffer, type RGBA } from "../../engine/document/PixelBu
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import {
   applyBufferFilterAction,
+  applyBufferFilterActionAsync,
   scaleSpriteAction,
   type FilterScope,
 } from "../../engine/document/filterActions";
@@ -18,6 +19,10 @@ import {
   applyPixelCleanupFilter,
   applyQuantizeToPalette,
 } from "../../engine/tools/filters";
+import {
+  applyQuantizeToPaletteAsync,
+  shouldQuantizeOffThread,
+} from "../../engine/tools/quantizeClient";
 import {
   offsetWrapBuffer,
   scaleBufferAlgorithm,
@@ -173,6 +178,46 @@ export function FilterModal() {
     return null;
   }, [open, scope]);
 
+  // Off-thread quantize preview. `quantizeKey` identifies the inputs a result
+  // belongs to so a stale result is never shown for newer settings.
+  const quantizeKey = useMemo(() => ({}), [
+    sourcePreviewBuffer,
+    activeMask,
+    paletteRgbas,
+    quantizeDither,
+  ]);
+  const [quantizePreview, setQuantizePreview] = useState<{
+    key: object;
+    buffer: PixelBuffer;
+  } | null>(null);
+  const quantizeOffThread =
+    open &&
+    activeTab === "quantize" &&
+    shouldQuantizeOffThread(sourcePreviewBuffer, paletteRgbas);
+  const quantizeBusy =
+    quantizeOffThread && (!quantizePreview || quantizePreview.key !== quantizeKey);
+  useEffect(() => {
+    if (!quantizeOffThread) return;
+    let cancelled = false;
+    void applyQuantizeToPaletteAsync(
+      sourcePreviewBuffer,
+      { palette: paletteRgbas, dither: quantizeDither },
+      activeMask
+    ).then((buffer) => {
+      if (!cancelled) setQuantizePreview({ key: quantizeKey, buffer });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    quantizeOffThread,
+    quantizeKey,
+    sourcePreviewBuffer,
+    paletteRgbas,
+    quantizeDither,
+    activeMask,
+  ]);
+
   const afterPreviewBuffer = useMemo(() => {
     if (!open) return new PixelBuffer(1, 1);
     switch (activeTab) {
@@ -222,6 +267,12 @@ export function FilterModal() {
           activeMask
         );
       case "quantize":
+        // Big buffers x big palettes are computed on a worker (effect below).
+        if (shouldQuantizeOffThread(sourcePreviewBuffer, paletteRgbas)) {
+          return quantizePreview && quantizePreview.key === quantizeKey
+            ? quantizePreview.buffer
+            : sourcePreviewBuffer;
+        }
         return applyQuantizeToPalette(
           sourcePreviewBuffer,
           { palette: paletteRgbas, dither: quantizeDither },
@@ -271,6 +322,8 @@ export function FilterModal() {
     replaceTolerance,
     paletteRgbas,
     quantizeDither,
+    quantizePreview,
+    quantizeKey,
     removeOrphans,
     fillHoles,
     offsetDx,
@@ -349,15 +402,27 @@ export function FilterModal() {
           )
         );
         break;
-      case "quantize":
-        applyBufferFilterAction("Quantize to Palette", scope, (buf, mask) =>
-          applyQuantizeToPalette(
-            buf,
-            { palette: paletteRgbas, dither: quantizeDither },
-            mask
+      case "quantize": {
+        const quantizeOpts = { palette: paletteRgbas, dither: quantizeDither };
+        if (
+          shouldQuantizeOffThread(
+            { width: canvasWidth, height: canvasHeight },
+            paletteRgbas
           )
-        );
+        ) {
+          void applyBufferFilterActionAsync(
+            "Quantize to Palette",
+            scope,
+            (buf, mask) => applyQuantizeToPaletteAsync(buf, quantizeOpts, mask),
+            (buf, mask) => applyQuantizeToPalette(buf, quantizeOpts, mask)
+          );
+        } else {
+          applyBufferFilterAction("Quantize to Palette", scope, (buf, mask) =>
+            applyQuantizeToPalette(buf, quantizeOpts, mask)
+          );
+        }
         break;
+      }
       case "cleanup":
         applyBufferFilterAction("Pixel Cleanup", scope, (buf, mask) =>
           applyPixelCleanupFilter(buf, { removeOrphans, fillHoles }, mask)
@@ -412,6 +477,8 @@ export function FilterModal() {
     scaleW,
     scaleH,
     scaleAlgorithm,
+    canvasWidth,
+    canvasHeight,
     setFilterModalOpen,
   ]);
 
@@ -535,7 +602,9 @@ export function FilterModal() {
                 <div className="draw-filter-preview-label">
                   <span>After (Live)</span>
                   <span>
-                    {afterPreviewBuffer.width}×{afterPreviewBuffer.height}
+                    {quantizeBusy
+                      ? "Working…"
+                      : `${afterPreviewBuffer.width}×${afterPreviewBuffer.height}`}
                   </span>
                 </div>
                 <div className="draw-filter-preview-stage">

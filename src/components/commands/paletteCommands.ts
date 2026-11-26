@@ -26,11 +26,6 @@ import {
   generateAllStudio3DMapsAction,
   generateStudio3DMapLayerAction,
 } from "../studio3d/studio3dActions";
-import { downloadExportedModelAction } from "../studio3d/three/modelExporter";
-import {
-  bakeModel3DToTilesetAction,
-  bakeModel3DTurntableAction,
-} from "../studio3d/three/modelSpriteBaker";
 import { beginFreeTransformAction } from "../../engine/document/transformActions";
 import {
   applyBufferFilterAction,
@@ -761,7 +756,9 @@ export function buildPaletteCommands(): LegacyPaletteCommand[] {
         category: "3D Model",
         keywords: ["export", "glb", "gltf", "godot", "unity", "3d"],
         run: () => {
-          void downloadExportedModelAction("glb");
+          void import("../studio3d/three/modelExporter").then((m) =>
+            m.downloadExportedModelAction("glb"),
+          );
         },
       },
       {
@@ -770,7 +767,9 @@ export function buildPaletteCommands(): LegacyPaletteCommand[] {
         category: "3D Model",
         keywords: ["export", "obj", "mtl", "quad", "blender", "3d"],
         run: () => {
-          void downloadExportedModelAction("obj");
+          void import("../studio3d/three/modelExporter").then((m) =>
+            m.downloadExportedModelAction("obj"),
+          );
         },
       },
       {
@@ -779,7 +778,9 @@ export function buildPaletteCommands(): LegacyPaletteCommand[] {
         category: "3D Model",
         keywords: ["bake", "turntable", "sprite", "2d", "ortho", "3d"],
         run: () => {
-          bakeModel3DTurntableAction({ directions: 8, projection: "ortho" });
+          void import("../studio3d/three/modelSpriteBaker").then((m) =>
+            m.bakeModel3DTurntableAction({ directions: 8, projection: "ortho" }),
+          );
         },
       },
       {
@@ -788,7 +789,9 @@ export function buildPaletteCommands(): LegacyPaletteCommand[] {
         category: "3D Model",
         keywords: ["bake", "tileset", "tile", "rotations", "isometric", "3d"],
         run: () => {
-          bakeModel3DToTilesetAction({ rotations: 4, projection: "ortho" });
+          void import("../studio3d/three/modelSpriteBaker").then((m) =>
+            m.bakeModel3DToTilesetAction({ rotations: 4, projection: "ortho" }),
+          );
         },
       },
     ];

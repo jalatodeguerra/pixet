@@ -59,7 +59,7 @@ import {
 } from "../engine/model3d/animEval";
 import { mutateModel3D } from "../engine/model3d/model3dActions";
 import { useEditorStore } from "../store/editorStore";
-import { CurveEditor } from "./rig/CurveEditor";
+import { CurveEditorAsync } from "./lazyWorkspaces";
 
 function CelThumbnail({
   layerId,
@@ -853,7 +853,7 @@ export function Timeline() {
           rigTimelineView === "curves") ||
           (isModel3DAnimate && model3dTimelineView === "curves")) && (
           <div className="timeline-grid-wrap" style={{ flex: 1 }}>
-            <CurveEditor mode={isModel3DAnimate ? "model3d" : "rig"} />
+            <CurveEditorAsync mode={isModel3DAnimate ? "model3d" : "rig"} />
           </div>
         )}
 

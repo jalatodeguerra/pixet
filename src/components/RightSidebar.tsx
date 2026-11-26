@@ -6,11 +6,13 @@ import { ColorPalettePanel } from "./draw/ColorPalettePanel";
 import { HistoryPanel } from "./draw/HistoryPanel";
 import { LayersPanel } from "./draw/LayersPanel";
 import { ReferencePanel } from "./draw/ReferencePanel";
-import { RigSidebar } from "./rig/RigSidebar";
-import { NodesSidebar } from "./nodes/NodesSidebar";
-import { Studio3DSidebar } from "./studio3d/Studio3DSidebar";
+import {
+  NodesSidebarAsync,
+  RigSidebarAsync,
+  Studio3DSidebarAsync,
+  TilesSidebarAsync,
+} from "./lazyWorkspaces";
 import { TilesetBrowserPanel } from "./tiles/TilesetBrowserPanel";
-import { TilesSidebar } from "./tiles/TilesSidebar";
 
 export function RightSidebar() {
   const rightPanelWidth = useEditorStore((s) => s.rightPanelWidth);
@@ -58,22 +60,22 @@ export function RightSidebar() {
       {/* Focused Rig Inspector in Rig Mode (or hidden when pinned panels exist) */}
       {(showRigSidebar || hasPinnedIn("rig")) && (
         <div className={showRigSidebar ? "sidebar-section-stack" : "is-hidden"}>
-          <RigSidebar />
+          <RigSidebarAsync />
         </div>
       )}
 
       {/* Focused Tiles Inspector in Tiles Map Mode (or hidden when pinned panels exist) */}
       {(showTilesSidebar || hasPinnedIn("tiles")) && (
         <div className={showTilesSidebar ? "sidebar-section-stack" : "is-hidden"}>
-          <TilesSidebar />
+          <TilesSidebarAsync />
         </div>
       )}
 
       {/* Focused 3D Studio Inspector */}
-      {workspaceMode === "studio3d" && <Studio3DSidebar />}
+      {workspaceMode === "studio3d" && <Studio3DSidebarAsync />}
 
       {/* Focused Nodes Preview & Inspector */}
-      {workspaceMode === "nodes" && <NodesSidebar />}
+      {workspaceMode === "nodes" && <NodesSidebarAsync />}
     </aside>
   );
 }

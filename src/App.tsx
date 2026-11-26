@@ -11,8 +11,10 @@ import { RigExportModal } from "./components/rig/RigExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { NewSpriteModal } from "./components/NewSpriteModal";
 import { RightSidebar } from "./components/RightSidebar";
-import { NodesWorkspace } from "./components/nodes/NodesWorkspace";
-import { Studio3DViewport } from "./components/studio3d/Studio3DViewport";
+import {
+  NodesWorkspaceAsync,
+  Studio3DViewportAsync,
+} from "./components/lazyWorkspaces";
 import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
 import { ImportTilesetModal } from "./components/tiles/ImportTilesetModal";
@@ -1051,9 +1053,9 @@ export function App() {
           )}
           <ErrorBoundary key={workspaceMode} name="Viewport" fallback="region">
             {workspaceMode === "nodes" ? (
-              <NodesWorkspace />
+              <NodesWorkspaceAsync />
             ) : workspaceMode === "studio3d" ? (
-              <Studio3DViewport />
+              <Studio3DViewportAsync />
             ) : (
               <Viewport />
             )}

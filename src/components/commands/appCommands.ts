@@ -216,7 +216,7 @@ function rigCommands(): CommandDef[] {
       scope: "rig",
       keywords: ["weights", "skin", "bind", "envelope", "heat"],
       when: () => pixelEngine.rig.bones.length > 0,
-      run: () => autoWeightRigAction(),
+      run: () => void autoWeightRigAction(),
     },
     {
       id: "rig.keyPose",

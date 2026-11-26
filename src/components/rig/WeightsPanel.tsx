@@ -109,7 +109,7 @@ export function WeightsPanel() {
     bones.find((b) => b.id === selectedBoneId) ?? bones[0] ?? null;
 
   const handleAutoWeight = () => {
-    autoWeightRigAction();
+    void autoWeightRigAction();
   };
 
   useEffect(() => {

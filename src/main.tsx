@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { installGlobalErrorHandlers } from "./engine/io/crashReporting";
-import "@xyflow/react/dist/style.css";
 import "./styles/theme.css";
 import "./styles/layout.css";
 import "./styles/tiles.css";
