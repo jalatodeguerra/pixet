@@ -8,13 +8,13 @@ import {
   rigToolTitle,
 } from "./rig/rigTools";
 import { TILE_TOOL_BY_ID, TILE_TOOL_GROUPS } from "./tiles/tileTools";
-import { Studio3DToolRail } from "./studio3d/Studio3DToolRail";
+import { Studio3DToolRailAsync } from "./lazyWorkspaces";
 
 export function ToolRail() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const tilesMode = useEditorStore((s) => s.tilesMode);
   if (workspaceMode === "studio3d") {
-    return <Studio3DToolRail />;
+    return <Studio3DToolRailAsync />;
   }
   if (workspaceMode === "rig") {
     return <RigToolRail />;

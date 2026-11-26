@@ -1,7 +1,8 @@
 import { PixelBuffer } from "../document/PixelBuffer.ts";
 import { pixelEngine } from "../document/PixelEngine.ts";
 import { useEditorStore } from "../../store/editorStore.ts";
-import type { Bone } from "./RigEngine.ts";
+import { computeAutoWeightsV2Async } from "./autoWeightsClient.ts";
+import type { BoneWeights, Bone } from "./RigEngine.ts";
 import { mutateRig } from "./rigActions.ts";
 
 /**
@@ -53,8 +54,18 @@ export function addRigBoneAction(parentOverride?: Bone | null): Bone | null {
   return bone;
 }
 
-export function autoWeightRigAction(): void {
+let autoWeightBusy = false;
+
+export function isAutoWeightBusy(): boolean {
+  return autoWeightBusy;
+}
+
+export async function autoWeightRigAction(): Promise<void> {
   const st = useEditorStore.getState();
+  if (autoWeightBusy) {
+    st.setStatusMessage("Auto-weight is already running");
+    return;
+  }
   const bones = pixelEngine.rig.bones;
   if (bones.length === 0) {
     st.setStatusMessage("Add bones before auto-weighting");
@@ -81,19 +92,41 @@ export function autoWeightRigAction(): void {
       ? pixelEngine.selection.mask
       : null;
 
-  mutateRig(`Auto-weight (${st.rigAutoWeightMethod})`, () => {
-    const composited = pixelEngine.compositeFrame(st.layers, st.currentFrame);
-    const buf = new PixelBuffer(st.canvasWidth, st.canvasHeight, composited);
-    pixelEngine.rig.autoAssignBoneWeights(buf, st.currentFrame, {
-      method: st.rigAutoWeightMethod,
-      power: st.rigAutoWeightPower,
-      colorPenalty: st.rigAutoWeightColorPenalty,
-      selectionMask,
-      targetBoneIds,
-      respectLockedBones: true,
-    });
+  const composited = pixelEngine.compositeFrame(st.layers, st.currentFrame);
+  const buf = new PixelBuffer(st.canvasWidth, st.canvasHeight, composited);
+  const job = pixelEngine.rig.buildAutoWeightJob(st.currentFrame, {
+    method: st.rigAutoWeightMethod,
+    power: st.rigAutoWeightPower,
+    colorPenalty: st.rigAutoWeightColorPenalty,
+    selectionMask,
+    targetBoneIds,
+    respectLockedBones: true,
   });
-  st.setStatusMessage(`Auto-weighted pixels (${st.rigAutoWeightMethod})`);
+  if (!job) return;
+
+  const rig = pixelEngine.rig;
+  const revisionAtStart = rig.revisionId;
+  autoWeightBusy = true;
+  st.setStatusMessage(`Auto-weighting (${st.rigAutoWeightMethod})…`);
+  let weights: BoneWeights;
+  try {
+    weights = await computeAutoWeightsV2Async(buf, job.bones, job.options);
+  } finally {
+    autoWeightBusy = false;
+  }
+  if (pixelEngine.rig !== rig || rig.revisionId !== revisionAtStart) {
+    useEditorStore
+      .getState()
+      .setStatusMessage("Auto-weight discarded: the rig changed while it ran");
+    return;
+  }
+
+  mutateRig(`Auto-weight (${st.rigAutoWeightMethod})`, () => {
+    rig.applyAutoWeights(weights);
+  });
+  useEditorStore
+    .getState()
+    .setStatusMessage(`Auto-weighted pixels (${st.rigAutoWeightMethod})`);
 }
 
 /** Keys the selected bone's current pose on the current frame (Animate mode). */

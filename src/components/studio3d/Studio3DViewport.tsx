@@ -96,7 +96,15 @@ function AxisGizmo({
 }
 
 export function Studio3DViewport() {
-  const studio3d = useEditorStore((s) => s.studio3d);
+  const studio3dStore = useEditorStore((s) => s.studio3d);
+  // Auto-spin keeps its angle locally (not in the store) so a spinning preview
+  // re-renders only this component instead of every store subscriber at 60 Hz.
+  const [liveYaw, setLiveYaw] = useState<number | null>(null);
+  const studio3d = useMemo(
+    () =>
+      liveYaw === null ? studio3dStore : { ...studio3dStore, yawDeg: liveYaw },
+    [studio3dStore, liveYaw]
+  );
   const patchStudio3D = useEditorStore((s) => s.patchStudio3D);
   const resetStudio3DCamera = useEditorStore((s) => s.resetStudio3DCamera);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
@@ -163,21 +171,43 @@ export function Studio3DViewport() {
     };
   }, []);
 
-  // Smooth auto-spin animation in Orbit mode
+  // Smooth auto-spin animation in Orbit mode. The angle lives in a local
+  // variable; the store sees it throttled (for sliders/readouts) and on stop.
   useEffect(() => {
-    if (studio3d.previewMode !== "orbit" || !studio3d.autoSpin) return;
+    if (studio3dStore.previewMode !== "orbit" || !studio3dStore.autoSpin) return;
     let raf = 0;
     let last = performance.now();
+    let lastStoreWrite = last;
+    let yaw = useEditorStore.getState().studio3d.yawDeg;
+    let writtenToStore = yaw;
+    const flush = () => {
+      writtenToStore = yaw;
+      patchStudio3D({ yawDeg: yaw });
+    };
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const cur = useEditorStore.getState().studio3d.yawDeg;
-      patchStudio3D({ yawDeg: normalizeDeg(cur + dt * 90) });
+      const storeYaw = useEditorStore.getState().studio3d.yawDeg;
+      // Someone else (a drag, a slider, a preset) moved the camera: follow it.
+      if (storeYaw !== writtenToStore) {
+        yaw = storeYaw;
+        writtenToStore = storeYaw;
+      }
+      yaw = normalizeDeg(yaw + dt * 90);
+      setLiveYaw(yaw);
+      if (now - lastStoreWrite >= 250) {
+        lastStoreWrite = now;
+        flush();
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [studio3d.previewMode, studio3d.autoSpin, patchStudio3D]);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (yaw !== writtenToStore) flush();
+      setLiveYaw(null);
+    };
+  }, [studio3dStore.previewMode, studio3dStore.autoSpin, patchStudio3D]);
 
   // Turntable scrubber playback
   const angles = useMemo(

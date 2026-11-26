@@ -4,6 +4,7 @@ import type { PixelCleanupOptions } from "./pixelCleanup.ts";
 import type { RigMesh, RigMeshKeyframe } from "./mesh.ts";
 import {
   computeAutoWeightsV2,
+  type AutoWeightBoneV2,
   type AutoWeightV2Options,
 } from "./autoWeights.ts";
 import {
@@ -1828,24 +1829,18 @@ export class RigState {
   }
 
   /**
-   * Smooth auto weights: distance-to-bone-segment falloff, top-4 influences
-   * per opaque pixel, normalized to 1.
+   * Snapshot everything the pure auto-weight solver needs, without touching
+   * rig state. Returns null when there are no bones. Pair with
+   * `applyAutoWeights` (the solve itself may run on a worker).
    */
-  autoAssignBoneWeights(
-    src: PixelBuffer,
+  buildAutoWeightJob(
     frame = 0,
     options: Omit<AutoWeightV2Options, "existingWeights" | "targetBoneIds"> & {
       targetBoneIds?: readonly string[];
     } = {}
-  ): void {
+  ): { bones: AutoWeightBoneV2[]; options: AutoWeightV2Options } | null {
+    if (this.bones.length === 0) return null;
     const existingWeights = this.getBoneWeights();
-    this.boneMasks.clear();
-    this.skinWeights = null;
-    if (this.bones.length === 0) {
-      this.invalidateEvaluation();
-      return;
-    }
-
     const transforms = this.computeWorldTransforms(frame, "rest", false);
     const autoBones = this.bones
       .map((bone) => ({ bone, transform: transforms.get(bone.id) }))
@@ -1862,20 +1857,51 @@ export class RigState {
         envelopeRadius: bone.envelopeRadius,
         weightLocked: bone.weightLocked,
       }));
+    return {
+      bones: autoBones,
+      options: {
+        ...options,
+        method: options.method ?? "geodesic",
+        existingWeights,
+        targetBoneIds: options.targetBoneIds
+          ? new Set(options.targetBoneIds)
+          : null,
+      },
+    };
+  }
 
-    const weights = computeAutoWeightsV2(src, autoBones, {
-      ...options,
-      method: options.method ?? "geodesic",
-      existingWeights,
-      targetBoneIds: options.targetBoneIds
-        ? new Set(options.targetBoneIds)
-        : null,
-    });
+  /** Installs solved auto weights (the second half of `autoAssignBoneWeights`). */
+  applyAutoWeights(weights: BoneWeights | null): void {
+    this.boneMasks.clear();
+    this.skinWeights = null;
+    if (!weights) {
+      this.invalidateEvaluation();
+      return;
+    }
     this.skinWeights = weights;
     this.cachedWeights = weights;
     this.cachedWeightsRevision = this.revision;
     this.rebuildMasksFromWeights();
     this.invalidateEvaluation();
+  }
+
+  /**
+   * Smooth auto weights: distance-to-bone-segment falloff, top-4 influences
+   * per opaque pixel, normalized to 1.
+   */
+  autoAssignBoneWeights(
+    src: PixelBuffer,
+    frame = 0,
+    options: Omit<AutoWeightV2Options, "existingWeights" | "targetBoneIds"> & {
+      targetBoneIds?: readonly string[];
+    } = {}
+  ): void {
+    const job = this.buildAutoWeightJob(frame, options);
+    if (!job) {
+      this.applyAutoWeights(null);
+      return;
+    }
+    this.applyAutoWeights(computeAutoWeightsV2(src, job.bones, job.options));
   }
 
   private ensureBoneMask(boneId: string, width: number, height: number): BoneMask {

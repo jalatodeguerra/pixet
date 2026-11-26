@@ -40,8 +40,10 @@ import {
   type TransformAlgorithm,
 } from "../store/editorStore";
 import { RigToolOptionsBar } from "./rig/RigToolOptionsBar";
-import { NodesToolOptionsBar } from "./nodes/NodesToolOptionsBar";
-import { Studio3DToolOptionsBar } from "./studio3d/Studio3DToolOptionsBar";
+import {
+  NodesToolOptionsBarAsync,
+  Studio3DToolOptionsBarAsync,
+} from "./lazyWorkspaces";
 import { TileToolOptionsBar } from "./tiles/TileToolOptionsBar";
 
 const DITHER_PATTERNS: Array<{ id: DitherPattern; label: string }> = [
@@ -180,11 +182,11 @@ export function ToolOptionsBar() {
     symmetryAxisX !== null || symmetryAxisY !== null;
 
   if (workspaceMode === "nodes") {
-    return <NodesToolOptionsBar />;
+    return <NodesToolOptionsBarAsync />;
   }
 
   if (workspaceMode === "studio3d") {
-    return <Studio3DToolOptionsBar />;
+    return <Studio3DToolOptionsBarAsync />;
   }
 
   if (workspaceMode === "rig") {

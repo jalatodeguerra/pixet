@@ -144,6 +144,55 @@ export function applyBufferFilterAction(
   return false;
 }
 
+function sameBytes(a: Uint8ClampedArray, b: Uint8ClampedArray): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Like `applyBufferFilterAction`, but the heavy per-cel computation (`compute`)
+ * may run off the main thread. Results are committed through the exact same
+ * synchronous path; if a cel changed while waiting, `fallback` recomputes it
+ * synchronously so the outcome always matches the sync filter.
+ */
+export async function applyBufferFilterActionAsync(
+  label: string,
+  scope: FilterScope,
+  compute: (buf: PixelBuffer, mask: SelectionMask | null) => Promise<PixelBuffer>,
+  fallback: (buf: PixelBuffer, mask: SelectionMask | null) => PixelBuffer
+): Promise<boolean> {
+  commitFloatingSelection();
+  const targets = collectTargetCels(scope);
+  if (targets.length === 0) {
+    return applyBufferFilterAction(label, scope, fallback);
+  }
+  const mask: SelectionMask | null =
+    scope === "cel" &&
+    pixelEngine.selection &&
+    !pixelEngine.selection.isEmpty()
+      ? pixelEngine.selection
+      : null;
+  useEditorStore.getState().setStatusMessage(`${label}…`);
+  const precomputed = new Map<
+    PixelBuffer,
+    { input: Uint8ClampedArray; result: PixelBuffer }
+  >();
+  await Promise.all(
+    targets.map(async ({ cel }) => {
+      const input = new Uint8ClampedArray(cel.data);
+      const result = await compute(cel, targets.length === 1 ? mask : null);
+      precomputed.set(cel, { input, result });
+    })
+  );
+  return applyBufferFilterAction(label, scope, (buf, m) => {
+    const hit = precomputed.get(buf);
+    return hit && sameBytes(hit.input, buf.data) ? hit.result : fallback(buf, m);
+  });
+}
+
 export function autoCropSpriteAction(): boolean {
   commitFloatingSelection();
   const state = useEditorStore.getState();

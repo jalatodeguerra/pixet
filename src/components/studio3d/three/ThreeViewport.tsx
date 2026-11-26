@@ -588,6 +588,13 @@ export function ThreeViewport() {
   const vKeyHeldRef = useRef(false);
   const [sceneStats, setSceneStats] = useState({ nodeCount: 0, triangleCount: 0 });
   const [viewportRevision, setViewportRevision] = useState(0);
+  // Render-on-demand: the main effect installs the real scheduler here. Anything
+  // that changes what the scene looks like calls bumpViewport() (re-render + draw).
+  const requestRenderRef = useRef<() => void>(() => {});
+  const bumpViewport = useCallback(() => {
+    setViewportRevision((v) => v + 1);
+    requestRenderRef.current();
+  }, []);
   const [webglError, setWebglError] = useState<string | null>(null);
 
   // Three.js scene objects owned by this component
@@ -734,7 +741,7 @@ export function ThreeViewport() {
     orbit.target.copy(center);
     syncOrthoFrustum(ortho, persp, sizeRef.current.width, sizeRef.current.height);
     orbit.update();
-    setViewportRevision((v) => v + 1);
+    bumpViewport();
   }, [syncOrthoFrustum]);
 
   // Listen for F key to frame selection/scene
@@ -850,6 +857,7 @@ export function ThreeViewport() {
     orbitRef.current = orbit;
 
     const onOrbitChange = () => {
+      requestRenderRef.current();
       if (cameraSyncLockRef.current) return;
       const c = activeCameraRef.current;
       if (!c) return;
@@ -870,7 +878,7 @@ export function ThreeViewport() {
           syncOrthoFrustum(ortho, persp, sizeRef.current.width, sizeRef.current.height);
         }
       }
-      setViewportRevision((v) => v + 1);
+      bumpViewport();
     };
     orbit.addEventListener("change", onOrbitChange);
 
@@ -987,7 +995,7 @@ export function ThreeViewport() {
         }
         snapTargetsRef.current = [];
       }
-      setViewportRevision((v) => v + 1);
+      bumpViewport();
     };
 
     const onObjectChange = () => {
@@ -1066,7 +1074,7 @@ export function ThreeViewport() {
         const nextOverlay = buildSubObjectOverlay(nodeObjectByIdRef.current, ppu);
         scene.add(nextOverlay);
         subObjectOverlayRef.current = nextOverlay;
-        setViewportRevision((v) => v + 1);
+        bumpViewport();
         return;
       }
 
@@ -1148,7 +1156,7 @@ export function ThreeViewport() {
       node.transform.rotation = nextTr.rotation;
       node.transform.scale = nextTr.scale;
       attachedObj.updateMatrixWorld(true);
-      setViewportRevision((v) => v + 1);
+      bumpViewport();
     };
 
     transform.addEventListener("dragging-changed", onDraggingChanged);
@@ -1166,25 +1174,41 @@ export function ThreeViewport() {
       persp.aspect = w / h;
       persp.updateProjectionMatrix();
       syncOrthoFrustum(ortho, persp, w, h);
-      setViewportRevision((v) => v + 1);
+      bumpViewport();
     });
     ro.observe(host);
 
-    // Animation frame loop (renders on demand when viewportRevision changes or during drag/animate)
+    // Render on demand: draw at most once per animation frame, and only after
+    // something requested it. There is no continuous loop; playback and
+    // animation advance through the store, which re-renders this component.
     let rafId = 0;
-    let lastRenderedVersion = -1;
-    const renderLoop = () => {
-      rafId = requestAnimationFrame(renderLoop);
+    let disposed = false;
+    const renderFrame = () => {
+      rafId = 0;
       const cam = activeCameraRef.current;
-      if (!cam || threeStudioRuntime.isContextLost()) return;
+      if (disposed || !cam || threeStudioRuntime.isContextLost()) return;
       renderer.render(scene, cam);
-      void lastRenderedVersion;
+      if (import.meta.env.DEV) {
+        const w = window as unknown as { __pixetRenders?: number };
+        w.__pixetRenders = (w.__pixetRenders ?? 0) + 1;
+      }
     };
-    rafId = requestAnimationFrame(renderLoop);
+    const requestRender = () => {
+      if (rafId !== 0 || disposed) return;
+      rafId = requestAnimationFrame(renderFrame);
+    };
+    requestRenderRef.current = requestRender;
+    transform.addEventListener("change", requestRender);
+    canvas.addEventListener("webglcontextrestored", requestRender);
+    requestRender();
 
     return () => {
       paintControllerRef.current.cancelStroke();
-      cancelAnimationFrame(rafId);
+      disposed = true;
+      requestRenderRef.current = () => {};
+      if (rafId !== 0) cancelAnimationFrame(rafId);
+      transform.removeEventListener("change", requestRender);
+      canvas.removeEventListener("webglcontextrestored", requestRender);
       ro.disconnect();
       orbit.removeEventListener("change", onOrbitChange);
       transform.removeEventListener("dragging-changed", onDraggingChanged);
@@ -1275,7 +1299,7 @@ export function ThreeViewport() {
       orbit.object = targetCam;
       transform.camera = targetCam;
       orbit.update();
-      setViewportRevision((v) => v + 1);
+      bumpViewport();
     }
   }, [isOrthoMode, syncOrthoFrustum]);
 
@@ -1310,7 +1334,7 @@ export function ThreeViewport() {
     syncOrthoFrustum(ortho, persp, sizeRef.current.width, sizeRef.current.height);
     orbit.update();
     cameraSyncLockRef.current = false;
-    setViewportRevision((v) => v + 1);
+    bumpViewport();
   }, [studio3d.yawDeg, studio3d.pitchDeg, syncOrthoFrustum]);
 
   // Sync studio lighting & floor grid
@@ -1348,7 +1372,7 @@ export function ThreeViewport() {
       scene.add(grid);
       gridGroupRef.current = grid;
     }
-    setViewportRevision((v) => v + 1);
+    bumpViewport();
   }, [
     studio3d.ambient,
     studio3d.ambientColor,
@@ -1560,7 +1584,7 @@ export function ThreeViewport() {
       }
     }
 
-    setViewportRevision((v) => v + 1);
+    bumpViewport();
   }, [
     model3dVersion,
     studio3d.subMode,
@@ -1583,7 +1607,7 @@ export function ThreeViewport() {
   // Also re-sync materials when PixelEngine emits pixel edits in Draw
   useEffect(() => {
     const unsub = pixelEngine.subscribe(() => {
-      setViewportRevision((v) => v + 1);
+      bumpViewport();
       const materialCache = materialCacheRef.current;
       if (!materialCache) return;
       const st = useEditorStore.getState();
@@ -1619,7 +1643,7 @@ export function ThreeViewport() {
       tilesetVersion: st.tilesetVersion,
     });
     textureSizeByMatRef.current = textureSizeByMaterialId;
-    setViewportRevision((v) => v + 1);
+    bumpViewport();
   }, []);
 
   const executeTileStampAtCursor = useCallback(
@@ -2041,6 +2065,11 @@ export function ThreeViewport() {
   };
 
   void viewportRevision;
+  // Safety net: any React render of this component (store, props, state) may
+  // have changed the scene, so schedule one draw. Coalesced to one per frame.
+  useEffect(() => {
+    requestRenderRef.current();
+  });
 
   return (
     <div className="m3d-viewport-shell">
