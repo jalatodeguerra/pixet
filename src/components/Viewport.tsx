@@ -39,6 +39,7 @@ import { useTilePointer } from "./tiles/useTilePointer";
 
 export function Viewport() {
   const documentName = useEditorStore((s) => s.documentName);
+  const isDocumentDirty = useEditorStore((s) => s.isDocumentDirty);
   const canvasWidth = useEditorStore((s) => s.canvasWidth);
   const canvasHeight = useEditorStore((s) => s.canvasHeight);
   const zoom = useEditorStore((s) => s.zoom);
@@ -410,6 +411,15 @@ export function Viewport() {
       window.devicePixelRatio || 1
     );
     renderCanvas();
+    renderer.onContextRestored = () => {
+      const st = useEditorStore.getState();
+      renderer.resize(
+        st.canvasWidth * st.zoom,
+        st.canvasHeight * st.zoom,
+        window.devicePixelRatio || 1
+      );
+      renderCanvas();
+    };
 
     const unsub = pixelEngine.subscribe(renderCanvas);
     return () => {
@@ -941,6 +951,11 @@ export function Viewport() {
       <div className="document-tabs">
         <div className="doc-tab">
           <span className="doc-tab-dot" />
+          {isDocumentDirty && (
+            <span className="doc-tab-dirty" title="Unsaved changes" aria-label="Unsaved changes">
+              {"\u2022"}
+            </span>
+          )}
           <span>{documentName}</span>
           <span
             style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}

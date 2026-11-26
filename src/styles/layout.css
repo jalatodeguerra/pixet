@@ -4220,3 +4220,134 @@
 
 
 
+
+/* Crash protection: error boundaries and WebGL-unavailable notices */
+.safe-gl-unavailable {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 12px;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.nodes-preview-canvas + .safe-gl-unavailable {
+  position: static;
+  margin-top: 6px;
+}
+
+.safe-region {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  overflow: auto;
+}
+
+.safe-region-bar {
+  flex: 0 0 auto;
+}
+
+.safe-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.safe-title {
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.safe-msg {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.safe-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.safe-app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-root);
+}
+
+.safe-app .safe-card {
+  max-width: 460px;
+  padding: 16px 18px;
+  font-size: 13px;
+}
+
+.safe-region[data-safe-region="Sidebar"] {
+  flex: 0 0 280px;
+}
+
+.safe-region[data-safe-region="Timeline"] {
+  flex: 0 0 140px;
+}
+
+.safe-region[data-safe-region="Top bar"],
+.safe-region[data-safe-region="Tool rail"] {
+  flex: 0 0 auto;
+}
+
+.safe-region[data-safe-region="Dialogs"] {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  z-index: 9999;
+  flex: none;
+}
+
+/* Document dialogs: unsaved changes and crash recovery */
+.doc-dialog-backdrop {
+  z-index: 1000;
+}
+
+.doc-dialog-card {
+  width: 360px;
+}
+
+.doc-dialog-text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.doc-dialog-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.doc-tab-dirty {
+  color: var(--accent);
+  font-weight: 700;
+}

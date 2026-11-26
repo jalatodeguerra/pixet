@@ -33,6 +33,15 @@ import {
   serializeNodesExt,
 } from "../nodes/NodeGraph.ts";
 import { getNodeEvaluator } from "../nodes/nodeActions.ts";
+import { validateProjectTransfer } from "./projectValidation.ts";
+import {
+  getEditVersion,
+  hashString,
+  markClean,
+  setSignatureProvider,
+} from "./documentState.ts";
+import { clearRecoveryEntry } from "./recovery.ts";
+import { confirmDiscardChanges } from "./unsavedChanges.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
 export type PackMode = "grid" | "tight";
@@ -254,8 +263,10 @@ function extractBasename(path: string): string {
   return parts[parts.length - 1] || "untitled.pixet";
 }
 
-export function serializeProjectTransfer(): ProjectTransfer {
-  commitFloatingSelection();
+export function serializeProjectTransfer(
+  options: { commitFloating?: boolean } = {}
+): ProjectTransfer {
+  if (options.commitFloating !== false) commitFloatingSelection();
   const state = useEditorStore.getState();
 
   const celsMap: Record<string, string> = {};
@@ -393,6 +404,87 @@ export function serializeProjectTransfer(): ProjectTransfer {
   };
 
   return { document, cels: celsMap, tiles };
+}
+
+/**
+ * Validates then loads a project atomically. On any failure the previously
+ * open document is restored from a snapshot and a status message is set.
+ * Returns true when the new project is loaded.
+ */
+export function loadProjectTransferSafely(
+  raw: unknown,
+  filePath: string | null,
+  label: string
+): boolean {
+  const store = useEditorStore.getState();
+  const unchanged = "Your current document was not changed.";
+  const checked = validateProjectTransfer(raw);
+  if (!checked.ok) {
+    store.setStatusMessage(`Could not open ${label}: ${checked.error}. ${unchanged}`);
+    return false;
+  }
+
+  let snapshot: ProjectTransfer | null = null;
+  try {
+    snapshot = serializeProjectTransfer();
+  } catch (err) {
+    console.error("Could not snapshot document before load", err);
+  }
+  const prevPath = store.currentFilePath;
+  const prevName = store.documentName;
+
+  try {
+    hydrateProjectTransfer(checked.transfer, filePath);
+    return true;
+  } catch (err) {
+    console.error("Project load failed", err);
+    const reason = err instanceof Error ? err.message : String(err);
+    let restored = false;
+    if (snapshot) {
+      try {
+        hydrateProjectTransfer(snapshot, prevPath);
+        const st = useEditorStore.getState();
+        st.setCurrentFilePath(prevPath);
+        st.setDocumentName(prevName);
+        restored = true;
+      } catch (rollbackErr) {
+        console.error("Rollback after failed load also failed", rollbackErr);
+      }
+    }
+    useEditorStore
+      .getState()
+      .setStatusMessage(
+        restored
+          ? `Could not open ${label}: ${reason}. ${unchanged}`
+          : `Could not open ${label}: ${reason}. The previous document could not be restored; save a copy if possible.`
+      );
+    return false;
+  }
+}
+
+/**
+ * Cheap identity of a transfer for dirty detection: a hash of its JSON with
+ * the display name excluded (renaming on save is not a content change).
+ */
+export function projectSignature(transfer: ProjectTransfer): string {
+  return hashString(
+    JSON.stringify({ ...transfer, document: { ...transfer.document, name: "" } })
+  );
+}
+
+setSignatureProvider(() =>
+  projectSignature(serializeProjectTransfer({ commitFloating: false }))
+);
+
+/** Records the current in-memory document as the clean baseline. */
+export function markCurrentStateClean(): void {
+  markClean(projectSignature(serializeProjectTransfer({ commitFloating: false })));
+}
+
+/** Call after a document replacement the user has consented to completes. */
+export function markDocumentReplaced(): void {
+  markCurrentStateClean();
+  void clearRecoveryEntry();
 }
 
 export function hydrateProjectTransfer(
@@ -576,9 +668,15 @@ function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export async function saveProjectAction(saveAs = false): Promise<void> {
+export async function saveProjectAction(saveAs = false): Promise<boolean> {
   const state = useEditorStore.getState();
   const payload = serializeProjectTransfer();
+  const signature = projectSignature(payload);
+  const version = getEditVersion();
+  const finishSave = (): void => {
+    markClean(signature, version);
+    void clearRecoveryEntry();
+  };
 
   if (!isTauriRuntime()) {
     const jsonName = state.documentName.replace(/\.pixet$/i, "") + ".pixet.json";
@@ -587,7 +685,8 @@ export async function saveProjectAction(saveAs = false): Promise<void> {
       jsonName
     );
     state.setStatusMessage(`Downloaded ${jsonName} (browser mode)`);
-    return;
+    finishSave();
+    return true;
   }
 
   let targetPath = saveAs ? null : state.currentFilePath;
@@ -597,7 +696,7 @@ export async function saveProjectAction(saveAs = false): Promise<void> {
       defaultPath: state.currentFilePath ?? state.documentName,
       filters: [{ name: "Pixet Project", extensions: ["pixet"] }],
     });
-    if (!selected) return;
+    if (!selected) return false;
     targetPath = selected;
   }
 
@@ -609,8 +708,11 @@ export async function saveProjectAction(saveAs = false): Promise<void> {
     state.setCurrentFilePath(targetPath);
     state.setDocumentName(fileName);
     state.setStatusMessage(`Saved ${fileName}`);
+    finishSave();
+    return true;
   } catch (err) {
     state.setStatusMessage(`Save failed: ${String(err)}`);
+    return false;
   }
 }
 
@@ -624,13 +726,30 @@ export async function openProjectAction(): Promise<void> {
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
+      if (!(await confirmDiscardChanges())) return;
       try {
         const text = await file.text();
-        const transfer = JSON.parse(text) as ProjectTransfer;
-        hydrateProjectTransfer(transfer, null);
-        useEditorStore.getState().setStatusMessage(`Opened ${file.name}`);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          useEditorStore
+            .getState()
+            .setStatusMessage(
+              `Could not open ${file.name}: not a Pixet project file. Your current document was not changed.`
+            );
+          return;
+        }
+        if (loadProjectTransferSafely(parsed, null, file.name)) {
+          markDocumentReplaced();
+          useEditorStore.getState().setStatusMessage(`Opened ${file.name}`);
+        }
       } catch (err) {
-        useEditorStore.getState().setStatusMessage(`Open failed: ${String(err)}`);
+        useEditorStore
+          .getState()
+          .setStatusMessage(
+            `Could not open ${file.name}: ${String(err)}. Your current document was not changed.`
+          );
       }
     };
     input.click();
@@ -643,17 +762,22 @@ export async function openProjectAction(): Promise<void> {
     filters: [{ name: "Pixet Project", extensions: ["pixet"] }],
   });
   if (!selected || typeof selected !== "string") return;
+  if (!(await confirmDiscardChanges())) return;
 
   try {
     const transfer = await invoke<ProjectTransfer>("open_project", {
       path: selected,
     });
-    hydrateProjectTransfer(transfer, selected);
-    useEditorStore
-      .getState()
-      .setStatusMessage(`Opened ${extractBasename(selected)}`);
+    if (loadProjectTransferSafely(transfer, selected, extractBasename(selected))) {
+      markDocumentReplaced();
+      useEditorStore
+        .getState()
+        .setStatusMessage(`Opened ${extractBasename(selected)}`);
+    }
   } catch (err) {
-    state.setStatusMessage(`Open failed: ${String(err)}`);
+    state.setStatusMessage(
+      `Could not open ${extractBasename(selected)}: ${String(err)}. Your current document was not changed.`
+    );
   }
 }
 
@@ -673,15 +797,18 @@ export async function importAsepriteAction(): Promise<void> {
     filters: [{ name: "Aseprite", extensions: ["ase", "aseprite"] }],
   });
   if (!selected || typeof selected !== "string") return;
+  if (!(await confirmDiscardChanges())) return;
 
   try {
     const transfer = await invoke<ProjectTransfer>("import_aseprite", {
       path: selected,
     });
-    hydrateProjectTransfer(transfer, null);
-    useEditorStore
-      .getState()
-      .setStatusMessage(`Imported ${extractBasename(selected)}`);
+    if (loadProjectTransferSafely(transfer, null, extractBasename(selected))) {
+      markDocumentReplaced();
+      useEditorStore
+        .getState()
+        .setStatusMessage(`Imported ${extractBasename(selected)}`);
+    }
   } catch (err) {
     state.setStatusMessage(`Aseprite import failed: ${String(err)}`);
   }

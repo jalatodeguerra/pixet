@@ -127,6 +127,9 @@ function createNearestTexture(gl: WebGL2RenderingContext): WebGLTexture {
 export class WebGL2Renderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext | null = null;
+  private contextLost = false;
+  /** Called after the GL context is restored and resources are re-created; owner should re-upload and redraw. */
+  onContextRestored: (() => void) | null = null;
   private readonly fallbackCtx: CanvasRenderingContext2D | null = null;
 
   private program: WebGLProgram | null = null;
@@ -170,6 +173,8 @@ export class WebGL2Renderer {
     if (gl) {
       this.gl = gl;
       this.initGL(gl);
+      canvas.addEventListener("webglcontextlost", this.handleContextLost);
+      canvas.addEventListener("webglcontextrestored", this.handleContextRestored);
     } else {
       this.fallbackCtx = canvas.getContext("2d");
       if (typeof document !== "undefined") {
@@ -177,6 +182,35 @@ export class WebGL2Renderer {
       }
     }
   }
+
+  private handleContextLost = (e: Event): void => {
+    // Allow the browser to restore the context, and stop issuing GL calls.
+    e.preventDefault();
+    this.contextLost = true;
+    this.program = null;
+    this.vao = null;
+    this.vbo = null;
+    this.frameTex = null;
+    this.overlayTex = null;
+    this.onionTex = null;
+  };
+
+  private handleContextRestored = (): void => {
+    const gl = this.gl;
+    if (!gl) return;
+    try {
+      this.initGL(gl);
+    } catch (err) {
+      console.error("Failed to re-create WebGL resources after context restore", err);
+      return;
+    }
+    // All GPU textures are gone: force full re-uploads.
+    this.frameTexWidth = 0;
+    this.frameTexHeight = 0;
+    this.contextLost = false;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    this.onContextRestored?.();
+  };
 
   private initGL(gl: WebGL2RenderingContext): void {
     const vs = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER_SRC);
@@ -245,6 +279,7 @@ export class WebGL2Renderer {
   }
 
   uploadFrame(width: number, height: number, rgba: Uint8ClampedArray): void {
+    if (this.contextLost) return;
     this.texWidth = width;
     this.texHeight = height;
     this.frameTexWidth = width;
@@ -275,6 +310,7 @@ export class WebGL2Renderer {
     height: number,
     rect: DirtyRect
   ): void {
+    if (this.contextLost) return;
     const clamped = clampDirtyRect(rect, width, height);
     if (!clamped) return;
 
@@ -380,6 +416,7 @@ export class WebGL2Renderer {
   }
 
   render(docWidth: number, docHeight: number): void {
+    if (this.contextLost) return;
     if (this.gl && this.program && this.vao) {
       const gl = this.gl;
       gl.useProgram(this.program);
@@ -461,6 +498,12 @@ export class WebGL2Renderer {
   }
 
   dispose(): void {
+    this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.removeEventListener(
+      "webglcontextrestored",
+      this.handleContextRestored
+    );
+    this.onContextRestored = null;
     if (!this.gl) return;
     const gl = this.gl;
     if (this.frameTex) gl.deleteTexture(this.frameTex);

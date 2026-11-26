@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CanvasSizeModal } from "./components/CanvasSizeModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
@@ -99,6 +100,8 @@ import {
   type TileCursorStepDir,
 } from "./engine/model3d/tileStamp";
 import type { SelectionGranularity } from "./engine/model3d/types";
+import { DocumentDialogs } from "./components/DocumentDialogs";
+import { initDocumentLifecycle } from "./engine/io/documentLifecycle";
 
 export function App() {
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
@@ -170,6 +173,11 @@ export function App() {
     }, Math.max(16, durationMs));
     return () => window.clearTimeout(id);
   }, [isPlaying, currentFrame, frames, fps, nextFrame]);
+
+  // Dirty tracking, autosave, recovery and close guards
+  useEffect(() => {
+    initDocumentLifecycle();
+  }, []);
 
   // Auto-clear transient status messages
   useEffect(() => {
@@ -1164,26 +1172,36 @@ export function App() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <TopBar />
-      <ToolOptionsBar />
+      <ErrorBoundary name="Top bar" fallback="region">
+        <TopBar />
+        <ToolOptionsBar />
+      </ErrorBoundary>
 
       <main className="workspace-main">
         <div className="workspace-middle">
-          {!panelsCollapsed && workspaceMode !== "nodes" && <ToolRail />}
-          {workspaceMode === "nodes" ? (
-            <NodesWorkspace />
-          ) : workspaceMode === "studio3d" ? (
-            <Studio3DViewport />
-          ) : (
-            <Viewport />
+          {!panelsCollapsed && workspaceMode !== "nodes" && (
+            <ErrorBoundary name="Tool rail" fallback="region">
+              <ToolRail />
+            </ErrorBoundary>
           )}
+          <ErrorBoundary key={workspaceMode} name="Viewport" fallback="region">
+            {workspaceMode === "nodes" ? (
+              <NodesWorkspace />
+            ) : workspaceMode === "studio3d" ? (
+              <Studio3DViewport />
+            ) : (
+              <Viewport />
+            )}
+          </ErrorBoundary>
           {!panelsCollapsed && (
             <>
               <div
                 className={`resizer-vertical ${draggingRight ? "dragging" : ""}`}
                 onMouseDown={() => setDraggingRight(true)}
               />
-              <RightSidebar />
+              <ErrorBoundary name="Sidebar" fallback="region">
+                <RightSidebar />
+              </ErrorBoundary>
             </>
           )}
           <div id="floating-panels-root" className="floating-panels-root" />
@@ -1205,23 +1223,28 @@ export function App() {
                 <TilesetBrowserPanel docked />
               </div>
             ) : (
-              <Timeline />
+              <ErrorBoundary name="Timeline" fallback="region">
+                <Timeline />
+              </ErrorBoundary>
             )}
           </>
         )}
       </main>
 
+      <DocumentDialogs />
       <StatusBar />
-      <ExportModal />
-      <RigExportModal />
-      <ImportImageModal />
-      <NewSpriteModal />
-      <CanvasSizeModal />
-      <FilterModal />
-      <ImportTilesetModal />
-      <CommandPalette />
-      <KeybindingsModal />
-      <ContextMenu />
+      <ErrorBoundary name="Dialogs" fallback="region">
+        <ExportModal />
+        <RigExportModal />
+        <ImportImageModal />
+        <NewSpriteModal />
+        <CanvasSizeModal />
+        <FilterModal />
+        <ImportTilesetModal />
+        <CommandPalette />
+        <KeybindingsModal />
+        <ContextMenu />
+      </ErrorBoundary>
       {isDragOver && (
         <div className="dropzone-overlay">
           <div className="dropzone-card">

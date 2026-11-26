@@ -217,6 +217,11 @@ export function NodePreviewPanel() {
             height={256}
             className="nodes-preview-canvas"
           />
+          {!getNodeEvaluator().isAvailable() && (
+            <div className="safe-gl-unavailable" role="alert">
+              Node preview needs WebGL2, which isn't available right now.
+            </div>
+          )}
         </div>
       </div>
     </section>

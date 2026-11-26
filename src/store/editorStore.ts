@@ -578,6 +578,7 @@ interface EditorState {
   freeTransformState: TransformState | null;
 
   documentName: string;
+  isDocumentDirty: boolean;
   currentFilePath: string | null;
   canvasWidth: number;
   canvasHeight: number;
@@ -911,6 +912,7 @@ interface EditorState {
   setStatusMessage: (msg: string | null) => void;
   setCurrentFilePath: (path: string | null) => void;
   setDocumentName: (name: string) => void;
+  setDocumentDirty: (dirty: boolean) => void;
   setExportModalOpen: (open: boolean) => void;
   setRigExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
@@ -1222,6 +1224,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   freeTransformState: null,
 
   documentName: "untitled.pixet",
+  isDocumentDirty: false,
   currentFilePath: null,
   canvasWidth: 32,
   canvasHeight: 32,
@@ -2439,6 +2442,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setStatusMessage: (statusMessage) => set({ statusMessage }),
   setCurrentFilePath: (currentFilePath) => set({ currentFilePath }),
   setDocumentName: (documentName) => set({ documentName }),
+  setDocumentDirty: (isDocumentDirty) =>
+    set((s) => (s.isDocumentDirty === isDocumentDirty ? s : { isDocumentDirty })),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
   setRigExportModalOpen: (rigExportModalOpen) => set({ rigExportModalOpen }),
   setRotate3dModalOpen: (open) =>

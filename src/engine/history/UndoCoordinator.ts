@@ -1,4 +1,5 @@
 export type UndoKind = "pixels" | "cells" | "tileset" | "model3d";
+import { markDirty } from "../io/documentState.ts";
 
 export interface UndoHistoryEntry {
   index: number;
@@ -43,6 +44,7 @@ export class UndoCoordinator {
 
   record(kind: UndoKind, label?: string): void {
     const trimmed = label?.trim();
+    markDirty();
     this.undoStack.push({
       kind,
       label: trimmed && trimmed.length > 0 ? trimmed : defaultLabelForKind(kind),
@@ -60,6 +62,7 @@ export class UndoCoordinator {
   popUndo(): UndoKind | undefined {
     const item = this.undoStack.pop();
     if (item !== undefined) {
+      markDirty();
       this.redoStack.push(item);
       return item.kind;
     }
@@ -73,6 +76,7 @@ export class UndoCoordinator {
   popRedo(): UndoKind | undefined {
     const item = this.redoStack.pop();
     if (item !== undefined) {
+      markDirty();
       this.undoStack.push(item);
       return item.kind;
     }

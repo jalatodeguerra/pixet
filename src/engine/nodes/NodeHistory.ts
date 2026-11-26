@@ -1,5 +1,6 @@
 import { cloneGraph } from "./NodeGraph.ts";
 import type { NodeGraph } from "./types.ts";
+import { markDirty } from "../io/documentState.ts";
 
 interface HistoryEntry {
   before: NodeGraph;
@@ -25,6 +26,7 @@ export class NodeHistory {
 
   push(before: NodeGraph, after: NodeGraph, label: string): void {
     if (JSON.stringify(before) === JSON.stringify(after)) return;
+    markDirty();
     this.undoStack.push({
       before: cloneGraph(before),
       after: cloneGraph(after),
@@ -51,6 +53,7 @@ export class NodeHistory {
     if (JSON.stringify(after) === tx.beforeJson) {
       return false;
     }
+    markDirty();
     this.undoStack.push({
       before: tx.before,
       after: cloneGraph(after),
@@ -74,6 +77,7 @@ export class NodeHistory {
   undo(current: NodeGraph): { graph: NodeGraph; label: string } | null {
     const entry = this.undoStack.pop();
     if (!entry) return null;
+    markDirty();
     this.redoStack.push({
       before: cloneGraph(entry.before),
       after: cloneGraph(current),
@@ -85,6 +89,7 @@ export class NodeHistory {
   redo(current: NodeGraph): { graph: NodeGraph; label: string } | null {
     const entry = this.redoStack.pop();
     if (!entry) return null;
+    markDirty();
     this.undoStack.push({
       before: cloneGraph(current),
       after: cloneGraph(entry.after),

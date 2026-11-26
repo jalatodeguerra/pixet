@@ -588,6 +588,7 @@ export function ThreeViewport() {
   const vKeyHeldRef = useRef(false);
   const [sceneStats, setSceneStats] = useState({ nodeCount: 0, triangleCount: 0 });
   const [viewportRevision, setViewportRevision] = useState(0);
+  const [webglError, setWebglError] = useState<string | null>(null);
 
   // Three.js scene objects owned by this component
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -768,7 +769,13 @@ export function ThreeViewport() {
     const host = stageRef.current;
     if (!host) return;
 
-    const renderer = threeStudioRuntime.getRenderer();
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = threeStudioRuntime.getRenderer();
+    } catch (err) {
+      setWebglError(err instanceof Error ? err.message : String(err));
+      return;
+    }
     const canvas = threeStudioRuntime.attachCanvas(host);
     const rect = host.getBoundingClientRect();
     const initW = Math.max(1, Math.round(rect.width || 640));
@@ -1169,7 +1176,7 @@ export function ThreeViewport() {
     const renderLoop = () => {
       rafId = requestAnimationFrame(renderLoop);
       const cam = activeCameraRef.current;
-      if (!cam) return;
+      if (!cam || threeStudioRuntime.isContextLost()) return;
       renderer.render(scene, cam);
       void lastRenderedVersion;
     };
@@ -2044,6 +2051,11 @@ export function ThreeViewport() {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       />
+      {webglError && (
+        <div className="safe-gl-unavailable" role="alert">
+          {webglError}
+        </div>
+      )}
 
       {/* Compact Top-Left HUD */}
       <div className="m3d-hud-overlay-tl">

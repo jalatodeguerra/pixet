@@ -1,6 +1,7 @@
 import type { Model3DEngine } from "./Model3DEngine.ts";
 import { deserializeModel3DScene } from "./serialization.ts";
 import type { Model3DSceneSnapshot } from "./types.ts";
+import { markDirty } from "../io/documentState.ts";
 
 interface Model3DHistoryEntry {
   label: string;
@@ -37,6 +38,7 @@ export class Model3DHistory {
   pushUndo(beforeSnap: string | Model3DSceneSnapshot, label: string): void {
     const serialized =
       typeof beforeSnap === "string" ? beforeSnap : JSON.stringify(beforeSnap);
+    markDirty();
     this.undoEntries.push({
       label: label.trim() || "3D Model Edit",
       snapshot: serialized,
@@ -50,6 +52,8 @@ export class Model3DHistory {
   undo(engine: Model3DEngine): string | null {
     const entry = this.undoEntries.pop();
     if (!entry) return null;
+
+    markDirty();
 
     this.redoEntries.push({
       label: entry.label,
@@ -67,6 +71,8 @@ export class Model3DHistory {
   redo(engine: Model3DEngine): string | null {
     const entry = this.redoEntries.pop();
     if (!entry) return null;
+
+    markDirty();
 
     this.undoEntries.push({
       label: entry.label,
