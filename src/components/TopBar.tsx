@@ -8,6 +8,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Pencil,
+  Workflow,
 } from "lucide-react";
 import { performRedo, performUndo } from "../engine/document/historyActions";
 import {
@@ -66,6 +67,7 @@ const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; badge?: st
   { id: "tiles", label: "Tiles", icon: LayoutGrid, badge: "P2" },
   { id: "rig", label: "Rig", icon: Bone, badge: "P3" },
   { id: "studio3d", label: "3D Studio", icon: Box },
+  { id: "nodes", label: "Nodes", icon: Workflow },
   { id: "data", label: "Data", icon: Crosshair, badge: "P4" },
 ];
 

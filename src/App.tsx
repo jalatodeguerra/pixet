@@ -10,6 +10,7 @@ import { RigExportModal } from "./components/rig/RigExportModal";
 import { ImportImageModal } from "./components/ImportImageModal";
 import { NewSpriteModal } from "./components/NewSpriteModal";
 import { RightSidebar } from "./components/RightSidebar";
+import { NodesWorkspace } from "./components/nodes/NodesWorkspace";
 import { Studio3DViewport } from "./components/studio3d/Studio3DViewport";
 import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
@@ -62,6 +63,12 @@ import {
 } from "./components/rig/rigTools";
 import { TilesetBrowserPanel } from "./components/tiles/TilesetBrowserPanel";
 import {
+  deleteSelectedElements,
+  extrudeFaces,
+  fillOrBridgeSelection,
+} from "./engine/model3d/meshOps";
+import { DEFAULT_MODEL3D_MATERIAL_ID } from "./engine/model3d/Model3DEngine";
+import {
   copyTileSelectionToClipboard,
   deleteTileSelectionCells,
 } from "./components/tiles/TileToolOptionsBar";
@@ -78,6 +85,12 @@ import {
 } from "./engine/model3d/animEval";
 import { flipQuadDiagonal, mirrorNode } from "./engine/model3d/meshOps";
 import { mutateModel3D } from "./engine/model3d/model3dActions";
+import {
+  duplicateSelection,
+  removeNodes,
+  toggleBypassNodes,
+} from "./engine/nodes/NodeGraph";
+import { mutateActiveNodeGraph } from "./engine/nodes/nodeActions";
 import {
   cycleTileCursorPlane,
   flipTileCursor,
@@ -238,6 +251,98 @@ export function App() {
         return;
       }
 
+      // Nodes workspace keyboard isolation (runs before Draw tool shortcuts)
+      if (stNow.workspaceMode === "nodes") {
+        const lower = e.key.toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+          if (lower === "z") {
+            e.preventDefault();
+            if (e.shiftKey) performRedo();
+            else performUndo();
+            return;
+          }
+          if (lower === "y") {
+            e.preventDefault();
+            performRedo();
+            return;
+          }
+          if (lower === "s") {
+            e.preventDefault();
+            void saveProjectAction(e.shiftKey);
+            return;
+          }
+          if (lower === "a") {
+            e.preventDefault();
+            const g = pixelEngine.nodes.getActiveGraph();
+            if (g) {
+              stNow.patchNodesUi({ selectedNodeIds: g.nodes.map((n) => n.id) });
+            }
+            return;
+          }
+          if (lower === "d") {
+            e.preventDefault();
+            const sel = stNow.nodesUi.selectedNodeIds;
+            if (sel.length > 0) {
+              let created: string[] = [];
+              mutateActiveNodeGraph("Duplicate Nodes", (g) => {
+                const res = duplicateSelection(g, sel);
+                created = res.createdNodeIds;
+                return res.graph;
+              });
+              if (created.length > 0) {
+                stNow.patchNodesUi({ selectedNodeIds: created });
+              }
+            }
+            return;
+          }
+        }
+
+        if ((e.shiftKey && lower === "a") || e.key === "/") {
+          e.preventDefault();
+          stNow.patchNodesUi({
+            quickAddOpen: true,
+            quickAddPos: { x: Math.round(window.innerWidth * 0.4), y: Math.round(window.innerHeight * 0.35) },
+            pendingWireFrom: null,
+          });
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          stNow.patchNodesUi({ quickAddOpen: false, pendingWireFrom: null, selectedNodeIds: [] });
+          return;
+        }
+        if (e.key === "Delete" || e.key === "Backspace") {
+          const sel = stNow.nodesUi.selectedNodeIds;
+          if (sel.length > 0) {
+            e.preventDefault();
+            mutateActiveNodeGraph("Delete Nodes", (g) => removeNodes(g, sel));
+            stNow.patchNodesUi({ selectedNodeIds: [] });
+          }
+          return;
+        }
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+          if (lower === "m") {
+            const sel = stNow.nodesUi.selectedNodeIds;
+            if (sel.length > 0) {
+              e.preventDefault();
+              mutateActiveNodeGraph("Toggle Bypass", (g) => toggleBypassNodes(g, sel), sel);
+            }
+            return;
+          }
+          if (lower === "p") {
+            const sel = stNow.nodesUi.selectedNodeIds;
+            if (sel.length === 1) {
+              e.preventDefault();
+              stNow.patchNodesUi({
+                pinnedNodeId: stNow.nodesUi.pinnedNodeId === sel[0] ? null : sel[0],
+              });
+            }
+            return;
+          }
+        }
+        return;
+      }
+
       // Low-Poly 3D workspace keyboard isolation (runs before Draw tool shortcuts)
       if (
         stNow.workspaceMode === "studio3d" &&
@@ -368,10 +473,47 @@ export function App() {
 
         if (e.key === "Delete" || e.key === "Backspace") {
           e.preventDefault();
-          const ids = [...pixelEngine.model3d.selectedNodeIds];
+          const eng = pixelEngine.model3d;
+          const gran = eng.selectionGranularity;
+          const activeNode = eng.activeNodeId ? eng.getNode(eng.activeNodeId) : undefined;
+          if (
+            gran !== "object" &&
+            activeNode &&
+            !activeNode.locked &&
+            activeNode.kind === "mesh" &&
+            activeNode.mesh
+          ) {
+            const selVerts = eng.selectedVertices[activeNode.id] ?? [];
+            const selEdges = eng.selectedEdges[activeNode.id] ?? [];
+            const selFaces = eng.selectedFaces[activeNode.id] ?? [];
+            const hasSubSel =
+              (gran === "vertex" && selVerts.length > 0) ||
+              (gran === "edge" && selEdges.length > 0) ||
+              (gran === "face" && selFaces.length > 0);
+            if (hasSubSel) {
+              let deletedCount = 0;
+              mutateModel3D("Delete Mesh Elements", (m) => {
+                const n = m.getNode(activeNode.id);
+                if (!n || n.kind !== "mesh" || !n.mesh) return;
+                const res = deleteSelectedElements(n.mesh, gran, selVerts, selEdges, selFaces);
+                deletedCount = res.deletedFaceCount;
+                m.updateNode(activeNode.id, { mesh: res.mesh });
+                m.selectedVertices[activeNode.id] = [];
+                m.selectedEdges[activeNode.id] = [];
+                m.selectedFaces[activeNode.id] = [];
+              });
+              stNow.setStatusMessage(
+                deletedCount > 0
+                  ? `Deleted ${deletedCount} face(s)`
+                  : "No faces deleted"
+              );
+              return;
+            }
+          }
+          const ids = [...eng.selectedNodeIds];
           if (ids.length > 0) {
-            mutateModel3D("Delete Nodes", (eng) => {
-              eng.deleteNodes(ids);
+            mutateModel3D("Delete Nodes", (m) => {
+              m.deleteNodes(ids);
             });
             stNow.setStatusMessage(`Deleted ${ids.length} node(s)`);
           }
@@ -479,6 +621,62 @@ export function App() {
                 `Keyframed "${activeNode.name}" at frame ${stNow.currentFrame + 1}`
               );
             }
+            return;
+          }
+        }
+
+        if (stNow.studio3d.subMode === "model" && e.shiftKey) {
+          const eng = pixelEngine.model3d;
+          const activeNode = eng.activeNodeId ? eng.getNode(eng.activeNodeId) : undefined;
+          if (key === "e" && activeNode && !activeNode.locked && activeNode.kind === "mesh" && activeNode.mesh) {
+            e.preventDefault();
+            const selFaces = eng.selectedFaces[activeNode.id] ?? [];
+            if (selFaces.length > 0) {
+              const dist = Math.max(0.25, stNow.studio3d.snapPx || 1);
+              mutateModel3D("Quick Extrude Faces", (m) => {
+                const n = m.getNode(activeNode.id);
+                if (!n || n.kind !== "mesh" || !n.mesh) return;
+                const res = extrudeFaces(n.mesh, selFaces, dist);
+                m.updateNode(activeNode.id, { mesh: res.mesh });
+                m.setSelectionGranularity("face");
+                m.selectedFaces[activeNode.id] = res.extrudedFaceIds;
+              });
+              stNow.patchStudio3D({ gizmoMode: "move" });
+              stNow.setStatusMessage(`Extruded ${selFaces.length} face(s) — drag gizmo to move`);
+            } else {
+              stNow.setStatusMessage("Select one or more faces to quick-extrude");
+            }
+            return;
+          }
+          if (key === "f" && activeNode && !activeNode.locked && activeNode.kind === "mesh" && activeNode.mesh) {
+            e.preventDefault();
+            const matId =
+              activeNode.mesh.faces[0]?.materialId ??
+              eng.materials[0]?.id ??
+              DEFAULT_MODEL3D_MATERIAL_ID;
+            let createdCount = 0;
+            mutateModel3D("Fill / Bridge Selection", (m) => {
+              const n = m.getNode(activeNode.id);
+              if (!n || n.kind !== "mesh" || !n.mesh) return;
+              const res = fillOrBridgeSelection(
+                n.mesh,
+                m.selectionGranularity,
+                m.selectedVertices[activeNode.id] ?? [],
+                m.selectedEdges[activeNode.id] ?? [],
+                matId
+              );
+              createdCount = res.createdFaceIds.length;
+              if (createdCount > 0) {
+                m.updateNode(activeNode.id, { mesh: res.mesh });
+                m.setSelectionGranularity("face");
+                m.selectedFaces[activeNode.id] = res.createdFaceIds;
+              }
+            });
+            stNow.setStatusMessage(
+              createdCount > 0
+                ? "Created face from selection"
+                : "Select 3–4 vertices or 2 edges to fill/bridge"
+            );
             return;
           }
         }
@@ -971,8 +1169,14 @@ export function App() {
 
       <main className="workspace-main">
         <div className="workspace-middle">
-          {!panelsCollapsed && <ToolRail />}
-          {workspaceMode === "studio3d" ? <Studio3DViewport /> : <Viewport />}
+          {!panelsCollapsed && workspaceMode !== "nodes" && <ToolRail />}
+          {workspaceMode === "nodes" ? (
+            <NodesWorkspace />
+          ) : workspaceMode === "studio3d" ? (
+            <Studio3DViewport />
+          ) : (
+            <Viewport />
+          )}
           {!panelsCollapsed && (
             <>
               <div

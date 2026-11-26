@@ -125,7 +125,31 @@ export type ReferenceImageState = {
   locked: boolean;
 };
 
-export type WorkspaceMode = "draw" | "tiles" | "rig" | "studio3d" | "data";
+export type WorkspaceMode = "draw" | "tiles" | "rig" | "studio3d" | "nodes" | "data";
+
+export interface NodesUiState {
+  selectedNodeIds: string[];
+  pinnedNodeId: string | null;
+  compareNodeId: string | null;
+  showThumbnails: boolean;
+  previewTab: "2d" | "3d";
+  preview2dMode: "rgba" | "gray" | "r" | "g" | "b" | "a" | "tile3x3";
+  quickAddOpen: boolean;
+  quickAddPos: { x: number; y: number };
+  pendingWireFrom: { nodeId: string; socketId: string; handleType: "source" | "target" } | null;
+}
+
+const DEFAULT_NODES_UI_STATE: NodesUiState = {
+  selectedNodeIds: [],
+  pinnedNodeId: null,
+  compareNodeId: null,
+  showThumbnails: true,
+  previewTab: "2d",
+  preview2dMode: "rgba",
+  quickAddOpen: false,
+  quickAddPos: { x: 240, y: 180 },
+  pendingWireFrom: null,
+};
 export type Studio3DMode = "extruded" | "stack" | "rig";
 export type Studio3DSourceScope = "visible" | "active";
 export type Studio3DPivotMode = "center" | "bottom" | "custom";
@@ -679,11 +703,15 @@ interface EditorState {
   dockedPanelOrder: Record<WorkspaceMode, PanelId[]>;
   studio3d: Studio3DState;
   model3dVersion: number;
+  nodesUi: NodesUiState;
+  nodesVersion: number;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   patchStudio3D: (patch: Partial<Studio3DState>) => void;
   resetStudio3DCamera: () => void;
   bumpModel3DVersion: () => void;
+  patchNodesUi: (patch: Partial<NodesUiState>) => void;
+  bumpNodesVersion: () => void;
   setActiveTool: (tool: ToolId) => void;
   setBrushSize: (size: number) => void;
   setBrushShape: (shape: BrushShape) => void;
@@ -1352,12 +1380,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   dockedPanelOrder: initialPanelLayout.dockedPanelOrder,
   studio3d: { ...DEFAULT_STUDIO3D_STATE },
   model3dVersion: 0,
+  nodesUi: { ...DEFAULT_NODES_UI_STATE },
+  nodesVersion: 0,
 
   setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
   patchStudio3D: (patch) =>
     set((s) => ({ studio3d: { ...s.studio3d, ...patch } })),
   bumpModel3DVersion: () =>
     set((s) => ({ model3dVersion: s.model3dVersion + 1 })),
+  patchNodesUi: (patch) =>
+    set((s) => ({ nodesUi: { ...s.nodesUi, ...patch } })),
+  bumpNodesVersion: () =>
+    set((s) => ({ nodesVersion: s.nodesVersion + 1 })),
   resetStudio3DCamera: () =>
     set((s) => ({
       studio3d: {

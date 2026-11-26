@@ -1,4 +1,4 @@
-export type PanelWorkspace = "draw" | "tiles" | "rig" | "studio3d" | "data";
+export type PanelWorkspace = "draw" | "tiles" | "rig" | "studio3d" | "nodes" | "data";
 
 export type PanelId =
   | "color-palette"
@@ -57,6 +57,7 @@ export const DEFAULT_DOCKED_ORDER: Record<PanelWorkspace, PanelId[]> = {
     "rig-bound-layers",
   ],
   studio3d: [],
+  nodes: [],
   data: ["game-data", "color-palette", "layers"],
 };
 
@@ -83,6 +84,7 @@ export function createDefaultPanelLayout(): PanelLayoutState {
       tiles: [...DEFAULT_DOCKED_ORDER.tiles],
       rig: [...DEFAULT_DOCKED_ORDER.rig],
       studio3d: [...DEFAULT_DOCKED_ORDER.studio3d],
+      nodes: [...DEFAULT_DOCKED_ORDER.nodes],
       data: [...DEFAULT_DOCKED_ORDER.data],
     },
   };

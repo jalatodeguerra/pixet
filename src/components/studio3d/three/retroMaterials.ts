@@ -5,6 +5,7 @@ import {
   buildPaddedTilesetAtlas,
   type PaddedTilesetAtlas,
 } from "../../../engine/model3d/tilesetAtlas";
+import { resolveNodeGraphMaterialSnapshot } from "../../../engine/nodes/pixetBridges";
 import type { ModelMaterial, ShadingMode } from "../../../engine/model3d/types";
 import type { Tileset } from "../../../engine/tiles/Tileset";
 import type { LayerItem } from "../../../store/editorStore";
@@ -262,6 +263,14 @@ export function resolveModelMaterialBuffer(
     return atlas.buffer;
   }
 
+  if (matDef.source.kind === "node-graph") {
+    const snap = resolveNodeGraphMaterialSnapshot(matDef.source.graphId);
+    if (snap) {
+      return new PixelBuffer(snap.width, snap.height, snap.albedo);
+    }
+    return createPlaceholderPixelBuffer(16, 16);
+  }
+
   if (matDef.source.kind === "embedded") {
     const w = Math.max(1, matDef.source.width);
     const h = Math.max(1, matDef.source.height);
@@ -473,7 +482,8 @@ export class RetroMaterialCache {
         input.tilesetVersion
       ).buffer;
     }
-    if (matDef.source.kind === "embedded") {
+
+  if (matDef.source.kind === "embedded") {
       const slotKey = `${matDef.id}::embedded`;
       const existing = this.albedoSlots.get(slotKey);
       if (existing) {
@@ -692,7 +702,24 @@ export class RetroMaterialCache {
       return nextSlot;
     }
 
-    if (matDef.source.kind === "embedded") {
+    if (matDef.source.kind === "node-graph") {
+      const snap = resolveNodeGraphMaterialSnapshot(matDef.source.graphId);
+      if (snap && hasAnyNonZeroAlpha(snap.albedo)) {
+        const slotKey = `${matDef.id}::nodegraph`;
+        const nextSlot = createDrawCanvasSlot(
+          snap.albedo,
+          snap.width,
+          snap.height,
+          THREE.SRGBColorSpace,
+          this.albedoSlots.get(slotKey)
+        );
+        this.albedoSlots.set(slotKey, nextSlot);
+        return nextSlot;
+      }
+      return this.getEmptyDrawFallbackSlot(16, 16);
+    }
+
+  if (matDef.source.kind === "embedded") {
       const slotKey = `${matDef.id}::embedded`;
       const sig = `${matDef.source.width}x${matDef.source.height}:${matDef.source.pngBase64.slice(0, 64)}:${matDef.source.pngBase64.length}`;
       const prevSig = this.embeddedKeys.get(matDef.id);

@@ -9,11 +9,13 @@
 
 ### 0.1 Project Context & Existing Reusable Pieces
 - **Pixet** (`e:\desarrollo\pixet`) is a pixel-art & game-asset authoring suite built on **Tauri v2** + Rust workspace (`crates/pixet-core`, `crates/pixet-cli`, `src-tauri`) + **Vite + React 18 + TypeScript (strict) + Zustand + `lucide-react` + WebGL2**.
-- Existing workspaces in `src/components/TopBar.tsx`: `Draw`, `Tiles`, `Rig`, `3D Studio`, and `Data`.
+- Existing workspaces in `src/components/TopBar.tsx`: `Draw`, `Tiles`, `Rig`, `3D Studio` (which now hosts both `2.5D Sprite` and the unified **Low-Poly 3D Modeling** workspace: `Blockbench + Crocotile 3D`), and `Data`.
 - Existing engine modules to reuse or bridge directly:
   - `src/engine/document/PixelBuffer.ts`, `PixelEngine.ts` & `blendModes.ts`
   - `src/engine/gamedev/pbrMaps.ts` (2-pass Chamfer bevel/pillow height, opaque-only blur, Sobel/Scharr normal, depth map)
   - `src/engine/gamedev/shaderPreview.ts` (`LayerMapRole = "albedo" | "normal" | "height" | "depth" | "emission"`, 2D Blinn-Phong + height raymarch lighting)
+  - `src/engine/model3d/types.ts`, `Model3DEngine.ts`, `Model3DHistory.ts`, `uvOps.ts`, `tilesetAtlas.ts` (`ModelMaterialSource` already reserves `{ kind: "node-graph"; graphId: string }` and `serialization.ts` already round-trips it)
+  - `src/components/studio3d/three/ThreeStudioRuntime.ts`, `retroMaterials.ts`, `modelExporter.ts`, `modelSpriteBaker.ts` (singleton Three.js renderer, `Unlit`/`Flat`/`PS1`/`PBR` materials, `.glb`/`.gltf`/`.obj` export)
   - `src/engine/tiles/autoTile.ts` & `terrain.ts` (4-bit 16-tile & 8-bit 47-tile blob bitmasks and rulesets)
   - `src/engine/tools/rotsprite.ts`, `dither.ts`, `paletteOps.ts`, `src/utils/color.ts`
   - `src/engine/renderer/WebGL2Renderer.ts`
@@ -26,6 +28,8 @@
 2. **WebGL2 Per-Node FBO Engine + Single Shared Offscreen Context**:
    - One offscreen WebGL2 context (`WebGL2NodeEvaluator`) owns **all** intermediate FBOs, node thumbnails, 2D preview passes, **and** the 3D PBR preview pass.
    - *Why single-context for 3D too:* WebGL2 textures cannot be shared across distinct `WebGL2RenderingContext` instances. Running the 3D PBR mesh pass inside `WebGL2NodeEvaluator` binds cached PBR textures directly with zero `gl.readPixels` stalls and blits to visible `<canvas>` elements via `CanvasRenderingContext2D.drawImage`, avoiding browser 8–16 WebGL context limits.
+   - *App-Wide WebGL Context Budget:* Across the entire app, `Draw` (`WebGL2Renderer`), `3D Studio` (`ThreeStudioRuntime` singleton), and `Nodes` (`WebGL2NodeEvaluator` singleton) total **3 WebGL2 contexts** — well under Chromium's 8–16 limit.
+   - *Cross-Context Sync to Three.js:* When a `ModelMaterial` uses `{ kind: "node-graph", graphId }`, `WebGL2NodeEvaluator` publishes dirty-triggered `Uint8Array` PBR channel snapshots (`albedo`, `normal`, `roughness`, `metallic`, `ao`, `emissive`) into `retroMaterials.ts`'s `THREE.DataTexture` cache (never polling per-frame, only on graph version change).
 3. **Swappable UI Boundary (`@xyflow/react` in Phase 1)**:
    - React Flow v12 sits strictly behind `src/components/nodes/ReactFlowCanvas.tsx` and `PixetFlowNode.tsx`.
    - It never touches WebGL, FBOs, or shader compilation, so it can be replaced in Phase 2+ by a custom Pixet Canvas2D/WebGL2 graph editor without touching `src/engine/nodes/**`.
@@ -77,12 +81,16 @@ Unlike standalone material tools (Material Maker) or standalone pixel compositor
 - **`Sprite Input`**: Pulls the active Draw document's composited frame, a specific layer, or a specific `(layerId, frameIndex)` cel as an `rgba` texture. Also supports **Map-Role Extraction** (`albedo`, `normal`, `height`, `depth`, `emission` from Pixet's `Layer.map_role`) to bring hand-painted PBR sprite layers straight into the graph. Automatically marks itself dirty on `pixelEngine` change events.
 - **`Draw Selection Mask`**: Pulls `pixelEngine.selection` as a `gray` mask (`1.0` selected, `0.0` unselected), allowing artists to apply node stacks as non-destructive region filters on their active Draw sprite.
 - **`Tileset Tile Input`**: Pulls any tile (`tilesetIndex`, `localId`) from `TilesetRegistry` to add procedural wear, moss, outlines, normals, or palette swaps.
+- **`3D Model Map Input`**: Pulls UV island masks, per-corner vertex colors/AO, or 3D-space face normals from `pixelEngine.model3d` (using pure `src/engine/model3d/` data) so artists can procedurally weather edges, add crevices, or palette-quantize textures tailored to their low-poly model's UVs.
 - **`Palette Input` (GPU LUT)**: Streams the active document palette (or a custom ramp / imported `.hex`/`.gpl` preset) into a `256×1 RGBA8` GPU LUT texture so `Palette Quantize`, `Ordered Dither`, `Palette Remap`, and `Gradient Map` stay live-synced when the artist edits colors in Draw.
 - **`Image Input`**: Imports external PNG/WebP reference or noise textures into the deduped `nodes_ext.assets` store.
 
 ### 1.2 Live & Batch Outputs Back to Pixet
 - **Bake to Draw Layer (+ Live-Link Toggle)**: Rasterizes any `rgba`/`gray` output into a new or target Draw layer (optionally clipped to active selection). Enabling **Live Sync** auto-updates the target layer (debounced 120ms after parameter scrub ends) for live viewport feedback in Draw or **3D Studio** (`2.5D Extruded` / `Stack`).
 - **Bake Material to Draw Map-Role Stack**: One click on `Material Output` creates or updates a grouped set of Draw layers tagged with Pixet's native `map_role`s (`albedo`, `normal`, `height`, `depth` from AO, `emission`) — immediately lighting up the sprite in Draw's 2D Lighting (`shaderPreview.ts`) and `3D Studio`!
+- **Live Low-Poly 3D Material Binding (`ModelMaterialSource: { kind: "node-graph" }`)**:
+  - One click on `Material Output` assigns the graph directly to a new or existing `ModelMaterial` in `pixelEngine.model3d` (recording `"model3d"` on `UndoCoordinator`).
+  - `src/components/studio3d/three/retroMaterials.ts` binds the graph's evaluated PBR maps (`albedo`, `normal`, `roughness`, `metallic`, `ao`, `emissive`) onto `THREE.MeshStandardMaterial` / PS1 / Flat / Unlit shaders in real time, and `modelExporter.ts` embeds the baked PNG maps cleanly into exported `.glb`/`.gltf`/`.obj` files.
 - **Bake to Tileset Slot (+ Live-Link Toggle)**: Writes procedural tiles directly into a target `Tileset` tile ID and bumps `tilesetVersion`, immediately updating every painted instance across all `Tiles` maps.
 - **Procedural Auto-Tile Set Baker (16-Tile 4-Bit & 47-Tile Blob)**: Pairs an `Auto-Tile Mask` generator node with `Material Height-Blend` (e.g., *Grass* over *Dirt* or *Stone Wall* over *Floor*). Clicking **Bake Auto-Tile Set** iterates through all 16 (4-bit) or 47 (8-bit blob) canonical bitmasks (`src/engine/tiles/autoTile.ts`), evaluates the graph per mask with organic SDF/height-blended borders, populates the `Tileset` slots, and registers the `AutoTileRuleset` automatically!
 - **Game-Engine PBR & ORM Export**: Exports individual maps or complete engine-ready packs:
@@ -107,7 +115,8 @@ src/
       WebGL2NodeEvaluator.ts      # Shared WebGL2 context, KHR_parallel_shader_compile, dirty eval, 3D PBR pass
       PaletteLut.ts               # Pixet Palette / multi-stop ramps -> 256x1 RGBA8 GPU LUT + OKLab helpers
       blitBridge.ts               # Zero-readback 2D/3D/thumbnail drawImage blitter + export/bake readback
-      pixetBridges.ts             # Sprite/Selection/Tileset inputs, Draw/MapRole/Tileset/AutoTile bakers, ORM/Godot export
+      pixetBridges.ts             # Sprite/Selection/Tileset/3D-Model inputs, Draw/MapRole/Tileset/AutoTile bakers,
+                                  # NodeGraphMaterialProvider (for retroMaterials.ts / modelExporter.ts), ORM/Godot export
       presets.ts                  # Built-in starter material & sprite VFX graph templates
       shaders/
         common.glsl.ts            # Fullscreen triangle VS, RG8 16-bit fallback pack/unpack, hash, OKLab, blend modes
@@ -256,7 +265,7 @@ export interface NodesDocumentExt {
 - **Mandatory Transaction Coalescing**:
   - **Slider / Color / Ramp Scrubbing**: `beginTransaction(label)` records the `before` graph state on `pointerdown` / scrub start; intermediate `onChange` updates mutate live params and trigger 60fps WebGL evaluation *without* pushing undo entries; `commitTransaction()` on `pointerup` / blur pushes a single undo entry if the state changed.
   - **Node Dragging**: `onNodeDragStart` captures `before`; `onNodeDragStop` commits one `"Move Nodes"` entry.
-- **Cross-Workspace Bake Undo**: Executing `Bake to Draw Layer`, `Bake Material to Draw Map-Role Stack`, or `Bake to Tileset` records onto `pixelEngine.undoCoordinator` (`"pixels"` or `"tileset"`) so switching to `Draw` or `Tiles` and pressing `Ctrl+Z` cleanly reverts the baked pixels/tiles.
+- **Cross-Workspace Bake Undo**: Executing `Bake to Draw Layer`, `Bake Material to Draw Map-Role Stack`, `Bake to Tileset`, or `Assign to 3D Model Material` records onto `pixelEngine.undoCoordinator` (`"pixels"`, `"tileset"`, or `"model3d"`) so switching to `Draw`, `Tiles`, or `3D Studio` and pressing `Ctrl+Z` cleanly reverts the baked pixels, tiles, or material assignment.
 
 ---
 
@@ -347,14 +356,15 @@ All node handles are **8×8px crisp 0px-radius squares** (10×10px hit target) c
 
 ---
 
-## 5. Complete Phase 1 Node Catalog (40 Nodes)
+## 5. Complete Phase 1 Node Catalog (41 Core / 47 Total)
 
-### 5.1 Pixet & External Inputs (6 Nodes)
+### 5.1 Pixet & External Inputs (7 Nodes)
 | Node | Inputs | Outputs | Parameters & Behavior |
 | :--- | :--- | :--- | :--- |
 | `Sprite Input` | — | `rgba`, `gray` (alpha) | Source (`Composited` / `Single Layer` / `Map Role: Albedo/Normal/Height/Depth/Emission`), Layer picker, Frame (`Active` / fixed index). Auto-dirty on Draw edits. |
 | `Draw Selection Mask` | — | `gray` | Feather (`0..8px`), Invert toggle. Outputs `1.0` inside `pixelEngine.selection` (or full `1.0` if no active selection). |
 | `Tileset Tile Input` | — | `rgba` | Tileset index & Tile ID picker (with visual swatch preview). Auto-dirty on Tileset edits. |
+| `3D Model Map Input` | — | `rgba`, `gray` | Mode (`UV Island Mask` / `Vertex Color & AO` / `Baked Face Normal`), Target (`All Nodes` / specific `ModelNode`), UV Padding/Dilation (`0..8px`). Pulls pure `pixelEngine.model3d` geometry/UV data. |
 | `Palette Input` | — | `palette` | Source (`Active Document Palette` / `Custom Ramp`), inline swatch strip. |
 | `Solid Color` | — | `rgba`, `color` | RGBA color picker (`1×1` constant texture). |
 | `Image Input` | — | `rgba`, `gray` (alpha) | Imports PNG/WebP into `nodes_ext.assets`; Color Space (`sRGB` / `Linear / Normal Map`), Flip DirectX `-Y` toggle. |
@@ -405,7 +415,7 @@ All node handles are **8×8px crisp 0px-radius squares** (10×10px hit target) c
 | `Channel Pack / Unpack` | `gray` (R, G, B, A) or `rgba` | `rgba` and `gray` (R, G, B, A) | Bidirectional utility for custom masks and packing `_orm.png` (`R=AO, G=Rough, B=Metal`). |
 | `Flood Fill (Cell Metrics)` | `gray` (binary cell mask) | `gray` (random val), `gray` (edge dist), `rgba` (cell UV + rand) | CPU-bridge connected-components pass (with seamless wrap support!). Gives every brick, Voronoi stone, or tile unique per-cell random luminance, slope tilt, and local UVs. |
 
-### 5.6 PBR, Material Bundles & Outputs (10 Nodes — Total: 46 Nodes, Core 40 in N3–N5)
+### 5.6 PBR, Material Bundles & Outputs (10 Nodes — Total: 47 Nodes, Core 41 in N3–N5)
 *(Note: Combine/Split/Outputs are lightweight routing/shader wrappers; grouping below completes the full pipeline.)*
 
 | Node | Inputs | Outputs | Parameters & Behavior |
@@ -418,7 +428,7 @@ All node handles are **8×8px crisp 0px-radius squares** (10×10px hit target) c
 | `Material Combine` | `rgba` (albedo), `normal`, `gray` (height, rough, metal, ao), `rgba` (emissive) | `material` | Inline fallback sliders/color pickers for any unconnected PBR channel so no extra constant nodes are required! |
 | `Material Split` | `material` | `albedo`, `normal`, `height`, `roughness`, `metallic`, `ao`, `emissive` | Unpacks a `material` bundle back into individual wires. |
 | `Material Height-Blend` | `material` (base), `material` (top), `gray` (mask) | `material` | Height Offset (`-1..1`), Height Contrast (`0..1`), AO at Seamdarkening. Blends all 7 PBR channels coherently (e.g., moss creeping into mortar before covering brick tops). |
-| `Material Output` | `material` | — | Primary graph output driving 2D/3D Preview, **Bake PBR Stack to Draw Map-Role Layers**, **Bake Auto-Tile Set (16/47)**, and **Export PBR / ORM / Godot `.tres`**. |
+| `Material Output` | `material` | — | Primary graph output driving 2D/3D Preview, **Assign to Low-Poly 3D Material** (`ModelMaterialSource { kind: "node-graph", graphId }`), **Bake PBR Stack to Draw Map-Role Layers**, **Bake Auto-Tile Set (16/47)**, and **Export PBR / ORM / Godot `.tres`**. |
 | `Bake Output (Draw / Tile)` | `rgba` | — | Target (`Draw Layer` / `Tileset Slot`), Target Layer/Tile picker, Mode (`New` / `Overwrite`), **Live Sync** toggle, **Bake Now** button. |
 
 ---
@@ -451,14 +461,14 @@ All node handles are **8×8px crisp 0px-radius squares** (10×10px hit target) c
      - **Live Pixel Readout**: Hovering the 2D preview displays `[X, Y]`, `RGBA` hex/bytes, `Scalar/Height` float (`0.000..1.000`), and unpacked `Normal XYZ` in `StatusBar`.
    - **3D PBR Tab**:
      - Rendered in `WebGL2NodeEvaluator` using Cook-Torrance GGX microfacet BRDF + hemisphere sky/ground ambient + draggable key light + rim light.
-     - Mesh selector: `Quad / Tile Plane` (with 2×2 UV repeat toggle), `Rounded Cube`, `Sphere`, `Cylinder`, and **`2.5D Extruded Sprite`** (extruding opaque alpha pixels like Pixet's 3D Studio!).
+     - Mesh selector: `Quad / Tile Plane` (with 2×2 UV repeat toggle), `Rounded Cube`, `Sphere`, `Cylinder`, **`2.5D Extruded Sprite`** (extruding opaque alpha pixels like Pixet's 3D Studio!), and **`Active 3D Model`** (uploads pure triangulated geometry/normals/UVs from `pixelEngine.model3d` into `WebGL2NodeEvaluator` — zero Three.js import in `src/engine/nodes/**` — so artists preview materials directly on their current low-poly model).
      - Parallax Occlusion Mapping (POM) relief depth slider + turntable auto-spin toggle.
 2. **Inspector & Graph Parameters Panel (Bottom)**:
    - **When No Node Is Selected → "Graph Parameters" View**: Displays all `graph.exposedParams` as a clean artist control surface (plus graph name, kind, description, and preset export button).
    - **When a Node Is Selected → "Node Inspector" View**:
      - Schema-driven controls for every `ParamDef` (scrubbable number sliders with scrub-coalesced undo, hex color picker + Pixet foreground/background swatch quick-pick, multi-stop `ramp` bar editor, seed dice button, **Promote to Graph Parameter** pin icon per param).
      - Common overrides row: `Resolution` (`Inherit` / `16..2048`), `Wrap` (`Repeat` / `Clamp`), `Filter` (`Nearest` / `Linear`), `Bypass (M)`.
-     - Contextual **Bake & Export** action cards on Output/Bake nodes (`Bake to Draw`, `Bake PBR Map-Role Layers`, `Bake to Tileset`, `Bake 16/47 Auto-Tile Set`, `Export PBR / ORM / Godot .tres`).
+     - Contextual **Bake & Export** action cards on Output/Bake nodes (`Assign to 3D Model Material`, `Bake to Draw`, `Bake PBR Map-Role Layers`, `Bake to Tileset`, `Bake 16/47 Auto-Tile Set`, `Export PBR / ORM / Godot .tres`).
 
 ---
 
@@ -520,9 +530,10 @@ flowchart LR
   - Implement `Blend`, `Pixelate`, `Pixel Clean / Scale` (CPU-bridge `rotsprite.ts` + Scale2x + 1px orphan cleanup), `Palette Quantize & Dither` (GPU OKLab + Bayer 2×2/4×4/8×8 + CPU Floyd-Steinberg), `Palette Remap / Ramp`, `Gradient Map`, `Outline / Inline`, `Morphology`, `Drop Shadow / Rim Light`, `Glow / Chromatic VFX`.
 - **N5 — PBR Nodes, `Flood Fill` Cell Metrics & 2D/3D PBR Preview Panel**:
   - Implement `Flood Fill (Cell Metrics)` (seamless CPU-bridge connected components), `Height → Normal`, `Normal Blend` (RNM), `Height → AO`, `Curvature`, `Sprite → Height & Normal` (`pbrMaps.ts` bridge), `Material Combine`, `Material Split`, `Material Height-Blend`, `Material Output`.
-  - Build `NodePreviewPanel.tsx` (2D 3×3 seamless tiling, Lit 2D sprite preview, A/B split wipe, pixel value readout + single-context 3D Cook-Torrance GGX PBR preview with `Quad`, `Cube`, `Sphere`, `Cylinder`, and `2.5D Extruded Sprite` + POM).
-- **N6 — Pixet Live Bridges, Map-Role Stack Baker, Auto-Tile Baker & Engine Exports**:
-  - Implement `Sprite Input` (with `map_role` extraction), `Draw Selection Mask`, `Tileset Tile Input`, `Palette Input`, `Image Input` (`nodes_ext.assets`), and `Bake Output`.
+  - Build `NodePreviewPanel.tsx` (2D 3×3 seamless tiling, Lit 2D sprite preview, A/B split wipe, pixel value readout + single-context 3D Cook-Torrance GGX PBR preview with `Quad`, `Cube`, `Sphere`, `Cylinder`, `2.5D Extruded Sprite`, and `Active 3D Model` + POM).
+- **N6 — Pixet Live Bridges, 3D Material Binding, Auto-Tile Baker & Engine Exports**:
+  - Implement `Sprite Input` (with `map_role` extraction), `Draw Selection Mask`, `Tileset Tile Input`, `3D Model Map Input`, `Palette Input`, `Image Input` (`nodes_ext.assets`), and `Bake Output`.
+  - Implement **Live `ModelMaterialSource { kind: "node-graph", graphId }` Resolution** in `src/components/studio3d/three/retroMaterials.ts`, `.glb`/`.gltf`/`.obj` texture export support in `modelExporter.ts`, and a `NodeGraph` material source picker in `Model3DSidebar.tsx`.
   - Implement **Bake Material to Draw Map-Role Stack**, **Live Sync** debounced auto-bake, **Bake 16/47 Auto-Tile Set** (`autoTile.ts` integration), and **Export PBR / ORM / Godot 4 `.tres`**.
 - **N7 — `.pixet` Persistence, Presets, Graph Parameters UI & Final Polish**:
   - Add `nodes_ext` to `crates/pixet-core/src/document.rs` + `projectBridge.ts` (with asset GC), `.pixet-graph.json` standalone import/export, promoted **Graph Parameters** view in `NodeInspectorPanel.tsx`, and the 6 built-in starter presets in `presets.ts`.
@@ -533,7 +544,7 @@ flowchart LR
 1. **Timeline Keyframing & Spritesheet Baking**: Animate any `animatable: true` node parameter or `u_progress` (`0..1`) across `Timeline.tsx` frames; batch-bake animated VFX (`Glow`, `Chromatic Glitch`, `Palette Cycle`, `4D Loopable Noise`) across multi-frame Draw layers or exported spritesheets.
 2. **Reusable Subgraphs**: Collapse selected nodes into a single `kind: "subgraph"` node using the already-reserved `subgraphInputs`, `subgraphOutputs`, and `exposedParams` fields on `NodeGraph`.
 3. **Custom Native Pixet Graph Renderer**: Swap `ReactFlowCanvas.tsx` + `PixetFlowNode.tsx` for a zero-DOM Canvas2D/WebGL2 graph viewport supporting 500+ nodes, custom orthogonal/angled pixel-crisp wires, and inline histogram/curve gizmos.
-4. **3D Studio Live Material Assignment**: Bind any `Material` graph directly onto `Studio3DViewport.tsx` surfaces and rigged 3D parts without intermediate raster layer baking.
+4. **3D Triplanar Projection & UV-Seam-Dilated Texture Baking**: Pass 3D object-space position and normal maps into the graph for seamless triplanar texturing across UV seams, plus automatic UV island bleed/dilation padding for mipmapped 3D game-engine export.
 
 ---
 

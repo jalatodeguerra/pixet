@@ -35,6 +35,19 @@ function keepRigSelectionValid(): void {
 export function performUndo(): void {
   commitFloatingSelection();
   const store = useEditorStore.getState();
+  if (store.workspaceMode === "nodes") {
+    const cur = pixelEngine.nodes.getActiveGraph();
+    if (cur) {
+      const undone = pixelEngine.nodesHistory.undo(cur);
+      if (undone) {
+        pixelEngine.nodes.replaceActiveGraph(undone.graph);
+        store.bumpNodesVersion();
+        syncHistoryAndCelState();
+        store.setStatusMessage(`Undo: ${undone.label}`);
+        return;
+      }
+    }
+  }
   if (store.workspaceMode === "rig") {
     const label = rigHistory.undo(pixelEngine.rig);
     if (label !== null) {
@@ -88,6 +101,19 @@ export function performUndo(): void {
 export function performRedo(): void {
   commitFloatingSelection();
   const store = useEditorStore.getState();
+  if (store.workspaceMode === "nodes") {
+    const cur = pixelEngine.nodes.getActiveGraph();
+    if (cur) {
+      const redone = pixelEngine.nodesHistory.redo(cur);
+      if (redone) {
+        pixelEngine.nodes.replaceActiveGraph(redone.graph);
+        store.bumpNodesVersion();
+        syncHistoryAndCelState();
+        store.setStatusMessage(`Redo: ${redone.label}`);
+        return;
+      }
+    }
+  }
   if (store.workspaceMode === "rig") {
     const label = rigHistory.redo(pixelEngine.rig);
     if (label !== null) {

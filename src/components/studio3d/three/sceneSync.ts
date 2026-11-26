@@ -807,6 +807,55 @@ export function syncModel3DScene(
 }
 
 /**
+ * Rebuilds a mesh node's BufferGeometry (and any wireframe LineSegments child) in place
+ * so sub-element gizmo drags deform the mesh at 60fps without detaching TransformControls.
+ */
+export function updateMeshNodeGeometryInPlace(
+  nodeObj: THREE.Object3D,
+  node: ModelNode,
+  ppu: number,
+  opts: {
+    textureSizeByMaterialId: Map<string, MaterialTextureInfo>;
+    defaultTextureWidth: number;
+    defaultTextureHeight: number;
+  }
+): void {
+  if (!(nodeObj instanceof THREE.Mesh) || node.kind !== "mesh" || !node.mesh) return;
+  const syncOpts: SyncSceneOptions = {
+    materialById: new Map(),
+    textureSizeByMaterialId: opts.textureSizeByMaterialId,
+    defaultTextureWidth: opts.defaultTextureWidth,
+    defaultTextureHeight: opts.defaultTextureHeight,
+    wireframeOverlay: false,
+  };
+  const built = buildPolyMeshGeometry(
+    node.mesh,
+    node.transform.pivot,
+    Math.max(1, ppu),
+    syncOpts
+  );
+  if (built.triangleCount <= 0) {
+    built.geometry.dispose();
+    return;
+  }
+  const oldGeo = nodeObj.geometry;
+  nodeObj.geometry = built.geometry;
+  oldGeo?.dispose();
+
+  const ud = nodeObj.userData as MeshLookupUserData;
+  ud.triToFaceIndex = built.triToFaceIndex;
+  ud.faceIds = built.faceIds;
+
+  for (const child of nodeObj.children) {
+    if (child instanceof THREE.LineSegments && child.userData?.isOverlayHelper) {
+      const oldEdges = child.geometry;
+      child.geometry = new THREE.EdgesGeometry(built.geometry, 1);
+      oldEdges?.dispose();
+    }
+  }
+}
+
+/**
  * Converts a Three.js Object3D local transform back into ModelNode.transform
  * position/rotation/scale (in pixel units relative to parent pivot).
  */

@@ -21,6 +21,8 @@ import type {
   ModelNode,
   PolyFace,
   PolyMeshData,
+  Quat,
+  SelectionGranularity,
   Transform3D,
   Vec2,
   Vec3,
@@ -1540,4 +1542,793 @@ export function mirrorNode(
   }
 
   return cloned;
+}
+
+// ============================================================================
+// Sub-Element Selection, Transform, Delete, Bevel, Fill/Bridge, Loop, Separate/Join
+// ============================================================================
+
+function canonicalEdgeKey(a: number, b: number): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+/**
+ * Collects unique, valid vertex indices affected by the current sub-element selection.
+ */
+export function collectAffectedVertexIndices(
+  mesh: PolyMeshData,
+  granularity: SelectionGranularity,
+  selectedVertices: ReadonlyArray<number>,
+  selectedEdges: ReadonlyArray<readonly [number, number]>,
+  selectedFaces: ReadonlyArray<string>
+): number[] {
+  const maxV = mesh.vertices.length;
+  const set = new Set<number>();
+
+  if (granularity === "vertex") {
+    for (const vi of selectedVertices) {
+      if (vi >= 0 && vi < maxV) set.add(vi);
+    }
+  } else if (granularity === "edge") {
+    for (const [a, b] of selectedEdges) {
+      if (a >= 0 && a < maxV) set.add(a);
+      if (b >= 0 && b < maxV) set.add(b);
+    }
+  } else if (granularity === "face") {
+    const faceSet = new Set(selectedFaces);
+    for (const f of mesh.faces) {
+      if (!faceSet.has(f.id)) continue;
+      for (const vi of f.verts) {
+        if (vi >= 0 && vi < maxV) set.add(vi);
+      }
+    }
+  }
+
+  return Array.from(set).sort((a, b) => a - b);
+}
+
+/**
+ * Computes the arithmetic centroid of the given vertex indices in local mesh pixel space.
+ */
+export function computeVerticesCentroid(
+  vertices: ReadonlyArray<Vec3>,
+  indices: ReadonlyArray<number>
+): Vec3 | null {
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let count = 0;
+  for (const vi of indices) {
+    const v = vertices[vi];
+    if (!v) continue;
+    sx += v[0];
+    sy += v[1];
+    sz += v[2];
+    count += 1;
+  }
+  if (count === 0) return null;
+  return cleanVec3([sx / count, sy / count, sz / count]);
+}
+
+export interface VertexTransformOptions {
+  translation?: Vec3;
+  rotationQuat?: Quat;
+  scale?: Vec3;
+  pivot?: Vec3;
+  snapPx?: number;
+}
+
+/**
+ * Transforms a subset of mesh vertices around `pivot` (defaults to their centroid).
+ * Order: scale -> rotate -> translate, with optional grid snapping on final positions.
+ */
+export function transformMeshVertices(
+  mesh: PolyMeshData,
+  vertexIndices: ReadonlyArray<number>,
+  opts: VertexTransformOptions
+): PolyMeshData {
+  const out = clonePolyMeshData(mesh);
+  const valid = vertexIndices.filter((vi) => vi >= 0 && vi < out.vertices.length);
+  if (valid.length === 0) return out;
+
+  const pivot = opts.pivot ?? computeVerticesCentroid(out.vertices, valid) ?? [0, 0, 0];
+  const tx = opts.translation?.[0] ?? 0;
+  const ty = opts.translation?.[1] ?? 0;
+  const tz = opts.translation?.[2] ?? 0;
+  const sx = opts.scale?.[0] ?? 1;
+  const sy = opts.scale?.[1] ?? 1;
+  const sz = opts.scale?.[2] ?? 1;
+  const rot = opts.rotationQuat;
+  const snap = opts.snapPx && opts.snapPx > 0 ? opts.snapPx : 0;
+
+  const snapCoord = (v: number): number =>
+    snap > 0 ? cleanZero(Math.round(v / snap) * snap) : cleanZero(v);
+
+  for (const vi of valid) {
+    const orig = out.vertices[vi];
+    let rel: Vec3 = [
+      (orig[0] - pivot[0]) * sx,
+      (orig[1] - pivot[1]) * sy,
+      (orig[2] - pivot[2]) * sz,
+    ];
+    if (rot) {
+      rel = quatRotateVec3(rot, rel);
+    }
+    out.vertices[vi] = [
+      snapCoord(pivot[0] + rel[0] + tx),
+      snapCoord(pivot[1] + rel[1] + ty),
+      snapCoord(pivot[2] + rel[2] + tz),
+    ];
+  }
+
+  return out;
+}
+
+/**
+ * Deletes selected faces, edges (and their incident faces), or vertices (and their incident faces),
+ * compacting unused vertices afterwards.
+ */
+export function deleteSelectedElements(
+  mesh: PolyMeshData,
+  granularity: SelectionGranularity,
+  selectedVertices: ReadonlyArray<number>,
+  selectedEdges: ReadonlyArray<readonly [number, number]>,
+  selectedFaces: ReadonlyArray<string>
+): { mesh: PolyMeshData; deletedFaceCount: number } {
+  const cloned = clonePolyMeshData(mesh);
+  const beforeCount = cloned.faces.length;
+
+  if (granularity === "face") {
+    const faceSet = new Set(selectedFaces);
+    cloned.faces = cloned.faces.filter((f) => !faceSet.has(f.id));
+  } else if (granularity === "vertex") {
+    const vertSet = new Set(selectedVertices);
+    cloned.faces = cloned.faces.filter((f) => !f.verts.some((vi) => vertSet.has(vi)));
+  } else if (granularity === "edge") {
+    const edgeSet = new Set(selectedEdges.map(([a, b]) => canonicalEdgeKey(a, b)));
+    cloned.faces = cloned.faces.filter((f) => {
+      const n = f.verts.length;
+      for (let i = 0; i < n; i++) {
+        if (edgeSet.has(canonicalEdgeKey(f.verts[i], f.verts[(i + 1) % n]))) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  const deletedFaceCount = beforeCount - cloned.faces.length;
+  return {
+    mesh: compactUnusedVertices(cloned),
+    deletedFaceCount,
+  };
+}
+
+/**
+ * Walks an edge loop across quad faces starting from `seedEdge`.
+ * Returns canonical `[min, max]` edges in the loop (always includes `seedEdge`).
+ */
+export function selectEdgeLoop(
+  mesh: PolyMeshData,
+  seedEdge: readonly [number, number]
+): [number, number][] {
+  const normEdge = (a: number, b: number): [number, number] =>
+    a < b ? [a, b] : [b, a];
+  const seed = normEdge(seedEdge[0], seedEdge[1]);
+  const seedKey = canonicalEdgeKey(seed[0], seed[1]);
+
+  const edgeToQuads = new Map<string, PolyFace[]>();
+  for (const face of mesh.faces) {
+    if (face.verts.length !== 4) continue;
+    for (let i = 0; i < 4; i++) {
+      const k = canonicalEdgeKey(face.verts[i], face.verts[(i + 1) % 4]);
+      const list = edgeToQuads.get(k);
+      if (list) list.push(face);
+      else edgeToQuads.set(k, [face]);
+    }
+  }
+
+  const visited = new Set<string>([seedKey]);
+  const result: [number, number][] = [seed];
+
+  const getOppositeEdgeInQuad = (
+    quad: PolyFace,
+    edgeKey: string
+  ): [number, number] | null => {
+    for (let i = 0; i < 4; i++) {
+      const a = quad.verts[i];
+      const b = quad.verts[(i + 1) % 4];
+      if (canonicalEdgeKey(a, b) === edgeKey) {
+        const oa = quad.verts[(i + 2) % 4];
+        const ob = quad.verts[(i + 3) % 4];
+        return normEdge(oa, ob);
+      }
+    }
+    return null;
+  };
+
+  const walk = (startQuad: PolyFace) => {
+    let curKey = seedKey;
+    let curQuad: PolyFace | undefined = startQuad;
+    let safety = mesh.faces.length + 2;
+    while (curQuad && safety-- > 0) {
+      const opp = getOppositeEdgeInQuad(curQuad, curKey);
+      if (!opp) break;
+      const oppKey = canonicalEdgeKey(opp[0], opp[1]);
+      if (visited.has(oppKey)) break;
+      visited.add(oppKey);
+      result.push(opp);
+      const adj = edgeToQuads.get(oppKey) ?? [];
+      curQuad = adj.find((q) => q.id !== curQuad!.id);
+      curKey = oppKey;
+    }
+  };
+
+  const startQuads = edgeToQuads.get(seedKey) ?? [];
+  for (const q of startQuads) {
+    walk(q);
+  }
+
+  return result;
+}
+
+/**
+ * Splits a polygon with >= 3 vertices into valid PolyFaces (3-vert tris and/or 4-vert quads).
+ */
+function emitPolygonAsQuadsAndTris(
+  verts: number[],
+  uvs: Vec2[],
+  template: PolyFace,
+  usedIds: Set<string>,
+  prefix: string,
+  reuseTemplateId: boolean
+): PolyFace[] {
+  const cleanV: number[] = [];
+  const cleanUv: Vec2[] = [];
+  for (let i = 0; i < verts.length; i++) {
+    const v = verts[i];
+    const prev = cleanV[cleanV.length - 1];
+    if (v !== prev) {
+      cleanV.push(v);
+      cleanUv.push(uvs[i] ?? [0, 0]);
+    }
+  }
+  if (cleanV.length > 1 && cleanV[0] === cleanV[cleanV.length - 1]) {
+    cleanV.pop();
+    cleanUv.pop();
+  }
+  if (cleanV.length < 3) return [];
+
+  const makeFace = (fv: number[], fuv: Vec2[], useOrigId: boolean): PolyFace => ({
+    id: useOrigId ? template.id : allocateUniqueFaceId(prefix, usedIds),
+    verts: fv,
+    uvs: fuv.map((u) => cleanVec2(u)),
+    materialId: template.materialId,
+    flatShading: template.flatShading ?? true,
+    ...(fv.length === 4 ? { triSplit: template.triSplit ?? "02" } : {}),
+  });
+
+  if (cleanV.length === 3 || cleanV.length === 4) {
+    return [makeFace(cleanV, cleanUv, reuseTemplateId)];
+  }
+
+  const out: PolyFace[] = [];
+  let idx = 1;
+  while (idx < cleanV.length - 1) {
+    const remaining = cleanV.length - idx;
+    if (remaining >= 3) {
+      out.push(
+        makeFace(
+          [cleanV[0], cleanV[idx], cleanV[idx + 1], cleanV[idx + 2]],
+          [cleanUv[0], cleanUv[idx], cleanUv[idx + 1], cleanUv[idx + 2]],
+          reuseTemplateId && out.length === 0
+        )
+      );
+      idx += 2;
+    } else {
+      out.push(
+        makeFace(
+          [cleanV[0], cleanV[idx], cleanV[idx + 1]],
+          [cleanUv[0], cleanUv[idx], cleanUv[idx + 1]],
+          reuseTemplateId && out.length === 0
+        )
+      );
+      idx += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Bevels (chamfers) the selected edges by `widthPx` (clamped safely to 45% of adjacent edge lengths).
+ * Produces valid 3/4-vertex faces with interpolated UVs.
+ */
+export function bevelEdges(
+  mesh: PolyMeshData,
+  edges: ReadonlyArray<readonly [number, number]>,
+  widthPx: number
+): { mesh: PolyMeshData; bevelFaceIds: string[] } {
+  const safeWidth = Number.isFinite(widthPx) ? Math.max(0, widthPx) : 0;
+  if (safeWidth <= 1e-6 || edges.length === 0) {
+    return { mesh: clonePolyMeshData(mesh), bevelFaceIds: [] };
+  }
+
+  const current = clonePolyMeshData(mesh);
+  const bevelFaceIds: string[] = [];
+
+  const uniqueEdges: [number, number][] = [];
+  const seen = new Set<string>();
+  for (const [a, b] of edges) {
+    if (a === b || a < 0 || b < 0 || a >= current.vertices.length || b >= current.vertices.length) {
+      continue;
+    }
+    const k = canonicalEdgeKey(a, b);
+    if (!seen.has(k)) {
+      seen.add(k);
+      uniqueEdges.push(a < b ? [a, b] : [b, a]);
+    }
+  }
+
+  const usedIds = collectUsedFaceIds(current.faces);
+
+  for (const [ea, eb] of uniqueEdges) {
+    const eKey = canonicalEdgeKey(ea, eb);
+    const incidentFaces: Array<{ faceIdx: number; aPos: number; bPos: number; forward: boolean }> = [];
+
+    for (let fi = 0; fi < current.faces.length; fi++) {
+      const f = current.faces[fi];
+      const n = f.verts.length;
+      for (let i = 0; i < n; i++) {
+        const v0 = f.verts[i];
+        const v1 = f.verts[(i + 1) % n];
+        if (canonicalEdgeKey(v0, v1) === eKey) {
+          incidentFaces.push({
+            faceIdx: fi,
+            aPos: v0 === ea ? i : (i + 1) % n,
+            bPos: v0 === eb ? i : (i + 1) % n,
+            forward: v0 === ea && v1 === eb,
+          });
+          break;
+        }
+      }
+    }
+
+    if (incidentFaces.length !== 2) continue;
+
+    const [inc0, inc1] = incidentFaces;
+    const f0 = current.faces[inc0.faceIdx];
+    const f1 = current.faces[inc1.faceIdx];
+
+    const moveAlongFace = (
+      face: PolyFace,
+      vPos: number,
+      otherVert: number
+    ): { newVertIdx: number; newUv: Vec2 } => {
+      const n = face.verts.length;
+      const vIdx = face.verts[vPos];
+      const prevIdx = face.verts[(vPos - 1 + n) % n];
+      const neighborPos = prevIdx === otherVert ? (vPos + 1) % n : (vPos - 1 + n) % n;
+      const neighborVert = face.verts[neighborPos];
+      const p0 = current.vertices[vIdx];
+      const p1 = current.vertices[neighborVert];
+      const len = vec3Length(vec3Sub(p1, p0));
+      const t = len > 1e-6 ? Math.min(0.45, safeWidth / len) : 0;
+      const newPos = cleanVec3(lerpVec3(p0, p1, t));
+      const newVertIdx = current.vertices.length;
+      current.vertices.push(newPos);
+      const uv0 = face.uvs[vPos] ?? [0, 0];
+      const uv1 = face.uvs[neighborPos] ?? uv0;
+      return { newVertIdx, newUv: cleanVec2(lerpVec2(uv0, uv1, t)) };
+    };
+
+    const a0 = moveAlongFace(f0, inc0.aPos, eb);
+    const b0 = moveAlongFace(f0, inc0.bPos, ea);
+    const a1 = moveAlongFace(f1, inc1.aPos, eb);
+    const b1 = moveAlongFace(f1, inc1.bPos, ea);
+
+    f0.verts[inc0.aPos] = a0.newVertIdx;
+    f0.uvs[inc0.aPos] = a0.newUv;
+    f0.verts[inc0.bPos] = b0.newVertIdx;
+    f0.uvs[inc0.bPos] = b0.newUv;
+
+    f1.verts[inc1.aPos] = a1.newVertIdx;
+    f1.uvs[inc1.aPos] = a1.newUv;
+    f1.verts[inc1.bPos] = b1.newVertIdx;
+    f1.uvs[inc1.bPos] = b1.newUv;
+
+    const nextFaces: PolyFace[] = [];
+    for (let fi = 0; fi < current.faces.length; fi++) {
+      const f = current.faces[fi];
+      if (fi === inc0.faceIdx || fi === inc1.faceIdx) {
+        nextFaces.push(f);
+        continue;
+      }
+      const touchesA = f.verts.includes(ea);
+      const touchesB = f.verts.includes(eb);
+      if (!touchesA && !touchesB) {
+        nextFaces.push(f);
+        continue;
+      }
+
+      const newVerts: number[] = [];
+      const newUvs: Vec2[] = [];
+      const n = f.verts.length;
+      for (let i = 0; i < n; i++) {
+        const vi = f.verts[i];
+        const uvi = f.uvs[i] ?? [0, 0];
+        if (vi === ea || vi === eb) {
+          const prevV = f.verts[(i - 1 + n) % n];
+          const nextV = f.verts[(i + 1) % n];
+          const c0 = vi === ea ? a0.newVertIdx : b0.newVertIdx;
+          const c1 = vi === ea ? a1.newVertIdx : b1.newVertIdx;
+          const pPrev = current.vertices[prevV];
+          const pNext = current.vertices[nextV];
+          const pc0 = current.vertices[c0];
+          const pc1 = current.vertices[c1];
+          const d0Prev = vec3Length(vec3Sub(pc0, pPrev)) + vec3Length(vec3Sub(pc1, pNext));
+          const d1Prev = vec3Length(vec3Sub(pc1, pPrev)) + vec3Length(vec3Sub(pc0, pNext));
+          if (d0Prev <= d1Prev) {
+            newVerts.push(c0, c1);
+          } else {
+            newVerts.push(c1, c0);
+          }
+          newUvs.push(uvi, uvi);
+        } else {
+          newVerts.push(vi);
+          newUvs.push(uvi);
+        }
+      }
+      nextFaces.push(...emitPolygonAsQuadsAndTris(newVerts, newUvs, f, usedIds, "bevel-cap", true));
+    }
+
+    const bevelId = allocateUniqueFaceId("bevel", usedIds);
+    const bevelVerts = inc0.forward
+      ? [a0.newVertIdx, b0.newVertIdx, b1.newVertIdx, a1.newVertIdx]
+      : [b0.newVertIdx, a0.newVertIdx, a1.newVertIdx, b1.newVertIdx];
+    const bevelUvs: Vec2[] = inc0.forward
+      ? [a0.newUv, b0.newUv, b1.newUv, a1.newUv]
+      : [b0.newUv, a0.newUv, a1.newUv, b1.newUv];
+
+    const bevelFace: PolyFace = {
+      id: bevelId,
+      verts: bevelVerts,
+      uvs: bevelUvs,
+      triSplit: "02",
+      flatShading: true,
+      materialId: f0.materialId,
+    };
+
+    const n0 = computeFaceNormal(current.vertices, f0);
+    const n1 = computeFaceNormal(current.vertices, f1);
+    const avgN = vec3Add(n0, n1);
+    const bn = computeFaceNormal(current.vertices, bevelFace);
+    if (vec3Dot(bn, avgN) < 0) {
+      nextFaces.push(reverseFaceKeepingAnchor(bevelFace));
+    } else {
+      nextFaces.push(bevelFace);
+    }
+    bevelFaceIds.push(bevelId);
+    current.faces = nextFaces;
+  }
+
+  return { mesh: compactUnusedVertices(current), bevelFaceIds };
+}
+
+/**
+ * Bevels (truncates) selected vertices by `widthPx`, creating a chamfer cap at each corner.
+ */
+export function bevelVertices(
+  mesh: PolyMeshData,
+  vertexIndices: ReadonlyArray<number>,
+  widthPx: number
+): { mesh: PolyMeshData; bevelFaceIds: string[] } {
+  const safeWidth = Number.isFinite(widthPx) ? Math.max(0, widthPx) : 0;
+  if (safeWidth <= 1e-6 || vertexIndices.length === 0) {
+    return { mesh: clonePolyMeshData(mesh), bevelFaceIds: [] };
+  }
+
+  const current = clonePolyMeshData(mesh);
+  const usedIds = collectUsedFaceIds(current.faces);
+  const bevelFaceIds: string[] = [];
+
+  const uniqueVerts = Array.from(
+    new Set(vertexIndices.filter((vi) => vi >= 0 && vi < current.vertices.length))
+  );
+
+  for (const vIdx of uniqueVerts) {
+    const vPos = current.vertices[vIdx];
+    const edgeVertMap = new Map<number, number>();
+    const incidentFaces = current.faces.filter((f) => f.verts.includes(vIdx));
+    if (incidentFaces.length < 3) continue;
+
+    for (const f of incidentFaces) {
+      const n = f.verts.length;
+      const pos = f.verts.indexOf(vIdx);
+      const prevV = f.verts[(pos - 1 + n) % n];
+      const nextV = f.verts[(pos + 1) % n];
+      for (const nb of [prevV, nextV]) {
+        if (!edgeVertMap.has(nb)) {
+          const pNb = current.vertices[nb];
+          const len = vec3Length(vec3Sub(pNb, vPos));
+          const t = len > 1e-6 ? Math.min(0.45, safeWidth / len) : 0;
+          const newIdx = current.vertices.length;
+          current.vertices.push(cleanVec3(lerpVec3(vPos, pNb, t)));
+          edgeVertMap.set(nb, newIdx);
+        }
+      }
+    }
+
+    const nextFaces: PolyFace[] = [];
+    const capEdges: Array<[number, number]> = [];
+    let avgNormal: Vec3 = [0, 0, 0];
+
+    for (const f of current.faces) {
+      const pos = f.verts.indexOf(vIdx);
+      if (pos < 0) {
+        nextFaces.push(f);
+        continue;
+      }
+      avgNormal = vec3Add(avgNormal, computeFaceNormal(current.vertices, f));
+      const n = f.verts.length;
+      const prevV = f.verts[(pos - 1 + n) % n];
+      const nextV = f.verts[(pos + 1) % n];
+      const sPrev = edgeVertMap.get(prevV)!;
+      const sNext = edgeVertMap.get(nextV)!;
+      capEdges.push([sNext, sPrev]);
+
+      const newVerts: number[] = [];
+      const newUvs: Vec2[] = [];
+      for (let i = 0; i < n; i++) {
+        if (i === pos) {
+          const uvCenter = f.uvs[pos] ?? [0, 0];
+          const uvPrev = f.uvs[(pos - 1 + n) % n] ?? uvCenter;
+          const uvNext = f.uvs[(pos + 1) % n] ?? uvCenter;
+          newVerts.push(sPrev, sNext);
+          newUvs.push(
+            cleanVec2(lerpVec2(uvCenter, uvPrev, 0.25)),
+            cleanVec2(lerpVec2(uvCenter, uvNext, 0.25))
+          );
+        } else {
+          newVerts.push(f.verts[i]);
+          newUvs.push(f.uvs[i] ?? [0, 0]);
+        }
+      }
+      nextFaces.push(...emitPolygonAsQuadsAndTris(newVerts, newUvs, f, usedIds, "vbevel", true));
+    }
+
+    const nextMap = new Map<number, number>();
+    for (const [a, b] of capEdges) nextMap.set(a, b);
+    const loopVerts: number[] = [];
+    if (capEdges.length > 0) {
+      let cur = capEdges[0][0];
+      const seenLoop = new Set<number>();
+      while (!seenLoop.has(cur) && loopVerts.length <= capEdges.length) {
+        seenLoop.add(cur);
+        loopVerts.push(cur);
+        const nxt = nextMap.get(cur);
+        if (nxt === undefined) break;
+        cur = nxt;
+      }
+    }
+
+    if (loopVerts.length >= 3) {
+      const capUvs: Vec2[] = loopVerts.map((_, i) => [
+        i % 2 === 0 ? 0 : 4,
+        i >= 2 ? 4 : 0,
+      ]);
+      const template = incidentFaces[0];
+      const capFaces = emitPolygonAsQuadsAndTris(
+        loopVerts,
+        capUvs,
+        template,
+        usedIds,
+        "vbevel-cap",
+        false
+      );
+      for (const cf of capFaces) {
+        const cn = computeFaceNormal(current.vertices, cf);
+        const finalCf = vec3Dot(cn, avgNormal) < 0 ? reverseFaceKeepingAnchor(cf) : cf;
+        nextFaces.push(finalCf);
+        bevelFaceIds.push(finalCf.id);
+      }
+    }
+
+    current.faces = nextFaces;
+  }
+
+  return { mesh: compactUnusedVertices(current), bevelFaceIds };
+}
+
+/**
+ * Fills 3–4 selected vertices into a new face, or bridges 2 selected edges into a quad face.
+ */
+export function fillOrBridgeSelection(
+  mesh: PolyMeshData,
+  granularity: SelectionGranularity,
+  selectedVertices: ReadonlyArray<number>,
+  selectedEdges: ReadonlyArray<readonly [number, number]>,
+  materialId: string
+): { mesh: PolyMeshData; createdFaceIds: string[] } {
+  const out = clonePolyMeshData(mesh);
+  const usedIds = collectUsedFaceIds(out.faces);
+  const maxV = out.vertices.length;
+
+  let quadOrTri: number[] | null = null;
+
+  if (granularity === "edge" && selectedEdges.length === 2) {
+    const [a0, b0] = selectedEdges[0];
+    const [a1, b1] = selectedEdges[1];
+    const uniq = new Set([a0, b0, a1, b1]);
+    if (
+      uniq.size === 4 &&
+      a0 >= 0 && a0 < maxV && b0 >= 0 && b0 < maxV &&
+      a1 >= 0 && a1 < maxV && b1 >= 0 && b1 < maxV
+    ) {
+      const dir0 = vec3Sub(out.vertices[b0], out.vertices[a0]);
+      const dir1 = vec3Sub(out.vertices[b1], out.vertices[a1]);
+      quadOrTri = vec3Dot(dir0, dir1) >= 0 ? [a0, b0, b1, a1] : [a0, b0, a1, b1];
+    }
+  } else if (granularity === "vertex") {
+    const uniq = Array.from(
+      new Set(selectedVertices.filter((vi) => vi >= 0 && vi < maxV))
+    );
+    if (uniq.length === 3) {
+      quadOrTri = uniq;
+    } else if (uniq.length === 4) {
+      const centroid = computeVerticesCentroid(out.vertices, uniq) ?? [0, 0, 0];
+      const p0 = vec3Sub(out.vertices[uniq[0]], centroid);
+      const p1 = vec3Sub(out.vertices[uniq[1]], centroid);
+      const p2 = vec3Sub(out.vertices[uniq[2]], centroid);
+      let normal = vec3Normalize(vec3Cross(vec3Sub(p1, p0), vec3Sub(p2, p0)));
+      if (vec3Length(normal) < 1e-6) normal = [0, 1, 0];
+      const uAxis = vec3Normalize(p0);
+      const vAxis = vec3Normalize(vec3Cross(normal, uAxis));
+      quadOrTri = [...uniq].sort((ia, ib) => {
+        const ra = vec3Sub(out.vertices[ia], centroid);
+        const rb = vec3Sub(out.vertices[ib], centroid);
+        const angA = Math.atan2(vec3Dot(ra, vAxis), vec3Dot(ra, uAxis));
+        const angB = Math.atan2(vec3Dot(rb, vAxis), vec3Dot(rb, uAxis));
+        return angA - angB;
+      });
+    }
+  }
+
+  if (!quadOrTri) {
+    return { mesh: out, createdFaceIds: [] };
+  }
+
+  const faceId = allocateUniqueFaceId("fill", usedIds);
+  const defaultUvs: Vec2[] =
+    quadOrTri.length === 4
+      ? [[0, 0], [16, 0], [16, 16], [0, 16]]
+      : [[0, 0], [16, 0], [8, 16]];
+
+  out.faces.push({
+    id: faceId,
+    verts: quadOrTri,
+    uvs: defaultUvs,
+    ...(quadOrTri.length === 4 ? { triSplit: "02" as const } : {}),
+    flatShading: true,
+    materialId,
+  });
+
+  return { mesh: out, createdFaceIds: [faceId] };
+}
+
+/**
+ * Separates selected faces of a mesh node into a new sibling mesh node.
+ */
+export function separateSelectedFaces(
+  node: ModelNode,
+  faceIds: ReadonlyArray<string>,
+  newNodeId: string
+): { remaining: ModelNode; separated: ModelNode | null } {
+  if (node.kind !== "mesh" || !node.mesh || faceIds.length === 0) {
+    return { remaining: cloneModelNode(node), separated: null };
+  }
+  const faceSet = new Set(faceIds);
+  const keptFaces = node.mesh.faces.filter((f) => !faceSet.has(f.id));
+  const movedFaces = node.mesh.faces.filter((f) => faceSet.has(f.id));
+  if (movedFaces.length === 0) {
+    return { remaining: cloneModelNode(node), separated: null };
+  }
+
+  const remaining = cloneModelNode(node);
+  remaining.mesh = compactUnusedVertices({
+    vertices: node.mesh.vertices.map((v): Vec3 => [v[0], v[1], v[2]]),
+    faces: keptFaces.map(clonePolyFace),
+  });
+
+  const separated = cloneModelNode(node);
+  separated.id = newNodeId;
+  separated.name = `${node.name} (Part)`;
+  separated.mesh = compactUnusedVertices({
+    vertices: node.mesh.vertices.map((v): Vec3 => [v[0], v[1], v[2]]),
+    faces: movedFaces.map(clonePolyFace),
+  });
+
+  return { remaining, separated };
+}
+
+function nodeLocalPointToWorld(pt: Vec3, tr: Transform3D): Vec3 {
+  const rel: Vec3 = [
+    (pt[0] - tr.pivot[0]) * tr.scale[0],
+    (pt[1] - tr.pivot[1]) * tr.scale[1],
+    (pt[2] - tr.pivot[2]) * tr.scale[2],
+  ];
+  const q = eulerDegToQuat(tr.rotation);
+  const rotated = quatRotateVec3(q, rel);
+  return [
+    rotated[0] + tr.pivot[0] + tr.position[0],
+    rotated[1] + tr.pivot[1] + tr.position[1],
+    rotated[2] + tr.pivot[2] + tr.position[2],
+  ];
+}
+
+function worldPointToNodeLocal(pt: Vec3, tr: Transform3D): Vec3 {
+  const shifted: Vec3 = [
+    pt[0] - tr.pivot[0] - tr.position[0],
+    pt[1] - tr.pivot[1] - tr.position[1],
+    pt[2] - tr.pivot[2] - tr.position[2],
+  ];
+  const q = eulerDegToQuat(tr.rotation);
+  const invQ: Quat = [-q[0], -q[1], -q[2], q[3]];
+  const unrot = quatRotateVec3(invQ, shifted);
+  const sx = Math.abs(tr.scale[0]) > 1e-6 ? tr.scale[0] : 1;
+  const sy = Math.abs(tr.scale[1]) > 1e-6 ? tr.scale[1] : 1;
+  const sz = Math.abs(tr.scale[2]) > 1e-6 ? tr.scale[2] : 1;
+  return cleanVec3([
+    unrot[0] / sx + tr.pivot[0],
+    unrot[1] / sy + tr.pivot[1],
+    unrot[2] / sz + tr.pivot[2],
+  ]);
+}
+
+/**
+ * Joins multiple mesh/cuboid nodes into `targetNodeId`'s local space as a single PolyMeshData node.
+ */
+export function joinMeshNodes(
+  nodes: ReadonlyArray<ModelNode>,
+  targetNodeId: string
+): ModelNode | null {
+  const targetOrig = nodes.find((n) => n.id === targetNodeId);
+  if (!targetOrig) return null;
+
+  const target =
+    targetOrig.kind === "cuboid"
+      ? convertNodeCuboidToMesh(targetOrig)
+      : cloneModelNode(targetOrig);
+  if (target.kind !== "mesh" || !target.mesh) return null;
+
+  const usedIds = collectUsedFaceIds(target.mesh.faces);
+  const mergedVerts = target.mesh.vertices.map((v): Vec3 => [v[0], v[1], v[2]]);
+  const mergedFaces = target.mesh.faces.map(clonePolyFace);
+
+  for (const src of nodes) {
+    if (src.id === targetNodeId) continue;
+    const srcMesh =
+      src.kind === "cuboid" && src.cuboid
+        ? convertCuboidToMesh(src.cuboid)
+        : src.kind === "mesh" && src.mesh
+        ? src.mesh
+        : null;
+    if (!srcMesh) continue;
+
+    const baseOffset = mergedVerts.length;
+    for (const v of srcMesh.vertices) {
+      const worldPt = nodeLocalPointToWorld(v, src.transform);
+      mergedVerts.push(worldPointToNodeLocal(worldPt, target.transform));
+    }
+    for (const f of srcMesh.faces) {
+      const clonedF = clonePolyFace(f);
+      clonedF.id = usedIds.has(clonedF.id)
+        ? allocateUniqueFaceId("join", usedIds)
+        : (usedIds.add(clonedF.id), clonedF.id);
+      clonedF.verts = clonedF.verts.map((vi) => vi + baseOffset);
+      mergedFaces.push(clonedF);
+    }
+  }
+
+  target.mesh = { vertices: mergedVerts, faces: mergedFaces };
+  return target;
 }

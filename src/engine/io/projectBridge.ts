@@ -28,6 +28,11 @@ import {
   deserializeModel3DScene,
   serializeModel3DScene,
 } from "../model3d/serialization.ts";
+import {
+  deserializeNodesExt,
+  serializeNodesExt,
+} from "../nodes/NodeGraph.ts";
+import { getNodeEvaluator } from "../nodes/nodeActions.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
 export type PackMode = "grid" | "tight";
@@ -136,6 +141,7 @@ interface RustDocument {
   rig?: unknown;
   game_data?: unknown;
   model3d_ext?: unknown;
+  nodes_ext?: unknown;
 }
 
 export interface ProjectTransfer {
@@ -380,6 +386,10 @@ export function serializeProjectTransfer(): ProjectTransfer {
     model3d_ext: pixelEngine.model3d.isEmptyDefault()
       ? undefined
       : serializeModel3DScene(pixelEngine.model3d.toSnapshot()),
+    nodes_ext:
+      pixelEngine.nodes.graphs.length > 0
+        ? serializeNodesExt(pixelEngine.nodes)
+        : undefined,
   };
 
   return { document, cels: celsMap, tiles };
@@ -407,6 +417,14 @@ export function hydrateProjectTransfer(
     pixelEngine.model3d.reset();
   }
   pixelEngine.model3dHistory.clear();
+
+  if (doc.nodes_ext !== undefined) {
+    pixelEngine.nodes.loadFromExt(deserializeNodesExt(doc.nodes_ext));
+  } else {
+    pixelEngine.nodes.reset();
+  }
+  pixelEngine.nodesHistory.clear();
+  getNodeEvaluator().markAllDirty();
 
   for (const [key, b64] of Object.entries(transfer.cels)) {
     const raw = base64ToBytes(b64);

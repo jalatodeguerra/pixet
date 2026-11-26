@@ -49,6 +49,8 @@ import { renderRigMesh } from "../rig/mesh.ts";
 import { GameDataState } from "../gamedev/GameDataEngine.ts";
 import { Model3DEngine } from "../model3d/Model3DEngine.ts";
 import { Model3DHistory } from "../model3d/Model3DHistory.ts";
+import { NodeGraphManager } from "../nodes/NodeGraph.ts";
+import { NodeHistory } from "../nodes/NodeHistory.ts";
 import {
   type LayerMapRole,
   type Light2DOptions,
@@ -169,9 +171,11 @@ export class PixelEngine {
   readonly rig = new RigState();
   readonly gameData = new GameDataState();
   readonly model3d = new Model3DEngine();
+  readonly nodes = new NodeGraphManager();
   readonly history = new TileHistory(100);
   readonly tilemapHistory = new TilemapHistory(100, 50);
   readonly model3dHistory = new Model3DHistory(100);
+  readonly nodesHistory = new NodeHistory(100);
   readonly undoCoordinator = new UndoCoordinator(200);
 
   get tileset(): Tileset {
@@ -228,9 +232,11 @@ export class PixelEngine {
     this.rig.reset();
     this.gameData.reset();
     this.model3d.reset();
+    this.nodes.reset();
     this.history.clear();
     this.tilemapHistory.clear();
     this.model3dHistory.clear();
+    this.nodesHistory.clear();
     this.undoCoordinator.clear();
     this.rigDeformCache.clear();
     this.selection = null;

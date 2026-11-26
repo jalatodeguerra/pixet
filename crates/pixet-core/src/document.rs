@@ -158,6 +158,8 @@ pub struct Document {
     pub game_data: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model3d_ext: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes_ext: Option<serde_json::Value>,
 }
 
 impl Document {
@@ -231,6 +233,7 @@ impl Document {
             rig: None,
             game_data: None,
             model3d_ext: None,
+            nodes_ext: None,
         }
     }
 
@@ -390,5 +393,28 @@ mod tests {
         let json = doc.to_json_pretty().expect("serialize with model3d_ext");
         let parsed = Document::from_json(&json).expect("deserialize with model3d_ext");
         assert_eq!(parsed.model3d_ext, doc.model3d_ext);
+    }
+
+    #[test]
+    fn nodes_ext_round_trip_and_legacy_compat() {
+        let mut doc = Document::new_default(32, 32);
+        assert_eq!(doc.nodes_ext, None);
+
+        let empty_val = serde_json::to_value(&doc).expect("to_value");
+        assert!(empty_val.get("nodes_ext").is_none());
+
+        let parsed_omitted =
+            Document::from_json(&serde_json::to_string(&empty_val).expect("to_string"))
+                .expect("parse omitted nodes_ext");
+        assert_eq!(parsed_omitted.nodes_ext, None);
+
+        doc.nodes_ext = Some(serde_json::json!({
+            "schemaVersion": 1,
+            "activeGraphId": "g1",
+            "graphs": [{ "id": "g1", "name": "Bricks", "kind": "material", "baseResolution": 128 }]
+        }));
+        let json = doc.to_json_pretty().expect("serialize with nodes_ext");
+        let parsed = Document::from_json(&json).expect("deserialize with nodes_ext");
+        assert_eq!(parsed.nodes_ext, doc.nodes_ext);
     }
 }

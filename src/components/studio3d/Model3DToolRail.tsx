@@ -32,6 +32,7 @@ import {
 } from "../../engine/model3d/animEval";
 import {
   cullInternalCoplanarFaces,
+  deleteSelectedElements,
   mirrorNode,
 } from "../../engine/model3d/meshOps";
 import { mutateModel3D } from "../../engine/model3d/model3dActions";
@@ -410,10 +411,47 @@ export function Model3DToolRail() {
       <button
         type="button"
         className="tool-btn"
-        title="Delete Selected Nodes (Delete)"
+        title={
+          granularity !== "object" && activeNode?.kind === "mesh"
+            ? "Delete Selected Elements (Delete)"
+            : "Delete Selected Nodes (Delete)"
+        }
         disabled={!hasSelected}
         onClick={() => {
-          const ids = [...pixelEngine.model3d.selectedNodeIds];
+          const engNow = pixelEngine.model3d;
+          const gran = engNow.selectionGranularity;
+          const curNode = engNow.activeNodeId ? engNow.getNode(engNow.activeNodeId) : undefined;
+          if (
+            gran !== "object" &&
+            curNode &&
+            !curNode.locked &&
+            curNode.kind === "mesh" &&
+            curNode.mesh
+          ) {
+            const selVerts = engNow.selectedVertices[curNode.id] ?? [];
+            const selEdges = engNow.selectedEdges[curNode.id] ?? [];
+            const selFaces = engNow.selectedFaces[curNode.id] ?? [];
+            const hasSubSel =
+              (gran === "vertex" && selVerts.length > 0) ||
+              (gran === "edge" && selEdges.length > 0) ||
+              (gran === "face" && selFaces.length > 0);
+            if (hasSubSel) {
+              let deletedCount = 0;
+              mutateModel3D("Delete Mesh Elements", (eng) => {
+                const n = eng.getNode(curNode.id);
+                if (!n || n.kind !== "mesh" || !n.mesh) return;
+                const res = deleteSelectedElements(n.mesh, gran, selVerts, selEdges, selFaces);
+                deletedCount = res.deletedFaceCount;
+                eng.updateNode(curNode.id, { mesh: res.mesh });
+                eng.selectedVertices[curNode.id] = [];
+                eng.selectedEdges[curNode.id] = [];
+                eng.selectedFaces[curNode.id] = [];
+              });
+              setStatusMessage(`Deleted ${deletedCount} face(s)`);
+              return;
+            }
+          }
+          const ids = [...engNow.selectedNodeIds];
           if (ids.length === 0) return;
           mutateModel3D("Delete Selected Nodes", (eng) => {
             eng.deleteNodes(ids);

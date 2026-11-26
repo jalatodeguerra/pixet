@@ -40,6 +40,7 @@ import {
   type TransformAlgorithm,
 } from "../store/editorStore";
 import { RigToolOptionsBar } from "./rig/RigToolOptionsBar";
+import { NodesToolOptionsBar } from "./nodes/NodesToolOptionsBar";
 import { Studio3DToolOptionsBar } from "./studio3d/Studio3DToolOptionsBar";
 import { TileToolOptionsBar } from "./tiles/TileToolOptionsBar";
 
@@ -177,6 +178,10 @@ export function ToolOptionsBar() {
   const effectiveAxisY = symmetryAxisY ?? symCenterY;
   const symAxisShifted =
     symmetryAxisX !== null || symmetryAxisY !== null;
+
+  if (workspaceMode === "nodes") {
+    return <NodesToolOptionsBar />;
+  }
 
   if (workspaceMode === "studio3d") {
     return <Studio3DToolOptionsBar />;

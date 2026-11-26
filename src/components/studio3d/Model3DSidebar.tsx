@@ -29,15 +29,22 @@ import {
   recordNodeTransformKeyframes,
 } from "../../engine/model3d/animEval";
 import {
+  bevelEdges,
+  bevelVertices,
   convertNodeCuboidToMesh,
   cullInternalCoplanarFaces,
+  deleteSelectedElements,
   extrudeFaces,
+  fillOrBridgeSelection,
   flipFaceNormals,
   flipQuadDiagonal,
   insetFaces,
+  joinMeshNodes,
   mergeVertices,
   mirrorNode,
   recalculateOutwardNormals,
+  selectEdgeLoop,
+  separateSelectedFaces,
   subdivideFacesOrLoopCut,
   weldVerticesByDistance,
 } from "../../engine/model3d/meshOps";
@@ -251,6 +258,7 @@ export function Model3DSidebar() {
 
   // Model mesh-ops state
   const [extrudeDistPx, setExtrudeDistPx] = useState(4);
+  const [bevelWidthPx, setBevelWidthPx] = useState(1);
   const [insetPx, setInsetPx] = useState(2);
   const [insetDepthPx, setInsetDepthPx] = useState(0);
   const [weldDistPx, setWeldDistPx] = useState(0.01);
@@ -1391,6 +1399,248 @@ export function Model3DSidebar() {
                   Recalc Outward
                 </button>
               </div>
+
+              <div className="m3d-inline-pair" style={{ alignItems: "end" }}>
+                <label className="m3d-field-label">
+                  <span>Bevel (px)</span>
+                  <input
+                    type="number"
+                    step={0.25}
+                    min={0.1}
+                    className="m3d-num-input"
+                    value={bevelWidthPx}
+                    onChange={(e) =>
+                      setBevelWidthPx(Math.max(0.1, Number(e.target.value) || 0.5))
+                    }
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="m3d-btn-compact"
+                  style={{ height: 24 }}
+                  disabled={
+                    engine.selectionGranularity === "edge"
+                      ? (engine.selectedEdges[activeNode.id]?.length ?? 0) === 0
+                      : engine.selectionGranularity === "vertex"
+                      ? (engine.selectedVertices[activeNode.id]?.length ?? 0) === 0
+                      : true
+                  }
+                  title="Select edges (3) or vertices (2) to bevel"
+                  onClick={() => {
+                    const gran = engine.selectionGranularity;
+                    const nodeId = activeNode.id;
+                    if (gran === "edge") {
+                      const selEdges = engine.selectedEdges[nodeId] ?? [];
+                      if (selEdges.length === 0) return;
+                      mutateModel3D("Bevel Edges", (eng) => {
+                        const n = eng.getNode(nodeId);
+                        if (!n || n.kind !== "mesh" || !n.mesh) return;
+                        const res = bevelEdges(n.mesh, selEdges, bevelWidthPx);
+                        eng.updateNode(nodeId, { mesh: res.mesh });
+                        eng.selectedEdges[nodeId] = [];
+                        eng.setSelectionGranularity("face");
+                        eng.selectedFaces[nodeId] = res.bevelFaceIds;
+                      });
+                    } else if (gran === "vertex") {
+                      const selVerts = engine.selectedVertices[nodeId] ?? [];
+                      if (selVerts.length === 0) return;
+                      mutateModel3D("Bevel Vertices", (eng) => {
+                        const n = eng.getNode(nodeId);
+                        if (!n || n.kind !== "mesh" || !n.mesh) return;
+                        const res = bevelVertices(n.mesh, selVerts, bevelWidthPx);
+                        eng.updateNode(nodeId, { mesh: res.mesh });
+                        eng.selectedVertices[nodeId] = [];
+                        eng.setSelectionGranularity("face");
+                        eng.selectedFaces[nodeId] = res.bevelFaceIds;
+                      });
+                    }
+                  }}
+                >
+                  Bevel
+                </button>
+              </div>
+
+              <div className="m3d-btn-grid-2">
+                <button
+                  type="button"
+                  className="m3d-btn-compact"
+                  title="Extrude selected faces and switch gizmo to Move (Shift+E)"
+                  disabled={(engine.selectedFaces[activeNode.id]?.length ?? 0) === 0}
+                  onClick={() => {
+                    const nodeId = activeNode.id;
+                    const selFaces = engine.selectedFaces[nodeId] ?? [];
+                    if (selFaces.length === 0) return;
+                    const dist = Math.max(0.25, studio3d.snapPx || 1);
+                    mutateModel3D("Quick Extrude Faces", (eng) => {
+                      const n = eng.getNode(nodeId);
+                      if (!n || n.kind !== "mesh" || !n.mesh) return;
+                      const res = extrudeFaces(n.mesh, selFaces, dist);
+                      eng.updateNode(nodeId, { mesh: res.mesh });
+                      eng.setSelectionGranularity("face");
+                      eng.selectedFaces[nodeId] = res.extrudedFaceIds;
+                    });
+                    patchStudio3D({ gizmoMode: "move" });
+                  }}
+                >
+                  Quick Extrude (Shift+E)
+                </button>
+                <button
+                  type="button"
+                  className="m3d-btn-compact"
+                  title="Fill 3-4 vertices or bridge 2 edges (Shift+F)"
+                  disabled={
+                    engine.selectionGranularity === "vertex"
+                      ? (engine.selectedVertices[activeNode.id]?.length ?? 0) < 3
+                      : engine.selectionGranularity === "edge"
+                      ? (engine.selectedEdges[activeNode.id]?.length ?? 0) !== 2
+                      : true
+                  }
+                  onClick={() => {
+                    const nodeId = activeNode.id;
+                    const matId =
+                      activeNode.mesh?.faces[0]?.materialId ??
+                      engine.materials[0]?.id ??
+                      DEFAULT_MODEL3D_MATERIAL_ID;
+                    let created = 0;
+                    mutateModel3D("Fill / Bridge Selection", (eng) => {
+                      const n = eng.getNode(nodeId);
+                      if (!n || n.kind !== "mesh" || !n.mesh) return;
+                      const res = fillOrBridgeSelection(
+                        n.mesh,
+                        eng.selectionGranularity,
+                        eng.selectedVertices[nodeId] ?? [],
+                        eng.selectedEdges[nodeId] ?? [],
+                        matId
+                      );
+                      created = res.createdFaceIds.length;
+                      if (created > 0) {
+                        eng.updateNode(nodeId, { mesh: res.mesh });
+                        eng.setSelectionGranularity("face");
+                        eng.selectedFaces[nodeId] = res.createdFaceIds;
+                      }
+                    });
+                    setStatusMessage(
+                      created > 0 ? "Created face from selection" : "Invalid fill/bridge selection"
+                    );
+                  }}
+                >
+                  Fill / Bridge (Shift+F)
+                </button>
+                <button
+                  type="button"
+                  className="m3d-btn-compact"
+                  title="Expand edge selection along quad loop (or Alt+Click edge)"
+                  disabled={
+                    engine.selectionGranularity !== "edge" ||
+                    (engine.selectedEdges[activeNode.id]?.length ?? 0) === 0
+                  }
+                  onClick={() => {
+                    const nodeId = activeNode.id;
+                    const selEdges = engine.selectedEdges[nodeId] ?? [];
+                    if (selEdges.length === 0 || !activeNode.mesh) return;
+                    const loopSet = new Map<string, [number, number]>();
+                    for (const ed of selEdges) {
+                      for (const le of selectEdgeLoop(activeNode.mesh, ed)) {
+                        loopSet.set(`${le[0]}:${le[1]}`, le);
+                      }
+                    }
+                    engine.selectedEdges[nodeId] = Array.from(loopSet.values());
+                    bumpModel3DVersion();
+                  }}
+                >
+                  Edge Loop (Alt+Click)
+                </button>
+                <button
+                  type="button"
+                  className="m3d-btn-compact"
+                  title="Delete selected vertices, edges, or faces (Delete)"
+                  disabled={
+                    engine.selectionGranularity === "object" ||
+                    (engine.selectionGranularity === "vertex" &&
+                      (engine.selectedVertices[activeNode.id]?.length ?? 0) === 0) ||
+                    (engine.selectionGranularity === "edge" &&
+                      (engine.selectedEdges[activeNode.id]?.length ?? 0) === 0) ||
+                    (engine.selectionGranularity === "face" &&
+                      (engine.selectedFaces[activeNode.id]?.length ?? 0) === 0)
+                  }
+                  onClick={() => {
+                    const nodeId = activeNode.id;
+                    const gran = engine.selectionGranularity;
+                    let deleted = 0;
+                    mutateModel3D("Delete Mesh Elements", (eng) => {
+                      const n = eng.getNode(nodeId);
+                      if (!n || n.kind !== "mesh" || !n.mesh) return;
+                      const res = deleteSelectedElements(
+                        n.mesh,
+                        gran,
+                        eng.selectedVertices[nodeId] ?? [],
+                        eng.selectedEdges[nodeId] ?? [],
+                        eng.selectedFaces[nodeId] ?? []
+                      );
+                      deleted = res.deletedFaceCount;
+                      eng.updateNode(nodeId, { mesh: res.mesh });
+                      eng.selectedVertices[nodeId] = [];
+                      eng.selectedEdges[nodeId] = [];
+                      eng.selectedFaces[nodeId] = [];
+                    });
+                    setStatusMessage(`Deleted ${deleted} face(s)`);
+                  }}
+                >
+                  Delete Elements
+                </button>
+                <button
+                  type="button"
+                  className="m3d-btn-compact"
+                  title="Separate selected faces into a new sibling mesh node"
+                  disabled={(engine.selectedFaces[activeNode.id]?.length ?? 0) === 0}
+                  onClick={() => {
+                    const nodeId = activeNode.id;
+                    const selFaces = engine.selectedFaces[nodeId] ?? [];
+                    if (selFaces.length === 0) return;
+                    let newId = "";
+                    mutateModel3D("Separate Selected Faces", (eng) => {
+                      const n = eng.getNode(nodeId);
+                      if (!n || n.kind !== "mesh" || !n.mesh) return;
+                      newId = `m3d-part-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                      const res = separateSelectedFaces(n, selFaces, newId);
+                      if (!res.separated) return;
+                      eng.updateNode(nodeId, { mesh: res.remaining.mesh });
+                      eng.nodes.push(res.separated);
+                      eng.selectedFaces[nodeId] = [];
+                      eng.selectNodes([newId], newId);
+                    });
+                    if (newId) setStatusMessage("Separated faces into new mesh node");
+                  }}
+                >
+                  Separate Faces
+                </button>
+                <button
+                  type="button"
+                  className="m3d-btn-compact"
+                  title="Join 2+ selected mesh/cuboid nodes into active node"
+                  disabled={engine.selectedNodeIds.length < 2}
+                  onClick={() => {
+                    const selIds = [...engine.selectedNodeIds];
+                    const targetId = activeNode.id;
+                    mutateModel3D("Join Selected Meshes", (eng) => {
+                      const selectedNodes = selIds
+                        .map((id) => eng.getNode(id))
+                        .filter((n): n is ModelNode => Boolean(n && (n.kind === "mesh" || n.kind === "cuboid")));
+                      if (selectedNodes.length < 2) return;
+                      const joined = joinMeshNodes(selectedNodes, targetId);
+                      if (!joined || !joined.mesh) return;
+                      const idx = eng.nodes.findIndex((n) => n.id === targetId);
+                      if (idx >= 0) eng.nodes[idx] = joined;
+                      const removeIds = selectedNodes.filter((n) => n.id !== targetId).map((n) => n.id);
+                      eng.deleteNodes(removeIds);
+                      eng.selectNodes([targetId], targetId);
+                    });
+                    setStatusMessage(`Joined ${selIds.length} nodes into ${activeNode.name}`);
+                  }}
+                >
+                  Join Selected
+                </button>
+              </div>
             </>
           )}
 
@@ -1986,6 +2236,30 @@ export function Model3DSidebar() {
                     {tilesets.map((ts) => (
                       <option key={ts.id} value={ts.id}>
                         {ts.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {activeMaterial.source.kind === "node-graph" && (
+                <label className="m3d-field-label">
+                  <span>Node Graph Source</span>
+                  <select
+                    className="m3d-select"
+                    value={activeMaterial.source.graphId}
+                    onChange={(e) => {
+                      const graphId = e.target.value;
+                      mutateModel3D("Set Material Node Graph", (eng) => {
+                        eng.updateMaterial(activeMaterial.id, {
+                          source: { kind: "node-graph", graphId },
+                        });
+                      });
+                    }}
+                  >
+                    {pixelEngine.nodes.graphs.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
                       </option>
                     ))}
                   </select>

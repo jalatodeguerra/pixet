@@ -12,6 +12,13 @@ import {
   type EvaluatedNodePose,
 } from "../../../engine/model3d/animEval";
 import { mutateModel3D } from "../../../engine/model3d/model3dActions";
+import { clonePolyMeshData } from "../../../engine/model3d/Model3DEngine";
+import {
+  collectAffectedVertexIndices,
+  computeVerticesCentroid,
+  selectEdgeLoop,
+  transformMeshVertices,
+} from "../../../engine/model3d/meshOps";
 import { snapToGrid } from "../../../engine/model3d/quatMath";
 import {
   buildPaddedTilesetAtlas,
@@ -27,6 +34,8 @@ import {
 import type {
   ModelAnimationClip,
   ModelNode,
+  PolyMeshData,
+  Quat,
   TileCursor3D,
   Vec3,
 } from "../../../engine/model3d/types";
@@ -39,6 +48,7 @@ import {
   disposeSyncedObjectTree,
   objectTransformToNodeTransform,
   syncModel3DScene,
+  updateMeshNodeGeometryInPlace,
   type MeshLookupUserData,
 } from "./sceneSync";
 import { threeStudioRuntime } from "./ThreeStudioRuntime";
@@ -613,6 +623,17 @@ export function ThreeViewport() {
   const isGizmoDraggingRef = useRef(false);
   const dragBeforeSnapRef = useRef<string | null>(null);
   const snapTargetsRef = useRef<THREE.Vector3[]>([]);
+  const subElemProxyRef = useRef<THREE.Object3D | null>(null);
+  const subElemDragRef = useRef<{
+    nodeId: string;
+    vertexIndices: number[];
+    baseMesh: PolyMeshData;
+    centroidPx: Vec3;
+    startProxyPos: THREE.Vector3;
+    startProxyQuat: THREE.Quaternion;
+    startProxyScale: THREE.Vector3;
+    nodeObj: THREE.Object3D;
+  } | null>(null);
 
   const isOrthoMode =
     studio3d.gridMode === "isometric" || studio3d.perspective <= 0.001;
@@ -853,6 +874,11 @@ export function ThreeViewport() {
     scene.add(helper);
     transformRef.current = transform;
 
+    const subElemProxy = new THREE.Object3D();
+    subElemProxy.name = "__m3d_subelem_proxy__";
+    scene.add(subElemProxy);
+    subElemProxyRef.current = subElemProxy;
+
     const onDraggingChanged = (event: { value: unknown }) => {
       const dragging = Boolean(event.value);
       isGizmoDraggingRef.current = dragging;
@@ -866,7 +892,37 @@ export function ThreeViewport() {
         snapTargetsRef.current = activeId
           ? collectWorldSnapVertices(engine, [activeId])
           : [];
+        const attached = transform.object;
+        if (attached?.userData?.isSubElemProxy) {
+          const targetNodeId = attached.userData.nodeId as string | undefined;
+          const targetNode = targetNodeId ? engine.getNode(targetNodeId) : undefined;
+          const nodeObj = targetNodeId ? nodeObjectByIdRef.current.get(targetNodeId) : undefined;
+          if (targetNode && targetNode.kind === "mesh" && targetNode.mesh && nodeObj) {
+            const verts = collectAffectedVertexIndices(
+              targetNode.mesh,
+              engine.selectionGranularity,
+              engine.selectedVertices[targetNode.id] ?? [],
+              engine.selectedEdges[targetNode.id] ?? [],
+              engine.selectedFaces[targetNode.id] ?? []
+            );
+            const centroidPx = computeVerticesCentroid(targetNode.mesh.vertices, verts);
+            if (verts.length > 0 && centroidPx) {
+              subElemDragRef.current = {
+                nodeId: targetNode.id,
+                vertexIndices: verts,
+                baseMesh: clonePolyMeshData(targetNode.mesh),
+                centroidPx,
+                startProxyPos: attached.position.clone(),
+                startProxyQuat: attached.quaternion.clone(),
+                startProxyScale: attached.scale.clone(),
+                nodeObj,
+              };
+            }
+          }
+        }
       } else {
+        const wasSubElemDrag = subElemDragRef.current !== null;
+        subElemDragRef.current = null;
         if (snapIndicatorRef.current) {
           snapIndicatorRef.current.visible = false;
         }
@@ -875,6 +931,7 @@ export function ThreeViewport() {
           const st3d = stNow.studio3d;
           const draggedNode = activeId ? engine.getNode(activeId) : undefined;
           if (
+            !wasSubElemDrag &&
             st3d.subMode === "animate" &&
             st3d.autoKey3D &&
             draggedNode &&
@@ -905,18 +962,16 @@ export function ThreeViewport() {
           }
           const afterSnap = pixelEngine.model3dHistory.captureSnapshot(engine);
           if (afterSnap !== dragBeforeSnapRef.current) {
+            const actionLabel = wasSubElemDrag
+              ? "Transform 3D Sub-Elements"
+              : st3d.subMode === "animate" && st3d.autoKey3D
+                ? "Transform & Auto-Key 3D Node"
+                : "Transform 3D Node";
             pixelEngine.model3dHistory.pushUndo(
               dragBeforeSnapRef.current,
-              st3d.subMode === "animate" && st3d.autoKey3D
-                ? "Transform & Auto-Key 3D Node"
-                : "Transform 3D Node"
+              actionLabel
             );
-            pixelEngine.undoCoordinator.record(
-              "model3d",
-              st3d.subMode === "animate" && st3d.autoKey3D
-                ? "Transform & Auto-Key 3D Node"
-                : "Transform 3D Node"
-            );
+            pixelEngine.undoCoordinator.record("model3d", actionLabel);
             stNow.bumpModel3DVersion();
             pixelEngine.emitChange();
             syncHistoryAndCelState();
@@ -931,6 +986,83 @@ export function ThreeViewport() {
     const onObjectChange = () => {
       const attachedObj = transform.object;
       if (!attachedObj) return;
+
+      if (attachedObj.userData?.isSubElemProxy) {
+        const drag = subElemDragRef.current;
+        if (!drag) return;
+        const engine = pixelEngine.model3d;
+        const node = engine.getNode(drag.nodeId);
+        if (!node || node.locked || node.kind !== "mesh" || !node.mesh) return;
+
+        const ppu = Math.max(1, engine.pixelsPerUnit);
+        const stNow = useEditorStore.getState();
+        const snapPx = Math.max(0.05, stNow.studio3d.snapPx || 1);
+
+        drag.nodeObj.updateMatrixWorld(true);
+        const worldQuat = new THREE.Quaternion();
+        const worldScale = new THREE.Vector3();
+        drag.nodeObj.getWorldQuaternion(worldQuat);
+        drag.nodeObj.getWorldScale(worldScale);
+
+        const invNodeQuat = worldQuat.clone().invert();
+        const worldDelta = attachedObj.position.clone().sub(drag.startProxyPos);
+        const localDelta = worldDelta.clone().applyQuaternion(invNodeQuat);
+        const sx = Math.abs(worldScale.x) > 1e-6 ? worldScale.x : 1;
+        const sy = Math.abs(worldScale.y) > 1e-6 ? worldScale.y : 1;
+        const sz = Math.abs(worldScale.z) > 1e-6 ? worldScale.z : 1;
+
+        let tx = (localDelta.x / sx) * ppu;
+        let ty = (localDelta.y / sy) * ppu;
+        let tz = (localDelta.z / sz) * ppu;
+        if (transform.mode === "translate" && !vKeyHeldRef.current) {
+          tx = snapToGrid(tx, snapPx);
+          ty = snapToGrid(ty, snapPx);
+          tz = snapToGrid(tz, snapPx);
+        }
+
+        const deltaRotQ = drag.startProxyQuat
+          .clone()
+          .invert()
+          .multiply(attachedObj.quaternion);
+        const rotQuat: Quat = [deltaRotQ.x, deltaRotQ.y, deltaRotQ.z, deltaRotQ.w];
+
+        const relScale: Vec3 = [
+          Math.abs(drag.startProxyScale.x) > 1e-6
+            ? attachedObj.scale.x / drag.startProxyScale.x
+            : 1,
+          Math.abs(drag.startProxyScale.y) > 1e-6
+            ? attachedObj.scale.y / drag.startProxyScale.y
+            : 1,
+          Math.abs(drag.startProxyScale.z) > 1e-6
+            ? attachedObj.scale.z / drag.startProxyScale.z
+            : 1,
+        ];
+
+        node.mesh = transformMeshVertices(drag.baseMesh, drag.vertexIndices, {
+          translation: [tx, ty, tz],
+          rotationQuat: rotQuat,
+          scale: relScale,
+          pivot: drag.centroidPx,
+        });
+
+        updateMeshNodeGeometryInPlace(drag.nodeObj, node, ppu, {
+          textureSizeByMaterialId: textureSizeByMatRef.current,
+          defaultTextureWidth: Math.max(1, stNow.canvasWidth),
+          defaultTextureHeight: Math.max(1, stNow.canvasHeight),
+        });
+
+        if (subObjectOverlayRef.current) {
+          disposeGroupGeometriesAndMaterials(subObjectOverlayRef.current);
+          scene.remove(subObjectOverlayRef.current);
+          subObjectOverlayRef.current = null;
+        }
+        const nextOverlay = buildSubObjectOverlay(nodeObjectByIdRef.current, ppu);
+        scene.add(nextOverlay);
+        subObjectOverlayRef.current = nextOverlay;
+        setViewportRevision((v) => v + 1);
+        return;
+      }
+
       const nodeId = attachedObj.userData?.nodeId as string | undefined;
       if (!nodeId) return;
 
@@ -1054,6 +1186,10 @@ export function ThreeViewport() {
       transform.dispose();
       orbit.dispose();
       scene.remove(helper);
+      if (subElemProxyRef.current) {
+        scene.remove(subElemProxyRef.current);
+        subElemProxyRef.current = null;
+      }
       if (modelRootRef.current) {
         disposeSyncedObjectTree(modelRootRef.current);
         scene.remove(modelRootRef.current);
@@ -1378,7 +1514,42 @@ export function ThreeViewport() {
         );
         transform.setRotationSnap(Math.PI / 12); // 15 deg
         transform.setScaleSnap(0.125);
-        transform.attach(targetObj);
+
+        if (
+          engine.selectionGranularity !== "object" &&
+          activeNode.kind === "mesh" &&
+          activeNode.mesh &&
+          subElemProxyRef.current
+        ) {
+          const verts = collectAffectedVertexIndices(
+            activeNode.mesh,
+            engine.selectionGranularity,
+            engine.selectedVertices[activeNode.id] ?? [],
+            engine.selectedEdges[activeNode.id] ?? [],
+            engine.selectedFaces[activeNode.id] ?? []
+          );
+          const centroidPx = computeVerticesCentroid(activeNode.mesh.vertices, verts);
+          if (verts.length > 0 && centroidPx) {
+            targetObj.updateMatrixWorld(true);
+            const localPos = new THREE.Vector3(
+              (centroidPx[0] - activeNode.transform.pivot[0]) / ppu,
+              (centroidPx[1] - activeNode.transform.pivot[1]) / ppu,
+              (centroidPx[2] - activeNode.transform.pivot[2]) / ppu
+            );
+            const worldPos = localPos.applyMatrix4(targetObj.matrixWorld);
+            const worldQuat = new THREE.Quaternion();
+            targetObj.getWorldQuaternion(worldQuat);
+            const proxy = subElemProxyRef.current;
+            proxy.position.copy(worldPos);
+            proxy.quaternion.copy(worldQuat);
+            proxy.scale.set(1, 1, 1);
+            proxy.userData = { isSubElemProxy: true, nodeId: activeNode.id };
+            proxy.updateMatrixWorld(true);
+            transform.attach(proxy);
+          }
+        } else {
+          transform.attach(targetObj);
+        }
       }
     }
 
@@ -1844,9 +2015,14 @@ export function ThreeViewport() {
             }
           }
           if (bestEdge) {
+            const loopOrSingle = e.altKey
+              ? selectEdgeLoop(hitNode.mesh, bestEdge)
+              : [bestEdge];
             const prev = e.shiftKey ? [...(engine.selectedEdges[hitNodeId] ?? [])] : [];
-            if (!prev.some(([a, b]) => a === bestEdge![0] && b === bestEdge![1])) {
-              prev.push(bestEdge);
+            for (const ed of loopOrSingle) {
+              if (!prev.some(([a, b]) => a === ed[0] && b === ed[1])) {
+                prev.push(ed);
+              }
             }
             engine.selectedEdges[hitNodeId] = prev;
           }

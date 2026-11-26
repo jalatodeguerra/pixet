@@ -7,19 +7,29 @@ import {
   Model3DEngine,
 } from "../src/engine/model3d/Model3DEngine.ts";
 import {
+  bevelEdges,
+  bevelVertices,
+  collectAffectedVertexIndices,
   computeFaceCentroid,
   computeFaceNormal,
+  computeVerticesCentroid,
   convertCuboidToMesh,
   convertNodeCuboidToMesh,
   cullInternalCoplanarFaces,
+  deleteSelectedElements,
   extrudeFaces,
+  fillOrBridgeSelection,
   flipFaceNormals,
   flipQuadDiagonal,
   insetFaces,
+  joinMeshNodes,
   mergeVertices,
   mirrorNode,
   recalculateOutwardNormals,
+  selectEdgeLoop,
+  separateSelectedFaces,
   subdivideFacesOrLoopCut,
+  transformMeshVertices,
   weldVerticesByDistance,
 } from "../src/engine/model3d/meshOps.ts";
 import { vec3Dot, vec3Length, vec3Sub } from "../src/engine/model3d/quatMath.ts";
@@ -520,4 +530,135 @@ test("M4-A meshOps: mirrorNode keeps normals outward on cuboids and meshes and s
     ...mirroredMeshOffset.mesh.faces.flatMap((f) => f.uvs.map(([u]) => u))
   );
   assert.ok(newMinU >= origMaxU, "separate UV island should not overlap original UVs");
+});
+
+test("M4-G sub-element ops: transformMeshVertices, deleteSelectedElements, selectEdgeLoop", () => {
+  const cube = convertCuboidToMesh(createDefaultCuboidData([-4, 0, -4], [4, 8, 4]));
+  const topFace = cube.faces.find((f) => {
+    const c = computeFaceCentroid(cube.vertices, f);
+    return c[1] > 7.5;
+  })!;
+  assert.ok(topFace);
+
+  const affected = collectAffectedVertexIndices(cube, "face", [], [], [topFace.id]);
+  assert.equal(affected.length, 4);
+  const centroid = computeVerticesCentroid(cube.vertices, affected)!;
+  assertNear(centroid[0], 0);
+  assertNear(centroid[1], 8);
+  assertNear(centroid[2], 0);
+
+  // Translate with snapPx=2
+  const translated = transformMeshVertices(cube, affected, {
+    translation: [1.2, 3.6, 0],
+    snapPx: 2,
+  });
+  for (const vi of affected) {
+    assertNear(translated.vertices[vi][1], 12);
+  }
+
+  // Scale 2x around centroid
+  const scaled = transformMeshVertices(cube, affected, {
+    scale: [2, 1, 2],
+    pivot: centroid,
+  });
+  for (const vi of affected) {
+    assertNear(Math.abs(scaled.vertices[vi][0]), 8);
+    assertNear(Math.abs(scaled.vertices[vi][2]), 8);
+  }
+
+  // Rotate 90 deg around Y
+  const sin45 = Math.SQRT1_2;
+  const rotated = transformMeshVertices(cube, [affected[0]], {
+    rotationQuat: [0, sin45, 0, sin45],
+    pivot: centroid,
+  });
+  const orig = cube.vertices[affected[0]];
+  assertNear(rotated.vertices[affected[0]][0], orig[2], 1e-4);
+  assertNear(rotated.vertices[affected[0]][2], -orig[0], 1e-4);
+
+  // Delete top face -> 5 faces remain, all 8 vertices still used
+  const delFace = deleteSelectedElements(cube, "face", [], [], [topFace.id]);
+  assert.equal(delFace.deletedFaceCount, 1);
+  assert.equal(delFace.mesh.faces.length, 5);
+
+  // Delete a vertex -> 3 incident faces deleted, unused vertex compacted
+  const delVert = deleteSelectedElements(cube, "vertex", [0], [], []);
+  assert.equal(delVert.deletedFaceCount, 3);
+  assert.equal(delVert.mesh.faces.length, 3);
+  assert.equal(delVert.mesh.vertices.length, 7);
+
+  // Delete an edge -> 2 incident faces deleted
+  const delEdge = deleteSelectedElements(cube, "edge", [], [[topFace.verts[0], topFace.verts[1]]], []);
+  assert.equal(delEdge.deletedFaceCount, 2);
+  assert.equal(delEdge.mesh.faces.length, 4);
+
+  // Edge loop on a subdivided cube (4-quad ring around Y)
+  const loop = selectEdgeLoop(cube, [topFace.verts[0], topFace.verts[1]]);
+  assert.equal(loop.length, 4);
+});
+
+test("M4-H modeling ops: bevelEdges, bevelVertices, fillOrBridgeSelection, separate & join", () => {
+  const cube = convertCuboidToMesh(createDefaultCuboidData([-4, 0, -4], [4, 8, 4]));
+  const f0 = cube.faces[0];
+
+  // Bevel one edge of a cube -> valid closed outward mesh with 1 new bevel quad
+  const be = bevelEdges(cube, [[f0.verts[0], f0.verts[1]]], 1.5);
+  assert.equal(be.bevelFaceIds.length, 1);
+  assertClosedOutwardMesh(be.mesh, "bevel-edge");
+
+  // Bevel one vertex of a cube -> valid closed outward mesh with corner cap
+  const bv = bevelVertices(cube, [0], 1.5);
+  assert.ok(bv.bevelFaceIds.length >= 1);
+  assertClosedOutwardMesh(bv.mesh, "bevel-vertex");
+
+  // Fill 3 vertices and bridge 2 edges
+  const openMesh = deleteSelectedElements(cube, "face", [], [], [f0.id]).mesh;
+  const filledTri = fillOrBridgeSelection(
+    openMesh,
+    "vertex",
+    f0.verts.slice(0, 3),
+    [],
+    DEFAULT_MODEL3D_MATERIAL_ID
+  );
+  assert.equal(filledTri.createdFaceIds.length, 1);
+  assert.equal(filledTri.mesh.faces.length, openMesh.faces.length + 1);
+
+  const bridged = fillOrBridgeSelection(
+    openMesh,
+    "edge",
+    [],
+    [
+      [f0.verts[0], f0.verts[1]],
+      [f0.verts[3], f0.verts[2]],
+    ],
+    DEFAULT_MODEL3D_MATERIAL_ID
+  );
+  assert.equal(bridged.createdFaceIds.length, 1);
+  assert.equal(bridged.mesh.faces[bridged.mesh.faces.length - 1].verts.length, 4);
+
+  // Separate & Join with non-zero transform
+  const nodeA: ModelNode = {
+    id: "nA",
+    name: "A",
+    kind: "mesh",
+    parentId: null,
+    visible: true,
+    locked: false,
+    collider: "none",
+    transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], pivot: [0, 0, 0] },
+    mesh: cube,
+  };
+  const sep = separateSelectedFaces(nodeA, [f0.id], "nA-part");
+  assert.ok(sep.separated?.mesh);
+  assert.equal(sep.remaining.mesh!.faces.length, 5);
+  assert.equal(sep.separated.mesh.faces.length, 1);
+  assert.equal(sep.separated.mesh.vertices.length, f0.verts.length);
+
+  const nodeB = makeTestCubeNode("nB", [-2, 0, -2], [2, 4, 2]);
+  nodeB.transform.position = [10, 0, 0];
+  const joined = joinMeshNodes([nodeA, nodeB], "nA");
+  assert.ok(joined?.mesh);
+  assert.equal(joined.mesh.faces.length, 12);
+  const maxJoinedX = Math.max(...joined.mesh.vertices.map((v) => v[0]));
+  assertNear(maxJoinedX, 12);
 });
