@@ -47,6 +47,17 @@ export function performUndo(): void {
     }
   }
   const nextKind = pixelEngine.undoCoordinator.peekUndo();
+  if (nextKind === "model3d") {
+    pixelEngine.undoCoordinator.popUndo();
+    const label = pixelEngine.model3dHistory.undo(pixelEngine.model3d);
+    if (label !== null) {
+      store.bumpModel3DVersion();
+      pixelEngine.emitChange();
+      syncHistoryAndCelState();
+      store.setStatusMessage(`Undo: ${label}`);
+      return;
+    }
+  }
   if (nextKind === "cells" || nextKind === "tileset") {
     pixelEngine.undoCoordinator.popUndo();
     const res = pixelEngine.tilemapHistory.undo(pixelEngine);
@@ -89,6 +100,17 @@ export function performRedo(): void {
     }
   }
   const nextKind = pixelEngine.undoCoordinator.peekRedo();
+  if (nextKind === "model3d") {
+    pixelEngine.undoCoordinator.popRedo();
+    const label = pixelEngine.model3dHistory.redo(pixelEngine.model3d);
+    if (label !== null) {
+      store.bumpModel3DVersion();
+      pixelEngine.emitChange();
+      syncHistoryAndCelState();
+      store.setStatusMessage(`Redo: ${label}`);
+      return;
+    }
+  }
   if (nextKind === "cells" || nextKind === "tileset") {
     pixelEngine.undoCoordinator.popRedo();
     const res = pixelEngine.tilemapHistory.redo(pixelEngine);

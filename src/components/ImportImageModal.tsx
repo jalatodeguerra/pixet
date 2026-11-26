@@ -322,6 +322,7 @@ export function ImportImageModal() {
         );
         pixelEngine.resetForDocument(fw, fh);
         resetRigHistory();
+        state.bumpModel3DVersion();
 
         const nextLayers: LayerItem[] = sheetLayers.map((sl, li) => {
           const layerId = `layer-sheet-${li + 1}`;
@@ -395,6 +396,7 @@ export function ImportImageModal() {
 
       pixelEngine.resetForDocument(fw, fh);
       resetRigHistory();
+      state.bumpModel3DVersion();
       const celsMap: Record<number, boolean> = {};
       const nextFrames: FrameItem[] = [];
 
@@ -455,6 +457,7 @@ export function ImportImageModal() {
 
     pixelEngine.resetForDocument(w, h);
     resetRigHistory();
+    state.bumpModel3DVersion();
     const cel = pixelEngine.getOrCreateCel("layer-import", 0);
     cel.data.set(resized.data);
     cel.markAllDirty();

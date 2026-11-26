@@ -18,9 +18,13 @@ function pushSnapshot(label: string): void {
 export function syncRigHistoryFlags(): void {
   const store = useEditorStore.getState();
   const canBaseUndo =
-    pixelEngine.history.canUndo || pixelEngine.tilemapHistory.canUndo;
+    pixelEngine.history.canUndo ||
+    pixelEngine.tilemapHistory.canUndo ||
+    pixelEngine.model3dHistory.canUndo;
   const canBaseRedo =
-    pixelEngine.history.canRedo || pixelEngine.tilemapHistory.canRedo;
+    pixelEngine.history.canRedo ||
+    pixelEngine.tilemapHistory.canRedo ||
+    pixelEngine.model3dHistory.canRedo;
   if (store.workspaceMode === "rig") {
     store.setHistoryFlags(
       rigHistory.canUndo || canBaseUndo,

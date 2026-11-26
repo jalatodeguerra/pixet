@@ -72,6 +72,20 @@ import {
   flipBrushV,
   rotateBrushCW,
 } from "./engine/tiles/mapTools";
+import {
+  createModelClip,
+  recordNodeTransformKeyframes,
+} from "./engine/model3d/animEval";
+import { flipQuadDiagonal, mirrorNode } from "./engine/model3d/meshOps";
+import { mutateModel3D } from "./engine/model3d/model3dActions";
+import {
+  cycleTileCursorPlane,
+  flipTileCursor,
+  rotateTileCursorCW,
+  stepTileCursor,
+  type TileCursorStepDir,
+} from "./engine/model3d/tileStamp";
+import type { SelectionGranularity } from "./engine/model3d/types";
 
 export function App() {
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
@@ -106,6 +120,30 @@ export function App() {
         const maxFrames = Math.max(1, clip.frameCount);
         const loop = clip.loop !== false;
         pixelEngine.rig.clearPoseOverrides();
+        if (state.currentFrame + 1 < maxFrames) {
+          state.setCurrentFrame(state.currentFrame + 1);
+        } else if (loop) {
+          state.setCurrentFrame(0);
+        } else {
+          state.togglePlaying();
+        }
+        return;
+      }
+      if (
+        state.workspaceMode === "studio3d" &&
+        state.studio3d.workspaceKind === "lowpoly3d" &&
+        state.studio3d.subMode === "animate"
+      ) {
+        const eng = pixelEngine.model3d;
+        const activeClip =
+          (eng.activeClipId
+            ? eng.clips.find((c) => c.id === eng.activeClipId)
+            : undefined) ?? eng.clips[0];
+        const maxFrames = Math.max(
+          1,
+          activeClip?.frameCount ?? state.frames.length
+        );
+        const loop = activeClip?.loop ?? state.loopPlayback;
         if (state.currentFrame + 1 < maxFrames) {
           state.setCurrentFrame(state.currentFrame + 1);
         } else if (loop) {
@@ -197,6 +235,292 @@ export function App() {
       }
 
       if (isEditable(e.target)) {
+        return;
+      }
+
+      // Low-Poly 3D workspace keyboard isolation (runs before Draw tool shortcuts)
+      if (
+        stNow.workspaceMode === "studio3d" &&
+        stNow.studio3d.workspaceKind === "lowpoly3d"
+      ) {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+          const ctrlKey = e.key.toLowerCase();
+          if (ctrlKey === "z") {
+            e.preventDefault();
+            if (e.shiftKey) performRedo();
+            else performUndo();
+            return;
+          }
+          if (ctrlKey === "y") {
+            e.preventDefault();
+            performRedo();
+            return;
+          }
+          if (ctrlKey === "s") {
+            e.preventDefault();
+            void saveProjectAction(e.shiftKey);
+            return;
+          }
+          if (ctrlKey === "n") {
+            e.preventDefault();
+            stNow.setNewSpriteModalOpen(true);
+            return;
+          }
+          if (ctrlKey === "o") {
+            e.preventDefault();
+            void openProjectAction();
+            return;
+          }
+          if (ctrlKey === "3") {
+            e.preventDefault();
+            stNow.setWorkspaceMode("draw");
+            return;
+          }
+          if (ctrlKey === "d") {
+            e.preventDefault();
+            const ids = [...pixelEngine.model3d.selectedNodeIds];
+            if (ids.length > 0) {
+              mutateModel3D("Duplicate Nodes", (eng) => {
+                eng.duplicateNodes(ids);
+              });
+              stNow.setStatusMessage(`Duplicated ${ids.length} node(s)`);
+            }
+            return;
+          }
+          if (ctrlKey === "a") {
+            e.preventDefault();
+            const allIds = pixelEngine.model3d.nodes.map((n) => n.id);
+            pixelEngine.model3d.selectNodes(
+              allIds,
+              allIds[allIds.length - 1] ?? null
+            );
+            stNow.bumpModel3DVersion();
+            return;
+          }
+          if (ctrlKey === "t") {
+            e.preventDefault();
+            const eng = pixelEngine.model3d;
+            const activeNode = eng.activeNodeId
+              ? eng.getNode(eng.activeNodeId)
+              : undefined;
+            if (activeNode && activeNode.kind === "mesh" && activeNode.mesh && !activeNode.locked) {
+              const selFaces = eng.selectedFaces[activeNode.id] ?? [];
+              const targetFaceIds =
+                selFaces.length > 0
+                  ? selFaces
+                  : activeNode.mesh.faces
+                      .filter((f) => f.verts.length === 4)
+                      .map((f) => f.id);
+              if (targetFaceIds.length > 0) {
+                mutateModel3D("Flip Quad Diagonal", (m) => {
+                  const n = m.getNode(activeNode.id);
+                  if (!n || !n.mesh) return;
+                  m.updateNode(n.id, {
+                    mesh: flipQuadDiagonal(n.mesh, targetFaceIds),
+                  });
+                });
+                stNow.setStatusMessage(
+                  `Flipped diagonal on ${targetFaceIds.length} quad(s)`
+                );
+              }
+            }
+            return;
+          }
+          if (ctrlKey === "m") {
+            e.preventDefault();
+            const ids = [...pixelEngine.model3d.selectedNodeIds];
+            if (ids.length > 0) {
+              mutateModel3D("Mirror 3D Node", (eng) => {
+                for (const id of ids) {
+                  const node = eng.getNode(id);
+                  if (!node || node.locked) continue;
+                  const mirrored = mirrorNode(node, "x", true);
+                  eng.updateNode(id, {
+                    transform: mirrored.transform,
+                    cuboid: mirrored.cuboid,
+                    mesh: mirrored.mesh,
+                  });
+                }
+              });
+              stNow.setStatusMessage(`Mirrored ${ids.length} node(s) across X`);
+            }
+            return;
+          }
+          return;
+        }
+
+        if (e.altKey) {
+          return;
+        }
+
+        if (e.key === "Enter") {
+          e.preventDefault();
+          stNow.togglePlaying();
+          return;
+        }
+
+        if (e.key === "Escape") {
+          e.preventDefault();
+          pixelEngine.model3d.clearSelection();
+          stNow.bumpModel3DVersion();
+          return;
+        }
+
+        if (e.key === "Delete" || e.key === "Backspace") {
+          e.preventDefault();
+          const ids = [...pixelEngine.model3d.selectedNodeIds];
+          if (ids.length > 0) {
+            mutateModel3D("Delete Nodes", (eng) => {
+              eng.deleteNodes(ids);
+            });
+            stNow.setStatusMessage(`Deleted ${ids.length} node(s)`);
+          }
+          return;
+        }
+
+        if (e.key === "Tab") {
+          e.preventDefault();
+          stNow.togglePanelsCollapsed();
+          return;
+        }
+
+        const key = e.key.toLowerCase();
+
+        if (stNow.studio3d.subMode === "tile") {
+          const eng = pixelEngine.model3d;
+          const stepDirMap: Record<string, TileCursorStepDir> = {
+            ArrowLeft: "left",
+            ArrowRight: "right",
+            ArrowUp: "forward",
+            ArrowDown: "backward",
+            PageUp: "up",
+            PageDown: "down",
+          };
+          const stepDir = stepDirMap[e.key];
+          if (stepDir) {
+            e.preventDefault();
+            eng.patchTileCursor(stepTileCursor(eng.tileCursor, stepDir));
+            stNow.bumpModel3DVersion();
+            return;
+          }
+          if (e.code === "Space") {
+            e.preventDefault();
+            eng.patchTileCursor(cycleTileCursorPlane(eng.tileCursor));
+            stNow.bumpModel3DVersion();
+            return;
+          }
+          if (key === "r") {
+            e.preventDefault();
+            eng.patchTileCursor(rotateTileCursorCW(eng.tileCursor));
+            stNow.bumpModel3DVersion();
+            return;
+          }
+          if (key === "f") {
+            e.preventDefault();
+            eng.patchTileCursor(
+              flipTileCursor(eng.tileCursor, e.shiftKey ? "y" : "x")
+            );
+            stNow.bumpModel3DVersion();
+            return;
+          }
+        }
+
+        if (stNow.studio3d.subMode === "paint") {
+          const paintToolMap: Record<
+            string,
+            "brush" | "eraser" | "fillFace" | "eyedropper" | "vertexColor"
+          > = {
+            b: "brush",
+            e: "eraser",
+            g: "fillFace",
+            i: "eyedropper",
+            v: "vertexColor",
+          };
+          const mappedPaintTool = paintToolMap[key];
+          if (mappedPaintTool) {
+            e.preventDefault();
+            stNow.patchStudio3D({ paint3dTool: mappedPaintTool });
+            return;
+          }
+        }
+
+        if (stNow.studio3d.subMode === "animate") {
+          if (key === "k") {
+            e.preventDefault();
+            const eng = pixelEngine.model3d;
+            const activeNode = eng.activeNodeId
+              ? eng.getNode(eng.activeNodeId)
+              : undefined;
+            if (activeNode) {
+              mutateModel3D("Record 3D Keyframe", (m) => {
+                const node = m.getNode(activeNode.id);
+                if (!node) return;
+                let clip =
+                  m.clips.find((c) => c.id === m.activeClipId) ?? m.clips[0];
+                if (!clip) {
+                  clip = createModelClip(
+                    "Clip 1",
+                    Math.max(1, stNow.frames.length),
+                    Math.max(1, stNow.fps),
+                    true
+                  );
+                  m.clips.push(clip);
+                  m.activeClipId = clip.id;
+                }
+                const updated = recordNodeTransformKeyframes(
+                  clip,
+                  node,
+                  stNow.currentFrame
+                );
+                const idx = m.clips.findIndex((c) => c.id === updated.id);
+                if (idx >= 0) m.clips[idx] = updated;
+              });
+              stNow.setStatusMessage(
+                `Keyframed "${activeNode.name}" at frame ${stNow.currentFrame + 1}`
+              );
+            }
+            return;
+          }
+        }
+
+        if (key === "q") {
+          e.preventDefault();
+          stNow.patchStudio3D({ gizmoMode: "select" });
+          return;
+        }
+        if (key === "w") {
+          e.preventDefault();
+          stNow.patchStudio3D({ gizmoMode: "move" });
+          return;
+        }
+        if (key === "e") {
+          e.preventDefault();
+          stNow.patchStudio3D({ gizmoMode: "rotate" });
+          return;
+        }
+        if (key === "r") {
+          e.preventDefault();
+          stNow.patchStudio3D({ gizmoMode: "scale" });
+          return;
+        }
+
+        if (stNow.studio3d.subMode === "model") {
+          const granularityMap: Record<string, SelectionGranularity> = {
+            "1": "object",
+            "2": "vertex",
+            "3": "edge",
+            "4": "face",
+          };
+          const mappedGranularity = granularityMap[e.key];
+          if (mappedGranularity) {
+            e.preventDefault();
+            pixelEngine.model3d.setSelectionGranularity(mappedGranularity);
+            stNow.bumpModel3DVersion();
+            return;
+          }
+        }
+
+        // Do not allow B, E, G, M, V, Delete, etc. to fall through to Draw shortcuts
         return;
       }
 

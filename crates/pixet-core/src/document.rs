@@ -156,6 +156,8 @@ pub struct Document {
     pub rig: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_data: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model3d_ext: Option<serde_json::Value>,
 }
 
 impl Document {
@@ -228,6 +230,7 @@ impl Document {
             draw_ext: None,
             rig: None,
             game_data: None,
+            model3d_ext: None,
         }
     }
 
@@ -359,5 +362,33 @@ mod tests {
         let parsed_legacy = Document::from_json(&legacy_json).expect("parse legacy json");
         assert_eq!(parsed_legacy.tags[0].direction, None);
         assert_eq!(parsed_legacy.draw_ext, None);
+    }
+
+    #[test]
+    fn model3d_ext_round_trip_and_legacy_compat() {
+        let mut doc = Document::new_default(32, 32);
+        assert_eq!(doc.model3d_ext, None);
+
+        // When None, model3d_ext is omitted from serialized JSON
+        let empty_val = serde_json::to_value(&doc).expect("to_value");
+        assert!(empty_val.get("model3d_ext").is_none());
+
+        // When omitted in legacy JSON, deserializes to None
+        let parsed_omitted =
+            Document::from_json(&serde_json::to_string(&empty_val).expect("to_string"))
+                .expect("parse omitted model3d_ext");
+        assert_eq!(parsed_omitted.model3d_ext, None);
+
+        // When populated, round-trips cleanly
+        doc.model3d_ext = Some(serde_json::json!({
+            "version": 1,
+            "pixelsPerUnit": 16,
+            "nodes": [
+                { "id": "node-1", "name": "Body", "kind": "cuboid" }
+            ]
+        }));
+        let json = doc.to_json_pretty().expect("serialize with model3d_ext");
+        let parsed = Document::from_json(&json).expect("deserialize with model3d_ext");
+        assert_eq!(parsed.model3d_ext, doc.model3d_ext);
     }
 }

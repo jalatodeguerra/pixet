@@ -50,6 +50,14 @@ import {
   type RigKeyRef,
 } from "../engine/rig/animationTools";
 import { mutateRig } from "../engine/rig/rigActions";
+import {
+  createModelClip,
+  deleteModelKeyframe,
+  getKeyframedFramesForNode,
+  mirrorClipPoseAtFrameLR,
+  recordNodeTransformKeyframes,
+} from "../engine/model3d/animEval";
+import { mutateModel3D } from "../engine/model3d/model3dActions";
 import { useEditorStore } from "../store/editorStore";
 import { CurveEditor } from "./rig/CurveEditor";
 
@@ -141,7 +149,13 @@ export function Timeline() {
   const setSelectedBoneId = useEditorStore((s) => s.setSelectedBoneId);
   const rigTimelineView = useEditorStore((s) => s.rigTimelineView);
   const setRigTimelineView = useEditorStore((s) => s.setRigTimelineView);
+  const studio3dWorkspaceKind = useEditorStore(
+    (s) => s.studio3d.workspaceKind
+  );
+  const studio3dSubMode = useEditorStore((s) => s.studio3d.subMode);
+  const model3dVersion = useEditorStore((s) => s.model3dVersion);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
+  void model3dVersion;
 
   const setCurrentFrame = useEditorStore((s) => s.setCurrentFrame);
   const prevFrame = useEditorStore((s) => s.prevFrame);
@@ -195,6 +209,74 @@ export function Timeline() {
   const [tagTo, setTagTo] = useState(frames.length);
   const [tagColor, setTagColor] = useState("#4cc38a");
   const [tagDirection, setTagFormDirection] = useState<TagDirection>("forward");
+  const [model3dTimelineView, setModel3dTimelineView] = useState<
+    "dope" | "curves"
+  >("dope");
+  const [selectedModel3DKey, setSelectedModel3DKey] = useState<{
+    nodeId: string;
+    frame: number;
+  } | null>(null);
+
+  const isModel3DAnimate =
+    workspaceMode === "studio3d" &&
+    studio3dWorkspaceKind === "lowpoly3d" &&
+    studio3dSubMode === "animate";
+  const model3dEngine = pixelEngine.model3d;
+  const activeModel3DClip =
+    model3dEngine.clips.find((c) => c.id === model3dEngine.activeClipId) ??
+    model3dEngine.clips[0] ??
+    null;
+
+  const ensureActiveModel3DClip = (
+    eng: typeof pixelEngine.model3d
+  ) => {
+    let clip =
+      eng.clips.find((c) => c.id === eng.activeClipId) ?? eng.clips[0];
+    if (!clip) {
+      clip = createModelClip(`Clip ${eng.clips.length + 1}`, 16, fps, true);
+      eng.clips.push(clip);
+      eng.activeClipId = clip.id;
+    }
+    return clip;
+  };
+
+  const handleRecordModel3DKey = (targetNodeId?: string, targetFrame?: number) => {
+    const f = targetFrame ?? currentFrame;
+    const node =
+      (targetNodeId
+        ? model3dEngine.getNode(targetNodeId)
+        : model3dEngine.activeNodeId
+          ? model3dEngine.getNode(model3dEngine.activeNodeId)
+          : undefined) ?? model3dEngine.nodes[0];
+    if (!node) {
+      setStatusMessage("Select a 3D node to keyframe");
+      return;
+    }
+    mutateModel3D(`Keyframe ${node.name} F${f + 1}`, (eng) => {
+      const clip = ensureActiveModel3DClip(eng);
+      const idx = eng.clips.findIndex((c) => c.id === clip.id);
+      if (idx < 0) return;
+      eng.clips[idx] = recordNodeTransformKeyframes(clip, node, f);
+    });
+    setStatusMessage(`Keyframed ${node.name} at frame ${f + 1}`);
+  };
+
+  const handleMirrorModel3DPoseLR = () => {
+    if (!activeModel3DClip) {
+      setStatusMessage("Create a 3D clip first");
+      return;
+    }
+    mutateModel3D(`Mirror 3D Pose L<->R F${currentFrame + 1}`, (eng) => {
+      const idx = eng.clips.findIndex((c) => c.id === activeModel3DClip.id);
+      if (idx < 0) return;
+      eng.clips[idx] = mirrorClipPoseAtFrameLR(
+        eng.clips[idx],
+        eng.nodes,
+        currentFrame
+      );
+    });
+    setStatusMessage(`Mirrored L↔R pose at frame ${currentFrame + 1}`);
+  };
 
   const activeLayer = layers.find((l) => l.id === activeLayerId);
   const isActiveCelLinked = Boolean(activeLayer?.linkedCels?.[currentFrame]);
@@ -341,6 +423,88 @@ export function Timeline() {
                 type="button"
                 className={`toggle-chip ${rigTimelineView === "curves" ? "active" : ""}`}
                 onClick={() => setRigTimelineView("curves")}
+              >
+                <span>Curves</span>
+              </button>
+            </>
+          )}
+
+          {isModel3DAnimate && (
+            <>
+              <div className="option-divider" />
+              <select
+                className="palette-select"
+                style={{ width: 108 }}
+                aria-label="3D Animation Clip"
+                value={activeModel3DClip?.id ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  mutateModel3D("Select 3D Clip", (eng) => {
+                    eng.activeClipId = id || null;
+                  });
+                }}
+              >
+                {model3dEngine.clips.length === 0 ? (
+                  <option value="">No Clip</option>
+                ) : (
+                  model3dEngine.clips.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.frameCount}f)
+                    </option>
+                  ))
+                )}
+              </select>
+              <button
+                type="button"
+                className="toggle-chip"
+                style={{ padding: "2px 6px" }}
+                title="Create New 3D Animation Clip"
+                onClick={() =>
+                  mutateModel3D("New 3D Clip", (eng) => {
+                    const clip = createModelClip(
+                      `Clip ${eng.clips.length + 1}`,
+                      Math.max(16, frames.length),
+                      fps,
+                      true
+                    );
+                    eng.clips.push(clip);
+                    eng.activeClipId = clip.id;
+                  })
+                }
+              >
+                <Plus size={11} />
+                <span>Clip</span>
+              </button>
+              <button
+                type="button"
+                className="toggle-chip"
+                style={{ padding: "2px 7px" }}
+                title="Record Transform Keyframe for Active Node (K)"
+                onClick={() => handleRecordModel3DKey()}
+              >
+                <span>+ Key (K)</span>
+              </button>
+              <button
+                type="button"
+                className="toggle-chip"
+                style={{ padding: "2px 7px" }}
+                title="Mirror Clip Pose L ↔ R at Current Frame"
+                disabled={!activeModel3DClip}
+                onClick={handleMirrorModel3DPoseLR}
+              >
+                <span>Mirror L↔R</span>
+              </button>
+              <button
+                type="button"
+                className={`toggle-chip ${model3dTimelineView === "dope" ? "active" : ""}`}
+                onClick={() => setModel3dTimelineView("dope")}
+              >
+                <span>Dope</span>
+              </button>
+              <button
+                type="button"
+                className={`toggle-chip ${model3dTimelineView === "curves" ? "active" : ""}`}
+                onClick={() => setModel3dTimelineView("curves")}
               >
                 <span>Curves</span>
               </button>
@@ -677,25 +841,51 @@ export function Timeline() {
       </div>
 
       {!timelineCollapsed &&
-        workspaceMode === "rig" &&
-        rigMode === "animate" &&
-        rigTimelineView === "curves" && (
+        ((workspaceMode === "rig" &&
+          rigMode === "animate" &&
+          rigTimelineView === "curves") ||
+          (isModel3DAnimate && model3dTimelineView === "curves")) && (
           <div className="timeline-grid-wrap" style={{ flex: 1 }}>
-            <CurveEditor />
+            <CurveEditor mode={isModel3DAnimate ? "model3d" : "rig"} />
           </div>
         )}
 
       {!timelineCollapsed &&
         !(
-          workspaceMode === "rig" &&
-          rigMode === "animate" &&
-          rigTimelineView === "curves"
+          (workspaceMode === "rig" &&
+            rigMode === "animate" &&
+            rigTimelineView === "curves") ||
+          (isModel3DAnimate && model3dTimelineView === "curves")
         ) && (
         <div
           className="timeline-grid-wrap"
           tabIndex={0}
           onPointerUp={() => setRetimeDragFrom(null)}
           onKeyDown={(e) => {
+            if (isModel3DAnimate) {
+              if (
+                (e.key === "Delete" || e.key === "Backspace") &&
+                selectedModel3DKey &&
+                activeModel3DClip
+              ) {
+                e.preventDefault();
+                e.stopPropagation();
+                const { nodeId, frame } = selectedModel3DKey;
+                mutateModel3D("Delete 3D Keyframe", (eng) => {
+                  const idx = eng.clips.findIndex(
+                    (c) => c.id === activeModel3DClip.id
+                  );
+                  if (idx < 0) return;
+                  eng.clips[idx] = deleteModelKeyframe(
+                    eng.clips[idx],
+                    frame,
+                    nodeId
+                  );
+                });
+                setSelectedModel3DKey(null);
+              }
+              return;
+            }
             if (workspaceMode !== "rig" || rigMode !== "animate") return;
             const mod = e.ctrlKey || e.metaKey;
             const clip = pixelEngine.rig.getActiveClip();
@@ -1245,6 +1435,109 @@ export function Timeline() {
                   })}
                 </div>
               ))}
+
+          {isModel3DAnimate &&
+            model3dTimelineView === "dope" &&
+            model3dEngine.nodes.map((node) => {
+              const isNodeActive =
+                node.id === model3dEngine.activeNodeId ||
+                model3dEngine.selectedNodeIds.includes(node.id);
+              const keyFrames = activeModel3DClip
+                ? new Set(getKeyframedFramesForNode(activeModel3DClip, node.id))
+                : new Set<number>();
+
+              return (
+                <div
+                  key={`m3d-${node.id}-${model3dVersion}`}
+                  className={`timeline-rig-row ${isNodeActive ? "active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="timeline-label-col"
+                    title={`3D Node: ${node.name} (${node.kind})`}
+                    onClick={() => {
+                      model3dEngine.selectNodes([node.id], node.id);
+                      useEditorStore.getState().bumpModel3DVersion();
+                    }}
+                  >
+                    <span
+                      className="rig-bone-swatch"
+                      style={{
+                        backgroundColor: node.colorTag || "#4c8bf5",
+                      }}
+                    />
+                    <span className="layer-name" style={{ textAlign: "left" }}>
+                      {node.name}
+                    </span>
+                  </button>
+
+                  {frames.map((frame) => {
+                    const hasKey = keyFrames.has(frame.index);
+                    const activeCol = frame.index === currentFrame;
+                    const isKeySel =
+                      selectedModel3DKey?.nodeId === node.id &&
+                      selectedModel3DKey?.frame === frame.index;
+
+                    return (
+                      <button
+                        key={`m3d-${node.id}-${frame.id}`}
+                        type="button"
+                        className={`rig-dope-cell ${activeCol ? "active-col" : ""} ${isKeySel ? "active" : ""}`}
+                        style={
+                          isKeySel
+                            ? { outline: "1px solid var(--accent)" }
+                            : undefined
+                        }
+                        title={`${node.name} · Frame ${frame.index + 1}${hasKey ? " (Keyframed · Right-click or Del to remove)" : " (Double-click to record keyframe)"}`}
+                        onClick={() => {
+                          model3dEngine.selectNodes([node.id], node.id);
+                          useEditorStore.getState().bumpModel3DVersion();
+                          setCurrentFrame(frame.index);
+                          setSelectedModel3DKey(
+                            hasKey
+                              ? { nodeId: node.id, frame: frame.index }
+                              : null
+                          );
+                        }}
+                        onDoubleClick={() => {
+                          model3dEngine.selectNodes([node.id], node.id);
+                          setCurrentFrame(frame.index);
+                          handleRecordModel3DKey(node.id, frame.index);
+                          setSelectedModel3DKey({
+                            nodeId: node.id,
+                            frame: frame.index,
+                          });
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          model3dEngine.selectNodes([node.id], node.id);
+                          useEditorStore.getState().bumpModel3DVersion();
+                          setCurrentFrame(frame.index);
+                          if (hasKey && activeModel3DClip) {
+                            mutateModel3D("Delete 3D Keyframe", (eng) => {
+                              const idx = eng.clips.findIndex(
+                                (c) => c.id === activeModel3DClip.id
+                              );
+                              if (idx < 0) return;
+                              eng.clips[idx] = deleteModelKeyframe(
+                                eng.clips[idx],
+                                frame.index,
+                                node.id
+                              );
+                            });
+                            setSelectedModel3DKey(null);
+                          }
+                        }}
+                      >
+                        <span
+                          className={`rig-dope-diamond ${hasKey ? "keyed" : ""}`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
 
           {layers.map((layer, layerIdx) => {
             const isLayerActive = layer.id === activeLayerId;

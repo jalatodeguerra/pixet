@@ -525,6 +525,7 @@ pub fn read_aseprite_bytes(bytes: &[u8]) -> Result<ProjectData, PixetError> {
         draw_ext: None,
         rig: None,
         game_data: None,
+        model3d_ext: None,
     };
 
     Ok(ProjectData {

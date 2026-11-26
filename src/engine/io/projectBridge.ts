@@ -24,6 +24,10 @@ import {
   type TilesetRegistryExtSnapshot,
 } from "../tiles/TilemapEngine.ts";
 import type { GuideLine } from "../tools/guides.ts";
+import {
+  deserializeModel3DScene,
+  serializeModel3DScene,
+} from "../model3d/serialization.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
 export type PackMode = "grid" | "tight";
@@ -131,6 +135,7 @@ interface RustDocument {
   } | null;
   rig?: unknown;
   game_data?: unknown;
+  model3d_ext?: unknown;
 }
 
 export interface ProjectTransfer {
@@ -372,6 +377,9 @@ export function serializeProjectTransfer(): ProjectTransfer {
       pixelEngine.gameData.events.length > 0
         ? pixelEngine.gameData.toSnapshot()
         : undefined,
+    model3d_ext: pixelEngine.model3d.isEmptyDefault()
+      ? undefined
+      : serializeModel3DScene(pixelEngine.model3d.toSnapshot()),
   };
 
   return { document, cels: celsMap, tiles };
@@ -393,6 +401,12 @@ export function hydrateProjectTransfer(
   if (doc.game_data !== undefined) {
     pixelEngine.gameData.fromSnapshot(doc.game_data);
   }
+  if (doc.model3d_ext !== undefined) {
+    pixelEngine.model3d.loadSnapshot(deserializeModel3DScene(doc.model3d_ext));
+  } else {
+    pixelEngine.model3d.reset();
+  }
+  pixelEngine.model3dHistory.clear();
 
   for (const [key, b64] of Object.entries(transfer.cels)) {
     const raw = base64ToBytes(b64);
@@ -531,6 +545,7 @@ export function hydrateProjectTransfer(
   useEditorStore.getState().bumpTilesetVersion();
   useEditorStore.getState().bumpRigVersion();
   useEditorStore.getState().bumpGameDataVersion();
+  useEditorStore.getState().bumpModel3DVersion();
   pixelEngine.emitChange();
 }
 

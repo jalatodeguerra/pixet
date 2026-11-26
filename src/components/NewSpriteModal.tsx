@@ -49,6 +49,7 @@ export function NewSpriteModal() {
 
     pixelEngine.resetForDocument(w, h);
     resetRigHistory();
+    state.bumpModel3DVersion();
     const cel = pixelEngine.getOrCreateCel("layer-1", 0);
 
     if (bgFill !== "transparent") {

@@ -32,6 +32,7 @@ import {
   generateAllStudio3DMapsAction,
   generateStudio3DMapLayerAction,
 } from "./studio3dActions";
+import { Model3DSidebar } from "./Model3DSidebar";
 
 const TURNTABLE_PRESET_LIST: readonly TurntablePreset[] = [
   TURNTABLE_PRESETS.dir4,
@@ -95,6 +96,10 @@ export function Studio3DSidebar() {
       scrubberFrame: 0,
     });
   };
+
+  if (studio3d.workspaceKind === "lowpoly3d") {
+    return <Model3DSidebar />;
+  }
 
   return (
     <div className="studio3d-sidebar">

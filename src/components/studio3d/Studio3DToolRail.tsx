@@ -10,12 +10,17 @@ import {
   Square,
 } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
+import { Model3DToolRail } from "./Model3DToolRail";
 import { setStudio3DGridMode } from "./studio3dActions";
 
 export function Studio3DToolRail() {
   const studio3d = useEditorStore((s) => s.studio3d);
   const patchStudio3D = useEditorStore((s) => s.patchStudio3D);
   const resetStudio3DCamera = useEditorStore((s) => s.resetStudio3DCamera);
+
+  if (studio3d.workspaceKind === "lowpoly3d") {
+    return <Model3DToolRail />;
+  }
 
   return (
     <aside className="tool-rail" aria-label="3D Studio Tools">

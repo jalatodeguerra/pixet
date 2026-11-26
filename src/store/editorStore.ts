@@ -51,6 +51,12 @@ import type {
 } from "../engine/gamedev/pbrMaps.ts";
 import type { Scene3DGridMode } from "../engine/tools/scene3d.ts";
 import type { RigTurntableMode } from "../engine/rig/export/bake.ts";
+import type {
+  GizmoMode,
+  Model3DSubMode,
+  ShadingMode,
+  Studio3DWorkspaceKind,
+} from "../engine/model3d/types.ts";
 
 export type {
   BlendMode,
@@ -127,6 +133,14 @@ export type Studio3DPreviewMode = "orbit" | "turntable";
 export type Studio3DZoom = "auto" | 2 | 4 | 6 | 8;
 
 export interface Studio3DState {
+  workspaceKind: Studio3DWorkspaceKind;
+  subMode: Model3DSubMode;
+  gizmoMode: GizmoMode;
+  snapPx: number;
+  shadingMode: ShadingMode;
+  wireframeOverlay: boolean;
+  cullBackfacesInView: boolean;
+  uvDrawerOpen: boolean;
   mode: Studio3DMode;
   gridMode: Scene3DGridMode;
   showAxes: boolean;
@@ -204,11 +218,24 @@ export interface Studio3DState {
   heightBevelWeight: number;
   heightContrast: number;
   heightBlur: number;
+  paint3dTool: "brush" | "eraser" | "fillFace" | "eyedropper" | "vertexColor";
+  paint3dLockFace: boolean;
+  autoKey3D: boolean;
+  tileStampMode: "stamp" | "dragFill" | "extrudeBlock";
+  tileExtrudeDepthPx: number;
   depthMode: DepthMapMode;
   depthInvert: boolean;
 }
 
 const DEFAULT_STUDIO3D_STATE: Studio3DState = {
+  workspaceKind: "sprite25d",
+  subMode: "model",
+  gizmoMode: "move",
+  snapPx: 1,
+  shadingMode: "flat",
+  wireframeOverlay: false,
+  cullBackfacesInView: false,
+  uvDrawerOpen: false,
   mode: "extruded",
   gridMode: "perspective",
   showAxes: true,
@@ -286,6 +313,11 @@ const DEFAULT_STUDIO3D_STATE: Studio3DState = {
   heightBevelWeight: 0.55,
   heightContrast: 1.0,
   heightBlur: 0,
+  paint3dTool: "brush",
+  paint3dLockFace: false,
+  autoKey3D: true,
+  tileStampMode: "stamp",
+  tileExtrudeDepthPx: 16,
   depthMode: "volume",
   depthInvert: false,
 };
@@ -646,10 +678,12 @@ interface EditorState {
   detachedPanels: Partial<Record<PanelId, FloatingPanelRect>>;
   dockedPanelOrder: Record<WorkspaceMode, PanelId[]>;
   studio3d: Studio3DState;
+  model3dVersion: number;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   patchStudio3D: (patch: Partial<Studio3DState>) => void;
   resetStudio3DCamera: () => void;
+  bumpModel3DVersion: () => void;
   setActiveTool: (tool: ToolId) => void;
   setBrushSize: (size: number) => void;
   setBrushShape: (shape: BrushShape) => void;
@@ -1317,10 +1351,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   detachedPanels: initialPanelLayout.detachedPanels,
   dockedPanelOrder: initialPanelLayout.dockedPanelOrder,
   studio3d: { ...DEFAULT_STUDIO3D_STATE },
+  model3dVersion: 0,
 
   setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
   patchStudio3D: (patch) =>
     set((s) => ({ studio3d: { ...s.studio3d, ...patch } })),
+  bumpModel3DVersion: () =>
+    set((s) => ({ model3dVersion: s.model3dVersion + 1 })),
   resetStudio3DCamera: () =>
     set((s) => ({
       studio3d: {

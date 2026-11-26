@@ -1,4 +1,4 @@
-export type UndoKind = "pixels" | "cells" | "tileset";
+export type UndoKind = "pixels" | "cells" | "tileset" | "model3d";
 
 export interface UndoHistoryEntry {
   index: number;
@@ -19,6 +19,8 @@ function defaultLabelForKind(kind: UndoKind): string {
       return "Tilemap Edit";
     case "tileset":
       return "Tileset Edit";
+    case "model3d":
+      return "3D Model Edit";
   }
 }
 

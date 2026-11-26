@@ -19,6 +19,8 @@ import {
   renderStudio3DPreviewBuffer,
   resolveStudio3DPivot,
 } from "./studio3dActions";
+import { ThreeViewport } from "./three/ThreeViewport";
+import { UVEditorDrawer } from "./UVEditorDrawer";
 
 const ZOOM_CYCLE: readonly Studio3DZoom[] = ["auto", 2, 4, 6, 8];
 
@@ -612,6 +614,15 @@ export function Studio3DViewport() {
         : studio3d.renderPass === "depth"
           ? "Depth Map"
           : "Lit 3D";
+
+  if (studio3d.workspaceKind === "lowpoly3d") {
+    return (
+      <div className="m3d-lowpoly-workspace">
+        <ThreeViewport />
+        <UVEditorDrawer />
+      </div>
+    );
+  }
 
   return (
     <div

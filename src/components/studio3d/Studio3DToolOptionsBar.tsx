@@ -13,6 +13,10 @@ import {
   setStudio3DGridMode,
   STUDIO3D_SIDE_PRESET,
 } from "./studio3dActions";
+import {
+  Model3DToolOptionsBar,
+  Studio3DWorkspaceKindSwitcher,
+} from "./Model3DToolOptionsBar";
 
 const PASS_OPTIONS: readonly { id: Render3DPass; label: string }[] = [
   { id: "lit", label: "Lit" },
@@ -36,8 +40,18 @@ export function Studio3DToolOptionsBar() {
   const studio3d = useEditorStore((s) => s.studio3d);
   const patchStudio3D = useEditorStore((s) => s.patchStudio3D);
 
+  if (studio3d.workspaceKind === "lowpoly3d") {
+    return <Model3DToolOptionsBar />;
+  }
+
   return (
     <div className="tool-options-bar">
+      <div className="options-group">
+        <Studio3DWorkspaceKindSwitcher />
+      </div>
+
+      <div className="option-divider" />
+
       <div className="options-group">
         <span className="option-label">Grid</span>
         <button

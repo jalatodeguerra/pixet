@@ -16,10 +16,23 @@ import {
   strokeSelectionAction,
   transformSelectionOrCel,
 } from "../engine/document/selectionActions";
+import { cullInternalCoplanarFaces } from "../engine/model3d/meshOps";
+import { mutateModel3D } from "../engine/model3d/model3dActions";
+import {
+  createPrimitiveNode,
+  instantiateStarterTemplate,
+} from "../engine/model3d/primitives";
+import type { Model3DSubMode } from "../engine/model3d/types";
+import { autoPackModelUvs } from "../engine/model3d/uvOps";
 import {
   generateAllStudio3DMapsAction,
   generateStudio3DMapLayerAction,
 } from "./studio3d/studio3dActions";
+import { downloadExportedModelAction } from "./studio3d/three/modelExporter";
+import {
+  bakeModel3DToTilesetAction,
+  bakeModel3DTurntableAction,
+} from "./studio3d/three/modelSpriteBaker";
 import { beginFreeTransformAction } from "../engine/document/transformActions";
 import {
   applyBufferFilterAction,
@@ -604,6 +617,155 @@ export function CommandPalette() {
       },
     ];
 
+    const switchToLowPolySubMode = (subMode: Model3DSubMode) => {
+      const s = st();
+      if (s.workspaceMode !== "studio3d") s.setWorkspaceMode("studio3d");
+      s.patchStudio3D({ workspaceKind: "lowpoly3d", subMode });
+    };
+
+    const model3dCmds: ActionCommandEntry[] = [
+      ...(
+        [
+          ["model", "Model"],
+          ["tile", "Tile"],
+          ["uv", "UV"],
+          ["paint", "Paint"],
+          ["animate", "Animate"],
+          ["bake", "Bake"],
+        ] as const satisfies readonly [Model3DSubMode, string][]
+      ).map(([subMode, label]) => ({
+        id: `model3d.mode.${subMode}`,
+        label: `3D Model: Switch to Low-Poly 3D (${label})`,
+        category: "3D Model",
+        keywords: ["lowpoly", "3d", "model", subMode, label.toLowerCase()],
+        run: () => switchToLowPolySubMode(subMode),
+      })),
+      {
+        id: "model3d.addCuboid",
+        label: "3D Model: Add Cuboid",
+        category: "3D Model",
+        keywords: ["cuboid", "box", "primitive", "add", "3d"],
+        run: () => {
+          switchToLowPolySubMode("model");
+          mutateModel3D("Add Cuboid", (eng) => {
+            eng.addNode(
+              createPrimitiveNode("cuboid", {
+                name: `Cuboid ${eng.nodes.length + 1}`,
+              })
+            );
+          });
+        },
+      },
+      {
+        id: "model3d.template.chibi16",
+        label: "3D Model: Instantiate Chibi 16px Template",
+        category: "3D Model",
+        keywords: ["template", "chibi", "16px", "rig", "character", "3d"],
+        run: () => {
+          switchToLowPolySubMode("model");
+          mutateModel3D("Instantiate Chibi 16px", (eng) => {
+            instantiateStarterTemplate(eng, "chibi16");
+          });
+        },
+      },
+      {
+        id: "model3d.template.humanoid32",
+        label: "3D Model: Instantiate Retro Humanoid 32px Template",
+        category: "3D Model",
+        keywords: ["template", "humanoid", "32px", "rig", "character", "3d"],
+        run: () => {
+          switchToLowPolySubMode("model");
+          mutateModel3D("Instantiate Retro Humanoid 32px", (eng) => {
+            instantiateStarterTemplate(eng, "humanoid32");
+          });
+        },
+      },
+      {
+        id: "model3d.template.dungeonChunk",
+        label: "3D Model: Instantiate Dungeon Chunk Template",
+        category: "3D Model",
+        keywords: ["template", "dungeon", "room", "chunk", "crocotile", "3d"],
+        run: () => {
+          switchToLowPolySubMode("model");
+          mutateModel3D("Instantiate Dungeon Chunk", (eng) => {
+            instantiateStarterTemplate(eng, "dungeonChunk");
+          });
+        },
+      },
+      {
+        id: "model3d.autoPackUvs",
+        label: "3D Model: Auto-Pack 3D UVs (1px Gutter)",
+        category: "3D Model",
+        keywords: ["uv", "pack", "autopack", "3d"],
+        run: () => {
+          const s = st();
+          let packed = 0;
+          mutateModel3D("Auto-Pack 3D UVs", (eng) => {
+            const res = autoPackModelUvs(
+              eng.nodes,
+              Math.max(1, s.canvasWidth),
+              Math.max(1, s.canvasHeight),
+              1
+            );
+            eng.nodes = res.nodes;
+            packed = res.packedCount;
+          });
+          s.setStatusMessage(`Packed ${packed} 3D UV island(s)`);
+        },
+      },
+      {
+        id: "model3d.cullInternalFaces",
+        label: "3D Model: Cull Internal 3D Faces",
+        category: "3D Model",
+        keywords: ["cull", "hidden", "coplanar", "faces", "optimize", "3d"],
+        run: () => {
+          let culled = 0;
+          mutateModel3D("Cull Internal Coplanar Faces", (eng) => {
+            const res = cullInternalCoplanarFaces(eng.nodes);
+            culled = res.culledCount;
+            eng.nodes = res.nodes;
+          });
+          st().setStatusMessage(`Culled ${culled} internal coplanar face(s)`);
+        },
+      },
+      {
+        id: "model3d.export.glb",
+        label: "3D Model: Export 3D Model (.GLB)",
+        category: "3D Model",
+        keywords: ["export", "glb", "gltf", "godot", "unity", "3d"],
+        run: () => {
+          void downloadExportedModelAction("glb");
+        },
+      },
+      {
+        id: "model3d.export.obj",
+        label: "3D Model: Export 3D Model (.OBJ + .MTL)",
+        category: "3D Model",
+        keywords: ["export", "obj", "mtl", "quad", "blender", "3d"],
+        run: () => {
+          void downloadExportedModelAction("obj");
+        },
+      },
+      {
+        id: "model3d.bake.turntable",
+        label: "3D Model: Bake 3D Model Turntable to Sprite",
+        category: "3D Model",
+        keywords: ["bake", "turntable", "sprite", "2d", "ortho", "3d"],
+        run: () => {
+          bakeModel3DTurntableAction({ directions: 8, projection: "ortho" });
+        },
+      },
+      {
+        id: "model3d.bake.tileset",
+        label: "3D Model: Bake 3D Model to Tileset (4 Rotations)",
+        category: "3D Model",
+        keywords: ["bake", "tileset", "tile", "rotations", "isometric", "3d"],
+        run: () => {
+          bakeModel3DToTilesetAction({ rotations: 4, projection: "ortho" });
+        },
+      },
+    ];
+
     return [
       ...toolCmds,
       ...viewCmds,
@@ -611,6 +773,7 @@ export function CommandPalette() {
       ...fileCmds,
       ...spriteCmds,
       ...filterCmds,
+      ...model3dCmds,
     ];
   }, []);
 
