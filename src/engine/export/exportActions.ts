@@ -4,6 +4,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEditorStore } from "../../store/editorStore.ts";
+import { pixelEngine } from "../document/PixelEngine.ts";
+import {
+  collectGodotTilemapFiles,
+  renderTilemapPng,
+  safeFileName,
+  type TilemapExportFormat,
+} from "./tilemapExport.ts";
 import { collectExportFrames } from "./frameSource.ts";
 import { encodeGif } from "./gif.ts";
 import {
@@ -199,6 +206,79 @@ export async function exportBrowserSpritesheet(
     return true;
   } catch (err) {
     status(`Export failed: ${String(err)}`);
+    return false;
+  }
+}
+
+export interface TilemapExportActionOptions {
+  name: string;
+  format: TilemapExportFormat;
+  layerIds: string[];
+}
+
+/**
+ * Tilemap export (T8): Godot 4 scene + TileSet + atlas PNGs, or the flattened
+ * map as one PNG. Browser downloads (zip for Godot); desktop writes a folder.
+ */
+export async function exportTilemapAction(
+  opts: TilemapExportActionOptions
+): Promise<boolean> {
+  try {
+    const state = useEditorStore.getState();
+    const full = {
+      ...opts,
+      name: safeFileName(opts.name, "map"),
+      frameIndex: state.currentFrame,
+    };
+    const enc = new TextEncoder();
+    const files: Array<{ name: string; bytes: Uint8Array }> = [];
+
+    if (opts.format === "png") {
+      const img = renderTilemapPng(pixelEngine, state.layers, full);
+      if (!img) {
+        status("Tilemap export: no visible tilemap layers selected");
+        return false;
+      }
+      files.push({
+        name: img.name,
+        bytes: await encodePngRgba(img.rgba, img.width, img.height),
+      });
+    } else {
+      const g = collectGodotTilemapFiles(pixelEngine, state.layers, full);
+      if (g.atlases.length === 0) {
+        status("Tilemap export: the project has no tiles");
+        return false;
+      }
+      files.push({ name: g.sceneName, bytes: enc.encode(g.sceneText) });
+      files.push({ name: g.tileSetName, bytes: enc.encode(g.tileSetText) });
+      for (const a of g.atlases) {
+        files.push({
+          name: a.name,
+          bytes: await encodePngRgba(a.rgba, a.width, a.height),
+        });
+      }
+    }
+
+    if (isTauri()) {
+      const outDir = await pickTauriFolder("Select Export Folder");
+      if (!outDir) return false;
+      const n = await writeTauriFiles(outDir, files);
+      status(`Exported ${n} tilemap file${n === 1 ? "" : "s"}`);
+    } else if (files.length === 1) {
+      downloadBytes(files[0].bytes, files[0].name, "image/png");
+      status(`Downloaded ${files[0].name}`);
+    } else {
+      const zipName = `${full.name}_godot.zip`;
+      downloadBytes(
+        createZip(files.map((f) => ({ name: f.name, data: f.bytes }))),
+        zipName,
+        "application/zip"
+      );
+      status(`Downloaded ${zipName}: ${files.map((f) => f.name).join(", ")}`);
+    }
+    return true;
+  } catch (err) {
+    status(`Tilemap export failed: ${String(err)}`);
     return false;
   }
 }

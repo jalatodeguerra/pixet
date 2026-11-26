@@ -5,6 +5,10 @@ import {
   serializeAutoTileRuleset,
 } from "./autoTile.ts";
 import { type AutoMapRule, cloneAutoMapRules } from "./automap.ts";
+import {
+  cloneObjectLayers,
+  type ObjectLayerMap,
+} from "./objects.ts";
 import { cloneTerrainSets, type TerrainSet } from "./terrain.ts";
 import { TilemapData } from "./TilemapEngine.ts";
 import {
@@ -48,7 +52,22 @@ export interface TilesetSnapshotEntry {
   after: TilemapHistorySnapshot;
 }
 
-export type TilemapHistoryEntry = CellHistoryEntry | TilesetSnapshotEntry;
+/**
+ * Object-layer edit (T5). Stored as before/after copies of the (tiny) object
+ * layer map. Reported to the UndoCoordinator as a "tileset"-kind entry so the
+ * existing Ctrl+Z routing handles it without a new kind.
+ */
+export interface ObjectsHistoryEntry {
+  kind: "objects";
+  label: string;
+  before: ObjectLayerMap;
+  after: ObjectLayerMap;
+}
+
+export type TilemapHistoryEntry =
+  | CellHistoryEntry
+  | TilesetSnapshotEntry
+  | ObjectsHistoryEntry;
 
 export interface TilemapHistoryTarget {
   readonly tilesetRegistry: TilesetRegistry;
@@ -56,6 +75,7 @@ export interface TilemapHistoryTarget {
   autoTileRuleset: AutoTileRuleset | null;
   terrainSets: TerrainSet[];
   autoMapRules: AutoMapRule[];
+  objectLayers: ObjectLayerMap;
   getOrCreateTilemap(layerId: string, frameIndex: number): TilemapData;
 }
 
@@ -192,6 +212,20 @@ export class TilemapHistory {
     this.onCommit?.("tileset", label);
   }
 
+  pushObjectSnapshot(
+    label: string,
+    before: ObjectLayerMap,
+    after: ObjectLayerMap
+  ): void {
+    this.pushEntry({
+      kind: "objects",
+      label,
+      before: cloneObjectLayers(before),
+      after: cloneObjectLayers(after),
+    });
+    this.onCommit?.("tileset", label);
+  }
+
   private pushEntry(entry: TilemapHistoryEntry): void {
     markDirty();
     this.undoStack.push(entry);
@@ -210,7 +244,7 @@ export class TilemapHistory {
       cellCount--;
     }
     while (tilesetCount > this.maxTilesetEntries) {
-      const idx = this.undoStack.findIndex((e) => e.kind === "tileset");
+      const idx = this.undoStack.findIndex((e) => e.kind !== "cells");
       if (idx === -1) break;
       this.undoStack.splice(idx, 1);
       tilesetCount--;
@@ -243,6 +277,13 @@ export class TilemapHistory {
       };
     }
 
+    if (entry.kind === "objects") {
+      target.objectLayers = cloneObjectLayers(entry.before);
+      markDirty();
+      this.redoStack.push(entry);
+      return { kind: "tileset", label: entry.label };
+    }
+
     restoreTilemapHistorySnapshot(target, entry.before);
     markDirty();
     this.redoStack.push(entry);
@@ -273,6 +314,13 @@ export class TilemapHistory {
         layerId: entry.layerId,
         frameIndex: entry.frameIndex,
       };
+    }
+
+    if (entry.kind === "objects") {
+      target.objectLayers = cloneObjectLayers(entry.after);
+      markDirty();
+      this.undoStack.push(entry);
+      return { kind: "tileset", label: entry.label };
     }
 
     restoreTilemapHistorySnapshot(target, entry.after);

@@ -449,6 +449,13 @@ export function CommandPalette() {
         keywords: ["frames", "png", "zip", "animation"],
         run: () => st().setExportModalOpen(true, "png_sequence"),
       },
+      {
+        id: "file.exportTilemap",
+        label: "File: Export Tilemap (Godot 4 / PNG)...",
+        category: "File",
+        keywords: ["tilemap", "godot", "tscn", "tileset", "map", "png"],
+        run: () => st().setExportModalOpen(true, "tilemap"),
+      },
     ];
 
     const spriteCmds: ActionCommandEntry[] = [

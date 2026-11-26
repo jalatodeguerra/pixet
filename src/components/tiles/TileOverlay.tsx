@@ -4,6 +4,7 @@ import { unpackCell } from "../../engine/tiles/cell";
 import { cellRectToScreen } from "../../engine/tiles/overlayGeometry";
 import { blitTileTransformed } from "../../engine/tiles/TilemapEngine";
 import { useEditorStore } from "../../store/editorStore";
+import { TileCollisionOverlay, TileObjectsOverlay } from "./TileMetaOverlays";
 
 export function TileOverlay() {
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
@@ -27,6 +28,10 @@ export function TileOverlay() {
   const tileProjection = useEditorStore((s) => s.tileProjection);
   const zoom = useEditorStore((s) => s.zoom);
   const tilesetVersion = useEditorStore((s) => s.tilesetVersion);
+  const showCollisionOverlay = useEditorStore((s) => s.showCollisionOverlay);
+  const hasObjectLayers = useEditorStore((s) =>
+    s.layers.some((l) => l.kind === "object")
+  );
 
   const ghostRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
@@ -195,6 +200,10 @@ export function TileOverlay() {
 
   return (
     <>
+      {showCollisionOverlay && tileProjection === "orthogonal" && (
+        <TileCollisionOverlay />
+      )}
+      {hasObjectLayers && <TileObjectsOverlay />}
       {tilePreviewChanges.length > 0 && tileProjection === "orthogonal" && (
         <canvas
           ref={previewRef}

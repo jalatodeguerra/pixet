@@ -18,6 +18,11 @@ import {
   serializeAutoTileRuleset,
 } from "../tiles/autoTile.ts";
 import { type AutoMapRule, cloneAutoMapRules } from "../tiles/automap.ts";
+import {
+  deserializeObjectLayers,
+  type ObjectLayersJson,
+  serializeObjectLayers,
+} from "../tiles/objects.ts";
 import { cloneTerrainSets, type TerrainSet } from "../tiles/terrain.ts";
 import {
   TilemapData,
@@ -107,7 +112,7 @@ type RustBlendMode =
 interface RustLayer {
   id: string;
   name: string;
-  kind: "raster" | "group" | "tilemap" | "rig" | "data";
+  kind: "raster" | "group" | "tilemap" | "rig" | "data" | "object";
   visible: boolean;
   locked: boolean;
   opacity: number;
@@ -145,6 +150,8 @@ interface RustDocument {
     autoTileRuleset?: unknown;
     terrainSets?: TerrainSet[];
     autoMapRules?: AutoMapRule[];
+    /** Object layers keyed by layer id (T5); absent in old files. */
+    objectLayers?: ObjectLayersJson;
   };
   draw_ext?: {
     guides?: GuideLine[];
@@ -341,6 +348,14 @@ export function serializeProjectTransfer(
     tiles.push(bytesToBase64(pixelEngine.tileset.tiles[i].data));
   }
 
+  const liveObjectLayers = new Map(
+    [...pixelEngine.objectLayers].filter(([id, list]) =>
+      list.length > 0 && state.layers.some((l) => l.id === id && l.kind === "object")
+    )
+  );
+  const objectLayersJson =
+    liveObjectLayers.size > 0 ? serializeObjectLayers(liveObjectLayers) : null;
+
   const document: RustDocument = {
     schema_version: 1,
     name: state.documentName,
@@ -378,6 +393,7 @@ export function serializeProjectTransfer(
       autoTileRuleset: serializeAutoTileRuleset(pixelEngine.autoTileRuleset),
       terrainSets: cloneTerrainSets(pixelEngine.terrainSets),
       autoMapRules: cloneAutoMapRules(pixelEngine.autoMapRules),
+      ...(objectLayersJson ? { objectLayers: objectLayersJson } : {}),
     },
     draw_ext: {
       guides: state.guides.map((g) => ({
@@ -560,6 +576,9 @@ export function hydrateProjectTransfer(
     if (Array.isArray(doc.tiles_ext.autoMapRules)) {
       pixelEngine.autoMapRules = cloneAutoMapRules(doc.tiles_ext.autoMapRules);
     }
+    pixelEngine.objectLayers = deserializeObjectLayers(
+      doc.tiles_ext.objectLayers
+    );
   }
 
   const proj = doc.tile_projection ?? "orthogonal";

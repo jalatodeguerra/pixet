@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Plus } from "lucide-react";
+import { Box, Eye, EyeOff, Plus } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import { DockablePanelSection } from "../DockablePanelSection";
 
@@ -8,15 +8,31 @@ export function TileLayersPanel() {
   const selectLayer = useEditorStore((s) => s.selectLayer);
   const toggleLayerVisible = useEditorStore((s) => s.toggleLayerVisible);
   const addTilemapLayer = useEditorStore((s) => s.addTilemapLayer);
+  const addObjectLayer = useEditorStore((s) => s.addObjectLayer);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
-  const tilemapLayers = layers.filter((l) => l.kind === "tilemap");
+  const tilemapLayers = layers.filter(
+    (l) => l.kind === "tilemap" || l.kind === "object"
+  );
 
   return (
     <DockablePanelSection
       id="tiles-layers"
-      title={`Tilemap Layers (${tilemapLayers.length})`}
+      title={`Map Layers (${tilemapLayers.length})`}
       actions={
+        <>
+        <button
+          type="button"
+          className="icon-action-btn"
+          style={{ width: 22, height: 22 }}
+          title="New Object Layer"
+          onClick={() => {
+            addObjectLayer();
+            setStatusMessage("Created Object layer");
+          }}
+        >
+          <Box size={12} />
+        </button>
         <button
           type="button"
           className="icon-action-btn"
@@ -29,6 +45,7 @@ export function TileLayersPanel() {
         >
           <Plus size={12} />
         </button>
+        </>
       }
     >
       {tilemapLayers.length === 0 ? (
@@ -57,6 +74,7 @@ export function TileLayersPanel() {
                 >
                   {layer.visible ? <Eye size={11} /> : <EyeOff size={11} />}
                 </button>
+                {layer.kind === "object" && <Box size={11} />}
                 <span className="tiles-layer-name">{layer.name}</span>
               </div>
             );

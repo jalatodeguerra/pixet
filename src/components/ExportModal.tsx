@@ -9,15 +9,17 @@ import {
 import {
   exportGifAction,
   exportPngSequenceAction,
+  exportTilemapAction,
 } from "../engine/export/exportActions";
 import { useEditorStore } from "../store/editorStore";
 
-type ExportMode = "sheet" | "gif" | "png_sequence";
+type ExportMode = "sheet" | "gif" | "png_sequence" | "tilemap";
 
 const MODE_LABELS: Record<ExportMode, string> = {
   sheet: "Spritesheet",
   gif: "Animated GIF",
   png_sequence: "PNG sequence",
+  tilemap: "Tilemap",
 };
 
 const GIF_RULE_TIP =
@@ -32,6 +34,7 @@ export function ExportModal() {
   const mode = useEditorStore((s) => s.exportModalMode);
   const tags = useEditorStore((s) => s.tags);
   const frameCount = useEditorStore((s) => s.frames.length);
+  const layers = useEditorStore((s) => s.layers);
   const desktop = isTauriRuntime();
 
   const defaultName =
@@ -49,6 +52,14 @@ export function ExportModal() {
   const [loop, setLoop] = useState(true);
   const [bgMode, setBgMode] = useState<"transparent" | "color">("transparent");
   const [bgColor, setBgColor] = useState("#000000");
+  const [mapFormat, setMapFormat] = useState<"godot" | "png">("godot");
+  const [mapExcluded, setMapExcluded] = useState<string[]>([]);
+  const mapLayers = layers.filter(
+    (l) => l.kind === "tilemap" || (l.kind === "object" && mapFormat === "godot")
+  );
+  const mapLayerIds = mapLayers
+    .filter((l) => !mapExcluded.includes(l.id))
+    .map((l) => l.id);
 
   useEffect(() => {
     if (exportModalOpen) {
@@ -79,6 +90,15 @@ export function ExportModal() {
     e.preventDefault();
     setBusy(true);
     try {
+      if (mode === "tilemap") {
+        const okMap = await exportTilemapAction({
+          name: sheetName.trim() || "map",
+          format: mapFormat,
+          layerIds: mapLayerIds,
+        });
+        if (okMap) setExportModalOpen(false);
+        return;
+      }
       if (mode !== "sheet") {
         const animated = {
           name: sheetName.trim() || (mode === "gif" ? "animation" : "frame"),
@@ -153,7 +173,73 @@ export function ExportModal() {
             </div>
           </div>
 
-          {mode !== "sheet" && (
+          {mode === "tilemap" && (
+            <>
+              <label className="modal-field">
+                <span>Format</span>
+                <select
+                  className="palette-select"
+                  data-testid="tilemap-format"
+                  value={mapFormat}
+                  onChange={(e) =>
+                    setMapFormat(e.target.value as "godot" | "png")
+                  }
+                >
+                  <option value="godot">
+                    Godot 4 scene + TileSet (.tscn + .tres + PNG)
+                  </option>
+                  <option value="png">Map as PNG (flattened, 1x)</option>
+                </select>
+              </label>
+              <label className="modal-field">
+                <span>File Name</span>
+                <input
+                  type="text"
+                  className="tag-form-input"
+                  value={sheetName}
+                  onChange={(e) => setSheetName(e.target.value)}
+                />
+              </label>
+              <div className="modal-field">
+                <span>Layers</span>
+                {mapLayers.length === 0 && (
+                  <span>No tilemap layers yet.</span>
+                )}
+                {mapLayers.map((l) => (
+                  <label key={l.id} className="modal-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={!mapExcluded.includes(l.id)}
+                      onChange={(e) =>
+                        setMapExcluded((cur) =>
+                          e.target.checked
+                            ? cur.filter((id) => id !== l.id)
+                            : [...cur, l.id]
+                        )
+                      }
+                    />
+                    <span>
+                      {l.name}
+                      {l.kind === "object" ? " (objects)" : ""}
+                      {l.visible ? "" : " - hidden"}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="modal-field">
+                <span>
+                  {mapFormat === "godot"
+                    ? (desktop
+                        ? "Pick a folder; writes name.tscn, name_tileset.tres and atlas PNGs. "
+                        : "Downloads one .zip with name.tscn, name_tileset.tres and atlas PNGs. ") +
+                      "Copy the files into your Godot project root (paths are res://name...). Collision presets become TileSet physics polygons; object layers become Marker2D / Area2D nodes."
+                    : "Flattens the selected visible tilemap layers into one PNG at 1x. Object layers are not drawn."}
+                </span>
+              </div>
+            </>
+          )}
+
+          {mode !== "sheet" && mode !== "tilemap" && (
             <>
               <label className="modal-field">
                 <span>File Name</span>

@@ -8,6 +8,7 @@ export type PanelId =
   | "tiles-props"
   | "tiles-terrain"
   | "tiles-layers"
+  | "tiles-objects"
   | "tiles-map-props"
   | "rig-bone-tree"
   | "rig-bone-props"
@@ -26,6 +27,7 @@ export const PANEL_WORKSPACE_MAP: Record<PanelId, PanelWorkspace> = {
   "tiles-props": "tiles",
   "tiles-terrain": "tiles",
   "tiles-layers": "tiles",
+  "tiles-objects": "tiles",
   "tiles-map-props": "tiles",
   "rig-bone-tree": "rig",
   "rig-bone-props": "rig",
@@ -44,6 +46,7 @@ export const DEFAULT_DOCKED_ORDER: Record<PanelWorkspace, PanelId[]> = {
     "tiles-props",
     "tiles-terrain",
     "tiles-layers",
+    "tiles-objects",
     "tiles-map-props",
   ],
   rig: [

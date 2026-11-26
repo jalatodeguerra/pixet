@@ -182,6 +182,7 @@ export function TopBar() {
       { label: "Export Spritesheet...", shortcut: "Ctrl+E", action: () => { setOpenMenu(null); setExportModalOpen(true, "sheet"); } },
       { label: "Export GIF...", action: () => { setOpenMenu(null); setExportModalOpen(true, "gif"); } },
       { label: "Export PNG Sequence...", action: () => { setOpenMenu(null); setExportModalOpen(true, "png_sequence"); } },
+      { label: "Export Tilemap...", action: () => { setOpenMenu(null); setExportModalOpen(true, "tilemap"); } },
     ],
     Edit: [
       { label: "Undo", shortcut: "Ctrl+Z", action: () => { performUndo(); setOpenMenu(null); } },

@@ -394,7 +394,13 @@ export type ToolId =
   | "tileStamp"
   | "isoBox";
 
-export type LayerKind = "raster" | "group" | "tilemap" | "rig" | "data";
+export type LayerKind =
+  | "raster"
+  | "group"
+  | "tilemap"
+  | "rig"
+  | "data"
+  | "object";
 
 export interface LayerItem {
   id: string;
@@ -542,6 +548,12 @@ interface EditorState {
   tileBrushAnchor: "topLeft" | "center";
   tileEraserSize: number;
   tileFillContiguous: boolean;
+  /** T5: draw every collidable cell's shape in Map mode. */
+  showCollisionOverlay: boolean;
+  /** T5: selected object on the active object layer. */
+  selectedObjectId: string | null;
+  /** T5: in-progress object rect drag preview (canvas pixels). */
+  objectDraft: { x: number; y: number; w: number; h: number } | null;
   tileRandomSeed: number;
   tileSelection: string[];
   tileClipboard: TileBrushSelection | null;
@@ -590,7 +602,7 @@ interface EditorState {
   canvasHeight: number;
   colorMode: "RGBA" | "Indexed";
   exportModalOpen: boolean;
-  exportModalMode: "sheet" | "gif" | "png_sequence";
+  exportModalMode: "sheet" | "gif" | "png_sequence" | "tilemap";
   rigExportModalOpen: boolean;
   rotate3dModalOpen: boolean;
   newSpriteModalOpen: boolean;
@@ -760,6 +772,12 @@ interface EditorState {
   toggleShowGrid: () => void;
   toggleSeamlessWrap: () => void;
   toggleShowTileGrid: () => void;
+  toggleShowCollisionOverlay: () => void;
+  setSelectedObjectId: (id: string | null) => void;
+  setObjectDraft: (
+    draft: { x: number; y: number; w: number; h: number } | null
+  ) => void;
+  addObjectLayer: () => void;
   toggleViewFlipH: () => void;
   toggleViewFlipV: () => void;
   toggleViewGrayscale: () => void;
@@ -935,7 +953,7 @@ interface EditorState {
   setDocumentDirty: (dirty: boolean) => void;
   setExportModalOpen: (
     open: boolean,
-    mode?: "sheet" | "gif" | "png_sequence"
+    mode?: "sheet" | "gif" | "png_sequence" | "tilemap"
   ) => void;
   setRigExportModalOpen: (open: boolean) => void;
   setRotate3dModalOpen: (open: boolean) => void;
@@ -1217,6 +1235,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   tileBrushAnchor: "topLeft",
   tileEraserSize: 1,
   tileFillContiguous: true,
+  showCollisionOverlay: false,
+  selectedObjectId: null,
+  objectDraft: null,
   tileRandomSeed: 1337,
   tileSelection: [],
   tileClipboard: null,
@@ -1513,6 +1534,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleShowGrid: () => set((s) => ({ showGrid: !s.showGrid })),
   toggleSeamlessWrap: () => set((s) => ({ seamlessWrap: !s.seamlessWrap })),
   toggleShowTileGrid: () => set((s) => ({ showTileGrid: !s.showTileGrid })),
+  toggleShowCollisionOverlay: () =>
+    set((s) => ({ showCollisionOverlay: !s.showCollisionOverlay })),
+  setSelectedObjectId: (selectedObjectId) => set({ selectedObjectId }),
+  setObjectDraft: (objectDraft) => set({ objectDraft }),
   toggleViewFlipH: () => set((s) => ({ viewFlipH: !s.viewFlipH })),
   toggleViewFlipV: () => set((s) => ({ viewFlipV: !s.viewFlipV })),
   toggleViewGrayscale: () => set((s) => ({ viewGrayscale: !s.viewGrayscale })),
@@ -1773,7 +1798,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
 
   selectLayer: (activeLayerId) =>
-    set({ activeLayerId, selectedLayerIds: [activeLayerId] }),
+    set({
+      activeLayerId,
+      selectedLayerIds: [activeLayerId],
+      selectedObjectId: null,
+    }),
   selectLayerRange: (targetId) =>
     set((s) => {
       const visible = s.layers.filter(
@@ -2128,6 +2157,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         layers: [newLayer, ...s.layers],
         activeLayerId: id,
         selectedLayerIds: [id],
+      };
+    }),
+  addObjectLayer: () =>
+    set((s) => {
+      const id = `object-${layerCounter++}`;
+      const active = s.layers.find((l) => l.id === s.activeLayerId);
+      const newLayer: LayerItem = {
+        id,
+        name: `Objects ${s.layers.filter((l) => l.kind === "object").length + 1}`,
+        kind: "object",
+        visible: true,
+        locked: false,
+        opacity: 100,
+        alphaLock: false,
+        blendMode: "Normal",
+        parentId: active?.kind === "group" ? active.id : (active?.parentId ?? null),
+        cels: {},
+      };
+      return {
+        layers: [newLayer, ...s.layers],
+        activeLayerId: id,
+        selectedLayerIds: [id],
+        selectedObjectId: null,
       };
     }),
   deleteActiveLayer: () =>
