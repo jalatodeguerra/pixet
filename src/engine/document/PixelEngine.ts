@@ -1,4 +1,5 @@
 import { PixelBuffer, type RGBA } from "./PixelBuffer.ts";
+import { generateGemSample, type SampleDocument } from "./samples.ts";
 import { TileHistory } from "../history/TileHistory.ts";
 import { UndoCoordinator } from "../history/UndoCoordinator.ts";
 import {
@@ -1782,42 +1783,15 @@ export class PixelEngine {
   }
 
   seedStarterCanvas(): void {
-    const cx = Math.floor(this.width / 2);
-    const cy = Math.floor(this.height / 2);
+    this.applySampleCels(generateGemSample(this.width, this.height));
+  }
 
-    for (let frameIndex = 0; frameIndex < 4; frameIndex++) {
-      const base = this.getOrCreateCel("layer-base", frameIndex);
-      const shading = this.getOrCreateCel("layer-shading", frameIndex);
-      const outline = this.getOrCreateCel("layer-outline", frameIndex);
-
-      base.clear();
-      shading.clear();
-      outline.clear();
-
-      const bobOffset = frameIndex % 2 === 1 ? -1 : 0;
-      const pulse = frameIndex === 2 ? 1 : 0;
-      const r = 6 + pulse;
-
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const dist = Math.abs(dx) + Math.abs(dy);
-          const px = cx + dx;
-          const py = cy + dy + bobOffset;
-
-          if (dist === r) {
-            outline.setPixel(px, py, 15, 15, 23, 255);
-          } else if (dist < r) {
-            if (dx <= -2 && dy <= -2) {
-              base.setPixel(px, py, 216, 230, 255, 255);
-            } else {
-              base.setPixel(px, py, 91, 140, 255, 255);
-            }
-            if (dy > 1 || dx > 1) {
-              shading.setPixel(px, py, 128, 145, 200, 255);
-            }
-          }
-        }
-      }
+  /** Writes a sample document's cels into the engine (sizes must match). */
+  applySampleCels(sample: SampleDocument): void {
+    for (const c of sample.cels) {
+      const cel = this.getOrCreateCel(c.layerId, c.frameIndex);
+      cel.data.set(c.data);
+      cel.markAllDirty();
     }
     this.emitChange();
   }

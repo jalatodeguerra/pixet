@@ -53,7 +53,7 @@ import {
   TileMode,
 } from "../store/editorStore";
 
-type MenuKey = "File" | "Edit" | "View" | "Sprite";
+type MenuKey = "File" | "Edit" | "View" | "Sprite" | "Help";
 
 interface MenuItem {
   label: string;
@@ -137,6 +137,7 @@ export function TopBar() {
   const resetPanelLayout = useEditorStore((s) => s.resetPanelLayout);
   const setFilterModalOpen = useEditorStore((s) => s.setFilterModalOpen);
   const setKeybindingsModalOpen = useEditorStore((s) => s.setKeybindingsModalOpen);
+  const setStartScreenOpen = useEditorStore((s) => s.setStartScreenOpen);
 
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
   const menuStripRef = useRef<HTMLDivElement>(null);
@@ -214,7 +215,7 @@ export function TopBar() {
       { label: "Flip View Vertical", shortcut: "Shift+H", action: () => { toggleViewFlipV(); setOpenMenu(null); } },
       { label: "Grayscale Value Check", action: () => { toggleViewGrayscale(); setOpenMenu(null); } },
       { label: "Silhouette Check", action: () => { toggleViewSilhouette(); setOpenMenu(null); } },
-      { label: "Toggle Pixel Grid", shortcut: "G", action: () => { toggleShowGrid(); setOpenMenu(null); } },
+      { label: "Toggle Pixel Grid", action: () => { toggleShowGrid(); setOpenMenu(null); } },
       { label: "Toggle Rulers", action: () => { toggleShowRulers(); setOpenMenu(null); } },
       { label: "Toggle Custom Grid", action: () => { toggleShowCustomGrid(); setOpenMenu(null); } },
       { label: "Clear Guides", action: () => { clearGuides(); setOpenMenu(null); } },
@@ -256,6 +257,11 @@ export function TopBar() {
       { label: "Auto-Crop / Trim", action: () => { autoCropSpriteAction(); setOpenMenu(null); } },
       { label: "3D Studio & Turntable", shortcut: "Ctrl+3", action: () => { setOpenMenu(null); setWorkspaceMode("studio3d"); } },
       { label: "Canvas Size...", action: () => { setOpenMenu(null); setCanvasSizeModalOpen(true); } },
+    ],
+    Help: [
+      { label: "Welcome screen...", action: () => { setOpenMenu(null); setStartScreenOpen(true); } },
+      { label: "Keyboard shortcuts...", action: () => { setOpenMenu(null); setKeybindingsModalOpen(true); } },
+      { label: "Command palette", shortcut: "Ctrl+K", action: () => { setOpenMenu(null); setCommandPaletteOpen(true); } },
     ],
   };
 

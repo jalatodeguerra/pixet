@@ -10,6 +10,7 @@ import {
   type DiscardChoice,
   registerDiscardPresenter,
 } from "../engine/io/unsavedChanges";
+import { loadShowOnStartup } from "../engine/io/recentFiles";
 import { useEditorStore } from "../store/editorStore";
 
 interface PendingPrompt {
@@ -62,6 +63,8 @@ export function DocumentDialogs() {
   const discard = useCallback(() => {
     void discardRecovery();
     setRecovery(null);
+    // Nothing recovered: now it is safe to greet the user.
+    if (loadShowOnStartup()) useEditorStore.getState().setStartScreenOpen(true);
   }, []);
 
   useEffect(() => {
