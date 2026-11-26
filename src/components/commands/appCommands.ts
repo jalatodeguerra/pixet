@@ -6,6 +6,11 @@ import {
   type CommandScope,
   type CommandWorkspace,
 } from "../../engine/config/commands";
+import {
+  STUDIO3D_FLAT_MODES,
+  getStudio3DFlatMode,
+  studio3DFlatModePatch,
+} from "../../engine/model3d/studio3dModes";
 import { PIXET_DEFAULT_KEYBINDINGS } from "../../engine/config/keybindings";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import { captureCustomBrushFromSelectionAction } from "../../engine/document/selectionActions";
@@ -360,6 +365,27 @@ function nodesCommands(): CommandDef[] {
   ];
 }
 
+function studio3dCommands(): CommandDef[] {
+  return STUDIO3D_FLAT_MODES.map((m) => ({
+    id: `studio3d.mode.${m.id}`,
+    title: `3D Studio: ${m.label}`,
+    category: "3D Studio",
+    scope: "studio3d" as const,
+    keywords: ["3d", "studio", "mode", m.id, m.label.toLowerCase()],
+    when: () => {
+      const st = useEditorStore.getState().studio3d;
+      return (
+        getStudio3DFlatMode({
+          workspaceKind: st.workspaceKind,
+          mode: st.mode,
+          subMode: st.subMode,
+        }) !== m.id
+      );
+    },
+    run: () => useEditorStore.getState().patchStudio3D(studio3DFlatModePatch(m.id)),
+  }));
+}
+
 let registered = false;
 
 /** Fills the process-wide registry once (idempotent). */
@@ -372,6 +398,7 @@ export function ensureCommandsRegistered(): void {
     ...rigCommands(),
     ...tilesCommands(),
     ...nodesCommands(),
+    ...studio3dCommands(),
   ]);
 }
 

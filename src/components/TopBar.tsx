@@ -65,12 +65,6 @@ const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; }[] = [
   { id: "nodes", label: "Nodes", icon: Workflow },
 ];
 
-const STUDIO3D_MODES: { id: "extruded" | "stack" | "rig"; label: string; hint: string }[] = [
-  { id: "extruded", label: "2.5D", hint: "2.5D extruded spin & volumetric side walls" },
-  { id: "stack", label: "Stack", hint: "Sprite stacking bottom-to-top layers" },
-  { id: "rig", label: "Rig 3D", hint: "Orbit and bake rigged 3D skeleton" },
-];
-
 const RIG_MODES: { id: RigMode; label: string; hint: string }[] = [
   {
     id: "setup",
@@ -110,9 +104,6 @@ export function TopBar() {
   const swapColors = useEditorStore((s) => s.swapColors);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
-  const studio3dMode = useEditorStore((s) => s.studio3d.mode);
-  const studio3dWorkspaceKind = useEditorStore((s) => s.studio3d.workspaceKind);
-  const patchStudio3D = useEditorStore((s) => s.patchStudio3D);
   const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
   const dockAllPanels = useEditorStore((s) => s.dockAllPanels);
   const resetPanelLayout = useEditorStore((s) => s.resetPanelLayout);
@@ -367,30 +358,6 @@ export function TopBar() {
           </div>
         )}
 
-        {workspaceMode === "studio3d" && studio3dWorkspaceKind !== "lowpoly3d" && (
-          <div
-            className="mode-switcher rig-mode-switcher"
-            role="tablist"
-            aria-label="3D Studio Mode"
-          >
-            {STUDIO3D_MODES.map((m) => {
-              const active = studio3dMode === m.id;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  title={m.hint}
-                  className={`mode-pill ${active ? "active" : ""}`}
-                  onClick={() => patchStudio3D({ mode: m.id })}
-                >
-                  <span>{m.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
         </div>
 
         <button

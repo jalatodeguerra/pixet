@@ -1,9 +1,10 @@
-import { Box, Download, Layers, LayoutGrid } from "lucide-react";
+import { Download, LayoutGrid } from "lucide-react";
+import { type ShadingMode } from "../../engine/model3d/types";
 import {
-  type Model3DSubMode,
-  type ShadingMode,
-  type Studio3DWorkspaceKind,
-} from "../../engine/model3d/types";
+  STUDIO3D_FLAT_MODES,
+  getStudio3DFlatMode,
+  studio3DFlatModePatch,
+} from "../../engine/model3d/studio3dModes";
 import {
   ROTATE3D_CAMERA_PRESETS,
   type Rotate3DCameraPreset,
@@ -16,15 +17,6 @@ import {
   STUDIO3D_SIDE_PRESET,
 } from "./studio3dActions";
 import { downloadExportedModelAction } from "./three/modelExporter";
-
-const SUB_MODES: readonly { id: Model3DSubMode; label: string }[] = [
-  { id: "model", label: "Model" },
-  { id: "tile", label: "Tile" },
-  { id: "uv", label: "UV" },
-  { id: "paint", label: "Paint" },
-  { id: "animate", label: "Animate" },
-  { id: "bake", label: "Bake" },
-];
 
 const SNAP_OPTIONS = [0.25, 0.5, 1, 4, 16] as const;
 
@@ -46,42 +38,43 @@ const MODEL_CAMERA_PRESETS: readonly {
   { preset: ROTATE3D_CAMERA_PRESETS.topDown, label: "Top" },
 ];
 
-export function Studio3DWorkspaceKindSwitcher() {
-  const workspaceKind = useEditorStore((s) => s.studio3d.workspaceKind);
+/** The single flat 3D Studio mode switcher (sprite views and low-poly modes). */
+export function Studio3DModeSwitcher() {
+  const flat = useEditorStore((s) =>
+    getStudio3DFlatMode({
+      workspaceKind: s.studio3d.workspaceKind,
+      mode: s.studio3d.mode,
+      subMode: s.studio3d.subMode,
+    })
+  );
   const patchStudio3D = useEditorStore((s) => s.patchStudio3D);
-
-  const selectKind = (kind: Studio3DWorkspaceKind) => {
-    patchStudio3D({ workspaceKind: kind });
-  };
+  // Re-render when bones are added or removed so Rig Preview enables itself.
+  useEditorStore((s) => s.rigVersion);
+  const hasBones = pixelEngine.rig.bones.length > 0;
 
   return (
     <div
-      className="m3d-kind-switcher"
+      className="m3d-submode-strip"
       role="tablist"
-      aria-label="3D Studio Mode Kind"
+      aria-label="3D Studio Mode"
     >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={workspaceKind === "sprite25d"}
-        className={`m3d-kind-btn ${workspaceKind === "sprite25d" ? "active" : ""}`}
-        onClick={() => selectKind("sprite25d")}
-        title="2.5D Sprite Extrusion, Stack & Rig Preview"
-      >
-        <Layers size={12} />
-        <span>2.5D Sprite</span>
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={workspaceKind === "lowpoly3d"}
-        className={`m3d-kind-btn ${workspaceKind === "lowpoly3d" ? "active" : ""}`}
-        onClick={() => selectKind("lowpoly3d")}
-        title="Low-Poly 3D Modeling & Tile Building"
-      >
-        <Box size={12} />
-        <span>Low-Poly 3D</span>
-      </button>
+      {STUDIO3D_FLAT_MODES.map((m) => {
+        const needsBones = m.id === "rigPreview" && !hasBones;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            role="tab"
+            aria-selected={flat === m.id}
+            disabled={needsBones}
+            title={needsBones ? "Add bones in the Rig workspace first" : m.hint}
+            className={`m3d-submode-btn${flat === m.id ? " active" : ""}${m.id === "model" ? " group-start" : ""}`}
+            onClick={() => patchStudio3D(studio3DFlatModePatch(m.id))}
+          >
+            {m.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -103,30 +96,7 @@ export function Model3DToolOptionsBar() {
 
   return (
     <div className="tool-options-bar">
-      <div className="options-group">
-        <Studio3DWorkspaceKindSwitcher />
-      </div>
-
-      <div className="option-divider" />
-
-      <div
-        className="m3d-submode-strip"
-        role="tablist"
-        aria-label="Low-Poly 3D Sub-Modes"
-      >
-        {SUB_MODES.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            role="tab"
-            aria-selected={studio3d.subMode === m.id}
-            className={`m3d-submode-btn ${studio3d.subMode === m.id ? "active" : ""}`}
-            onClick={() => patchStudio3D({ subMode: m.id })}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
+      <Studio3DModeSwitcher />
 
       <div className="option-divider" />
 

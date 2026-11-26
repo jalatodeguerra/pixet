@@ -1,38 +1,5 @@
 /* Low-Poly 3D Modeling Workspace — Flat Dark-Gray UI (0px radius, no shadows) */
 
-.m3d-kind-switcher {
-  display: inline-flex;
-  align-items: center;
-  background: var(--bg-root);
-  border: 1px solid var(--border-subtle);
-  padding: 2px;
-  gap: 2px;
-}
-
-.m3d-kind-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 0px;
-}
-
-.m3d-kind-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
-.m3d-kind-btn.active {
-  color: var(--text-primary);
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-}
-
 .m3d-submode-strip {
   display: inline-flex;
   align-items: center;
@@ -43,6 +10,7 @@
 }
 
 .m3d-submode-btn {
+  white-space: nowrap;
   padding: 2px 8px;
   font-size: var(--fs-xs);
   color: var(--text-secondary);
@@ -50,7 +18,17 @@
   border-radius: 0px;
 }
 
-.m3d-submode-btn:hover {
+.m3d-submode-btn.group-start {
+  margin-left: 6px;
+  border-left-color: var(--border-strong);
+}
+
+.m3d-submode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.m3d-submode-btn:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-hover);
 }
