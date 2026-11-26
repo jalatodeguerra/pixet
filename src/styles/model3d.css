@@ -14,7 +14,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-secondary);
   background: transparent;
@@ -44,7 +44,7 @@
 
 .m3d-submode-btn {
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   border: 1px solid transparent;
   border-radius: 0px;
@@ -67,7 +67,7 @@
   border-radius: 0px;
   padding: 2px 6px;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   outline: none;
 }
 
@@ -122,7 +122,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .m3d-badge-mono {
@@ -155,7 +155,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-subtle);
@@ -178,7 +178,7 @@
 }
 
 .m3d-stat-label {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -186,7 +186,7 @@
 
 .m3d-stat-value {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-primary);
 }
 
@@ -200,12 +200,12 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 10px;
+  padding: 2px 10px;
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: 0px;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .m3d-btn:hover {
@@ -245,7 +245,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -271,7 +271,7 @@
   background: var(--bg-surface);
   border: 1px solid transparent;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-align: left;
 }
 
@@ -294,7 +294,7 @@
 
 .m3d-outliner-kind {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   color: var(--text-muted);
   border: 1px solid var(--border-subtle);
@@ -306,7 +306,7 @@
   padding: 12px 8px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .m3d-field-grid {
@@ -319,7 +319,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
 }
 
@@ -331,7 +331,7 @@
   padding: 3px 5px;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   outline: none;
 }
 
@@ -396,7 +396,7 @@
   border: 1px solid var(--border-strong);
   border-radius: 0px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
 }
 
@@ -448,7 +448,7 @@
   border: 1px solid var(--border-strong);
   border-radius: 0px;
   color: var(--text-primary);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -472,7 +472,7 @@
 .m3d-face-chip {
   padding: 3px 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-align: center;
   background: var(--bg-root);
   border: 1px solid var(--border-subtle);
@@ -495,7 +495,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -527,7 +527,7 @@
 
 .m3d-collider-badge {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--fs-xs);
   color: var(--accent);
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
@@ -616,7 +616,7 @@
 }
 
 .m3d-sub-title {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;

@@ -51,6 +51,7 @@ import type {
 } from "../engine/gamedev/pbrMaps.ts";
 import type { Scene3DGridMode } from "../engine/tools/scene3d.ts";
 import type { RigTurntableMode } from "../engine/rig/export/bake.ts";
+import { stepZoom } from "../engine/ui/zoom.ts";
 import type {
   GizmoMode,
   Model3DSubMode,
@@ -560,6 +561,11 @@ interface EditorState {
   tileSearchQuery: string;
   tileImportModalOpen: boolean;
   zoom: number;
+  /** True while zoom was set by Fit (auto-refits on resize / document change). */
+  zoomIsFit: boolean;
+  /** Bumped to force the viewport to recentre / refit. */
+  viewResetNonce: number;
+  viewportSize: { w: number; h: number } | null;
   cursorPos: CursorPoint | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -648,6 +654,10 @@ interface EditorState {
   rigPerspective3d: number;
 
   dataTool: DataTool;
+  /** True while a Game Data tool (hitbox/socket...) owns the Draw canvas pointer. */
+  dataToolActive: boolean;
+  /** Incremented to ask the Game Data panel to expand itself. */
+  gameDataPanelOpenSignal: number;
   showGameDataOverlay: boolean;
   gameDataVersion: number;
 
@@ -696,6 +706,8 @@ interface EditorState {
 
   rightPanelWidth: number;
   timelineHeight: number;
+  /** True once the user dragged the timeline; otherwise it sizes to content. */
+  timelineHeightManual: boolean;
   timelineCollapsed: boolean;
   panelsCollapsed: boolean;
   showFloatingPreview: boolean;
@@ -812,6 +824,12 @@ interface EditorState {
   setIsoBoxHeight: (h: number) => void;
   setTileProjection: (proj: "orthogonal" | "isometric") => void;
   setZoom: (zoom: number) => void;
+  /** Set the zoom from the fit computation without clearing zoomIsFit. */
+  applyFitZoom: (zoom: number) => void;
+  fitZoomToWindow: () => void;
+  zoomActualSize: () => void;
+  zoomStep: (direction: 1 | -1) => void;
+  setViewportSize: (size: { w: number; h: number }) => void;
   setCursorPos: (pos: CursorPoint | null) => void;
   setHistoryFlags: (canUndo: boolean, canRedo: boolean) => void;
   setCelPopulated: (layerId: string, frameIndex: number, populated: boolean) => void;
@@ -1206,6 +1224,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   tileSearchQuery: "",
   tileImportModalOpen: false,
   zoom: 12,
+  zoomIsFit: true,
+  viewResetNonce: 0,
+  viewportSize: null,
   cursorPos: null,
   canUndo: false,
   canRedo: false,
@@ -1276,6 +1297,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rigPerspective3d: 0.2,
 
   dataTool: "hitbox",
+  dataToolActive: false,
+  gameDataPanelOpenSignal: 0,
   showGameDataOverlay: true,
   gameDataVersion: 0,
 
@@ -1375,6 +1398,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   rightPanelWidth: 276,
   timelineHeight: 204,
+  timelineHeightManual: false,
   timelineCollapsed: false,
   panelsCollapsed: false,
   showFloatingPreview: true,
@@ -1386,7 +1410,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   nodesUi: { ...DEFAULT_NODES_UI_STATE },
   nodesVersion: 0,
 
-  setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
+  setWorkspaceMode: (mode) =>
+    set((s) => {
+      // "data" is legacy: it now means Draw with the Game Data panel open.
+      if (mode === "data") {
+        return {
+          workspaceMode: "draw",
+          dataToolActive: true,
+          gameDataPanelOpenSignal: s.gameDataPanelOpenSignal + 1,
+        };
+      }
+      return { workspaceMode: mode, dataToolActive: false };
+    }),
   patchStudio3D: (patch) =>
     set((s) => ({ studio3d: { ...s.studio3d, ...patch } })),
   bumpModel3DVersion: () =>
@@ -1410,7 +1445,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         autoSpin: false,
       },
     })),
-  setActiveTool: (activeTool) => set({ activeTool }),
+  setActiveTool: (activeTool) => set({ activeTool, dataToolActive: false }),
   setBrushSize: (size) =>
     set({ brushSize: Math.max(1, Math.min(64, Math.round(size))) }),
   setBrushShape: (brushShape) => set({ brushShape }),
@@ -1591,7 +1626,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setIsoBoxHeight: (h) =>
     set({ isoBoxHeight: Math.max(2, Math.min(24, Math.round(h))) }),
   setTileProjection: (tileProjection) => set({ tileProjection }),
-  setZoom: (zoom) => set({ zoom: Math.max(1, Math.min(64, zoom)) }),
+  setZoom: (zoom) =>
+    set({ zoom: Math.max(1, Math.min(64, zoom)), zoomIsFit: false }),
+  applyFitZoom: (zoom) =>
+    set({ zoom: Math.max(1, Math.min(64, zoom)), zoomIsFit: true }),
+  fitZoomToWindow: () =>
+    set((s) => ({ zoomIsFit: true, viewResetNonce: s.viewResetNonce + 1 })),
+  zoomActualSize: () =>
+    set((s) => ({
+      zoom: 1,
+      zoomIsFit: false,
+      viewResetNonce: s.viewResetNonce + 1,
+    })),
+  zoomStep: (direction) =>
+    set((s) => ({
+      zoom: Math.max(1, Math.min(64, stepZoom(s.zoom, direction))),
+      zoomIsFit: false,
+    })),
+  setViewportSize: (size) =>
+    set((s) =>
+      s.viewportSize &&
+      s.viewportSize.w === size.w &&
+      s.viewportSize.h === size.h
+        ? s
+        : { viewportSize: size }
+    ),
   setCursorPos: (cursorPos) => set({ cursorPos }),
   setHistoryFlags: (canUndo, canRedo) => set({ canUndo, canRedo }),
   setCelPopulated: (layerId, frameIndex, populated) =>
@@ -2431,7 +2490,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRightPanelWidth: (width) =>
     set({ rightPanelWidth: Math.max(230, Math.min(420, width)) }),
   setTimelineHeight: (height) =>
-    set({ timelineHeight: Math.max(120, Math.min(360, height)) }),
+    set({
+      timelineHeight: Math.max(120, Math.min(360, height)),
+      timelineHeightManual: true,
+    }),
   toggleTimelineCollapsed: () =>
     set((s) => ({ timelineCollapsed: !s.timelineCollapsed })),
   togglePanelsCollapsed: () =>
@@ -2564,7 +2626,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((s) => ({ rigDirectionalLighting: !s.rigDirectionalLighting })),
   setRigPerspective3d: (v) =>
     set({ rigPerspective3d: Math.max(0, Math.min(1, v)) }),
-  setDataTool: (dataTool) => set({ dataTool }),
+  setDataTool: (dataTool) => set({ dataTool, dataToolActive: true }),
   toggleShowGameDataOverlay: () =>
     set((s) => ({ showGameDataOverlay: !s.showGameDataOverlay })),
   bumpGameDataVersion: () =>
@@ -2703,6 +2765,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
   loadProjectState: (payload) =>
     set({
+      zoomIsFit: true,
+      viewResetNonce: get().viewResetNonce + 1,
       documentName: payload.documentName,
       currentFilePath: payload.filePath,
       canvasWidth: payload.canvasWidth,

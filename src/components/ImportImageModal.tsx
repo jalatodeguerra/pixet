@@ -376,9 +376,6 @@ export function ImportImageModal() {
           frames: nextFrames,
           tags: [],
         });
-        state.setZoom(
-          Math.max(1, Math.min(16, Math.floor(384 / Math.max(fw, fh))))
-        );
         syncTimelineCels();
         pixelEngine.emitChange();
         state.setStatusMessage(
@@ -444,7 +441,6 @@ export function ImportImageModal() {
         frames: nextFrames,
         tags: [],
       });
-      state.setZoom(Math.max(1, Math.min(16, Math.floor(384 / Math.max(fw, fh)))));
       syncTimelineCels();
       pixelEngine.emitChange();
       state.setStatusMessage(
@@ -498,7 +494,6 @@ export function ImportImageModal() {
       ],
       tags: [],
     });
-    state.setZoom(Math.max(1, Math.min(16, Math.floor(384 / Math.max(w, h)))));
     syncTimelineCels();
     pixelEngine.emitChange();
     state.setStatusMessage(`Opened "${pending.name}" (${w}×${h})`);

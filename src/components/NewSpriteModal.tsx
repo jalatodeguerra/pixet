@@ -94,7 +94,6 @@ export function NewSpriteModal() {
       tags: [],
     });
 
-    state.setZoom(Math.max(1, Math.min(16, Math.floor(384 / Math.max(w, h)))));
     syncTimelineCels();
     pixelEngine.emitChange();
     markDocumentReplaced();

@@ -108,6 +108,17 @@ export function App() {
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
   const timelineHeight = useEditorStore((s) => s.timelineHeight);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
+  const studio3dKind = useEditorStore((s) => s.studio3d.workspaceKind);
+  const studio3dSubMode = useEditorStore((s) => s.studio3d.subMode);
+  // The sprite timeline is irrelevant in Nodes and in the low-poly modeller
+  // (except its Animate sub-mode, which reuses this dock for 3D keyframes).
+  const showTimeline =
+    workspaceMode !== "nodes" &&
+    !(
+      workspaceMode === "studio3d" &&
+      studio3dKind === "lowpoly3d" &&
+      studio3dSubMode !== "animate"
+    );
   const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
   const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
   const setTimelineHeight = useEditorStore((s) => s.setTimelineHeight);
@@ -198,6 +209,22 @@ export function App() {
       const st = useEditorStore.getState();
       if (actionId === "view.commandPalette") {
         st.setCommandPaletteOpen(!st.commandPaletteOpen);
+        return true;
+      }
+      if (actionId === "view.zoomFit") {
+        st.fitZoomToWindow();
+        return true;
+      }
+      if (actionId === "view.zoomActual") {
+        st.zoomActualSize();
+        return true;
+      }
+      if (actionId === "view.zoomIn") {
+        st.zoomStep(1);
+        return true;
+      }
+      if (actionId === "view.zoomOut") {
+        st.zoomStep(-1);
         return true;
       }
       if (actionId === "edit.freeTransform") {
@@ -738,6 +765,7 @@ export function App() {
           boundAction === "layer.mergeDown" ||
           boundAction === "view.flipH" ||
           boundAction === "view.flipV" ||
+          boundAction.startsWith("view.zoom") ||
           (stNow.workspaceMode !== "rig" &&
             !(stNow.workspaceMode === "tiles" && stNow.tilesMode === "map") &&
             boundAction.startsWith("tool.")))
@@ -977,12 +1005,12 @@ export function App() {
       }
 
       if (e.key === "=" || e.key === "+") {
-        state.setZoom(state.zoom + 1);
+        state.zoomStep(1);
         return;
       }
 
       if (e.key === "-") {
-        state.setZoom(state.zoom - 1);
+        state.zoomStep(-1);
         return;
       }
 
@@ -1207,7 +1235,7 @@ export function App() {
           <div id="floating-panels-root" className="floating-panels-root" />
         </div>
 
-        {!panelsCollapsed && (
+        {!panelsCollapsed && showTimeline && (
           <>
             {!timelineCollapsed && (
               <div

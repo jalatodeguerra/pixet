@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftRight,
   Lock,
+  Maximize2,
+  Minimize2,
   Pipette,
   Plus,
   SlidersHorizontal,
@@ -37,6 +39,16 @@ function clampInt(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.round(n)));
 }
 
+const COMPACT_KEY = "pixet.colorPanel.compact";
+
+function readCompact(): boolean {
+  try {
+    return localStorage.getItem(COMPACT_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 export function ColorPalettePanel() {
   const primaryColor = useEditorStore((s) => s.primaryColor);
   const secondaryColor = useEditorStore((s) => s.secondaryColor);
@@ -64,6 +76,18 @@ export function ColorPalettePanel() {
 
   const [hexInput, setHexInput] = useState(primaryColor);
   const [readoutMode, setReadoutMode] = useState<ReadoutMode>("hsv");
+  const [compact, setCompact] = useState<boolean>(readCompact);
+  const [harmoniesOpen, setHarmoniesOpen] = useState(false);
+  const toggleCompact = () =>
+    setCompact((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(COMPACT_KEY, next ? "1" : "0");
+      } catch {
+        /* storage unavailable */
+      }
+      return next;
+    });
   const [rampOpen, setRampOpen] = useState(false);
   const [rampDark, setRampDark] = useState("#1a1030");
   const [rampLight, setRampLight] = useState("#f8e8a0");
@@ -224,7 +248,7 @@ export function ColorPalettePanel() {
           <button
             type="button"
             className="toggle-chip"
-            style={{ padding: "1px 5px", fontSize: 10 }}
+            style={{ padding: "1px 5px", fontSize: 11 }}
             title={
               colorPickerMode === "square"
                 ? "Switch to Color Wheel"
@@ -238,16 +262,26 @@ export function ColorPalettePanel() {
           >
             {colorPickerMode === "square" ? "Square" : "Wheel"}
           </button>
+          <button
+            type="button"
+            className="toggle-chip"
+            style={{ padding: "1px 5px" }}
+            title={compact ? "Expand colour panel" : "Compact colour panel"}
+            aria-pressed={!compact}
+            onClick={toggleCompact}
+          >
+            {compact ? <Maximize2 size={10} /> : <Minimize2 size={10} />}
+          </button>
           <span
             className="mono-value"
-            style={{ fontSize: 10, color: "var(--text-muted)" }}
+            style={{ fontSize: 11, color: "var(--text-muted)" }}
           >
             {palette.length}
           </span>
         </>
       }
     >
-      <div className="color-top-row">
+      <div className={`color-top-row ${compact ? "compact" : ""}`}>
             <div className="fg-bg-stack">
               <div
                 className="swatch-bg"
@@ -287,7 +321,7 @@ export function ColorPalettePanel() {
 
             <div className="color-meta">
               <div className="hex-row">
-                <span style={{ color: "var(--text-muted)", fontSize: 10 }}>
+                <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
                   HEX
                 </span>
                 <input
@@ -322,12 +356,13 @@ export function ColorPalettePanel() {
             onAlphaChange={setPrimaryAlpha}
           />
 
+          {!compact && (
           <div className="draw-color-readout">
             <div className="draw-color-readout-header">
               <button
                 type="button"
                 className="toggle-chip"
-                style={{ padding: "1px 6px", fontSize: 10 }}
+                style={{ padding: "1px 6px", fontSize: 11 }}
                 title="Toggle RGB / HSV numeric inputs"
                 onClick={() =>
                   setReadoutMode((m) => (m === "hsv" ? "rgb" : "hsv"))
@@ -414,9 +449,18 @@ export function ColorPalettePanel() {
               </div>
             )}
           </div>
+          )}
 
           <div className="draw-color-strip-section">
-            <div className="draw-color-strip-label">Harmonies</div>
+            <button
+              type="button"
+              className="draw-color-strip-label draw-harmony-toggle"
+              aria-expanded={harmoniesOpen}
+              onClick={() => setHarmoniesOpen((v) => !v)}
+            >
+              {harmoniesOpen ? "▾" : "▸"} Harmonies
+            </button>
+            {harmoniesOpen && (
             <div className="draw-harmony-groups">
               {(
                 [
@@ -441,9 +485,10 @@ export function ColorPalettePanel() {
                 </div>
               ))}
             </div>
+            )}
           </div>
 
-          {recentColors.length > 0 && (
+          {!compact && recentColors.length > 0 && (
             <div className="draw-color-strip-section">
               <div className="draw-color-strip-label">Recent</div>
               <div className="draw-recent-strip">
@@ -522,7 +567,7 @@ export function ColorPalettePanel() {
             <button
               type="button"
               className={`toggle-chip ${paletteLock ? "active" : ""}`}
-              style={{ padding: "2px 6px", fontSize: 10 }}
+              style={{ padding: "2px 6px", fontSize: 11 }}
               title="Lock painting to nearest color in active palette"
               onClick={togglePaletteLock}
             >
@@ -534,7 +579,7 @@ export function ColorPalettePanel() {
               className="palette-select"
               aria-label="Sort Palette"
               value=""
-              style={{ fontSize: 10, padding: "2px 4px" }}
+              style={{ fontSize: 11, padding: "2px 4px" }}
               onChange={(e) => handleSortChange(e.target.value)}
             >
               <option value="" disabled>
@@ -558,7 +603,7 @@ export function ColorPalettePanel() {
             <button
               type="button"
               className={`toggle-chip ${rampOpen ? "active" : ""}`}
-              style={{ padding: "2px 6px", fontSize: 10 }}
+              style={{ padding: "2px 6px", fontSize: 11 }}
               title="Toggle Hue-Shifted Ramp Builder"
               onClick={() => setRampOpen((v) => !v)}
             >
@@ -644,7 +689,7 @@ export function ColorPalettePanel() {
           )}
 
           <div
-            className="palette-grid"
+            className={`palette-grid ${compact ? "compact" : ""}`}
             title="Left-click: FG · Right-click: Context Menu · Drag: Reorder"
           >
             {palette.map((swatch, index) => {

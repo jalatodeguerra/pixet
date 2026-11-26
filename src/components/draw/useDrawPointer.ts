@@ -832,7 +832,7 @@ export function useDrawPointer({
 
     pixelEngine.clearOverlay();
     if (
-      state.workspaceMode === "data" ||
+      state.dataToolActive ||
       px < 0 ||
       py < 0 ||
       px >= state.canvasWidth ||

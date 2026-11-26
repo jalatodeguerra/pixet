@@ -286,7 +286,7 @@ export function WeightsPanel() {
         <div className="rig-option-row">
           <span className="rig-option-label">Method</span>
           <select
-            className="rig-select"
+            className="palette-select"
             value={rigAutoWeightMethod}
             onChange={(e) =>
               setRigAutoWeightMethod(e.target.value as AutoWeightMethod)

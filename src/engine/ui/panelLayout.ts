@@ -21,7 +21,7 @@ export type PanelId =
 export const PANEL_WORKSPACE_MAP: Record<PanelId, PanelWorkspace> = {
   "color-palette": "draw",
   layers: "draw",
-  "game-data": "data",
+  "game-data": "draw",
   "tiles-browser": "tiles",
   "tiles-props": "tiles",
   "tiles-terrain": "tiles",
@@ -38,7 +38,7 @@ export const PANEL_WORKSPACE_MAP: Record<PanelId, PanelWorkspace> = {
 };
 
 export const DEFAULT_DOCKED_ORDER: Record<PanelWorkspace, PanelId[]> = {
-  draw: ["color-palette", "layers"],
+  draw: ["color-palette", "layers", "game-data"],
   tiles: [
     "tiles-browser",
     "tiles-props",
@@ -58,7 +58,7 @@ export const DEFAULT_DOCKED_ORDER: Record<PanelWorkspace, PanelId[]> = {
   ],
   studio3d: [],
   nodes: [],
-  data: ["game-data", "color-palette", "layers"],
+  data: [], // legacy: folded into draw
 };
 
 export interface FloatingPanelRect {
@@ -269,7 +269,7 @@ export function deserializePanelLayout(raw: string | null): PanelLayoutState {
 
     const dockedPanelOrder = { ...def.dockedPanelOrder };
     if (parsed.dockedPanelOrder && typeof parsed.dockedPanelOrder === "object") {
-      for (const ws of ["draw", "tiles", "rig", "data"] as const) {
+      for (const ws of ["draw", "tiles", "rig"] as const) {
         const rawList = parsed.dockedPanelOrder[ws];
         if (!Array.isArray(rawList)) continue;
         const defaultList = DEFAULT_DOCKED_ORDER[ws];

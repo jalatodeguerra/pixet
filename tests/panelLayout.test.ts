@@ -83,3 +83,17 @@ test("panelLayout clampFloatingRect and serialize/deserialize recovery", () => {
   const fallback = deserializePanelLayout("{not-valid-json");
   assert.deepEqual(fallback, createDefaultPanelLayout());
 });
+
+test("panelLayout migrates legacy data workspace: game-data now lives in draw", () => {
+  assert.deepEqual(DEFAULT_DOCKED_ORDER.draw, ["color-palette", "layers", "game-data"]);
+  const legacy = JSON.stringify({
+    detachedPanels: {},
+    dockedPanelOrder: {
+      draw: ["layers", "color-palette"],
+      data: ["game-data", "color-palette", "layers"],
+    },
+  });
+  const state = deserializePanelLayout(legacy);
+  assert.deepEqual(state.dockedPanelOrder.draw, ["layers", "color-palette", "game-data"]);
+  assert.deepEqual(state.dockedPanelOrder.data, []);
+});
