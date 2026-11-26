@@ -4,13 +4,35 @@ import {
   type ExportFormat,
   type PackMode,
   exportSpritesheetAction,
+  isTauriRuntime,
 } from "../engine/io/projectBridge";
+import {
+  exportGifAction,
+  exportPngSequenceAction,
+} from "../engine/export/exportActions";
 import { useEditorStore } from "../store/editorStore";
+
+type ExportMode = "sheet" | "gif" | "png_sequence";
+
+const MODE_LABELS: Record<ExportMode, string> = {
+  sheet: "Spritesheet",
+  gif: "Animated GIF",
+  png_sequence: "PNG sequence",
+};
+
+const GIF_RULE_TIP =
+  "GIF transparency is 1-bit: pixels with alpha below 128 become transparent, " +
+  "pixels at 128 or above become fully opaque. Animations with more than 256 " +
+  "colours get a per-frame palette (colours are reduced).";
 
 export function ExportModal() {
   const exportModalOpen = useEditorStore((s) => s.exportModalOpen);
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
   const documentName = useEditorStore((s) => s.documentName);
+  const mode = useEditorStore((s) => s.exportModalMode);
+  const tags = useEditorStore((s) => s.tags);
+  const frameCount = useEditorStore((s) => s.frames.length);
+  const desktop = isTauriRuntime();
 
   const defaultName =
     documentName.replace(/\.pixet$/i, "") || "spritesheet";
@@ -22,12 +44,23 @@ export function ExportModal() {
   const [padding, setPadding] = useState(1);
   const [sheetName, setSheetName] = useState(defaultName);
   const [busy, setBusy] = useState(false);
+  const [tagId, setTagId] = useState<string>("");
+  const [scale, setScale] = useState(1);
+  const [loop, setLoop] = useState(true);
+  const [bgMode, setBgMode] = useState<"transparent" | "color">("transparent");
+  const [bgColor, setBgColor] = useState("#000000");
 
   useEffect(() => {
     if (exportModalOpen) {
       setSheetName(documentName.replace(/\.pixet$/i, "") || "spritesheet");
     }
   }, [exportModalOpen, documentName]);
+
+  useEffect(() => {
+    if (exportModalOpen && tagId && !tags.some((t) => t.id === tagId)) {
+      setTagId("");
+    }
+  }, [exportModalOpen, tags, tagId]);
 
   useEffect(() => {
     if (!exportModalOpen) return;
@@ -46,6 +79,21 @@ export function ExportModal() {
     e.preventDefault();
     setBusy(true);
     try {
+      if (mode !== "sheet") {
+        const animated = {
+          name: sheetName.trim() || (mode === "gif" ? "animation" : "frame"),
+          tagId: tagId || null,
+          scale,
+          background: bgMode === "color" ? bgColor : null,
+          loop,
+        };
+        const okAnim =
+          mode === "gif"
+            ? await exportGifAction(animated)
+            : await exportPngSequenceAction(animated);
+        if (okAnim) setExportModalOpen(false);
+        return;
+      }
       const ok = await exportSpritesheetAction({
         format,
         pack,
@@ -69,9 +117,13 @@ export function ExportModal() {
         if (e.target === e.currentTarget) setExportModalOpen(false);
       }}
     >
-      <div className="modal-card" role="dialog" aria-label="Export Spritesheet">
+      <div
+        className="modal-card"
+        role="dialog"
+        aria-label={`Export ${MODE_LABELS[mode]}`}
+      >
         <div className="modal-header">
-          <span>Export Spritesheet</span>
+          <span>Export {MODE_LABELS[mode]}</span>
           <button
             type="button"
             className="icon-action-btn"
@@ -83,6 +135,136 @@ export function ExportModal() {
         </div>
 
         <form className="modal-body" onSubmit={handleSubmit}>
+          <div className="modal-field">
+            <span>Export type</span>
+            <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Export type">
+              {(Object.keys(MODE_LABELS) as ExportMode[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`toggle-chip${mode === m ? " active" : ""}`}
+                  style={{ flex: 1 }}
+                  aria-pressed={mode === m}
+                  onClick={() => setExportModalOpen(true, m)}
+                >
+                  {MODE_LABELS[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {mode !== "sheet" && (
+            <>
+              <label className="modal-field">
+                <span>File Name</span>
+                <input
+                  type="text"
+                  className="tag-form-input"
+                  value={sheetName}
+                  onChange={(e) => setSheetName(e.target.value)}
+                />
+              </label>
+
+              <label className="modal-field">
+                <span>Animation</span>
+                <select
+                  className="palette-select"
+                  value={tagId}
+                  onChange={(e) => setTagId(e.target.value)}
+                >
+                  <option value="">All frames ({frameCount})</option>
+                  {tags.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({t.fromFrame}-{t.toFrame}
+                      {t.direction && t.direction !== "forward"
+                        ? `, ${t.direction}`
+                        : ""}
+                      )
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="modal-grid-2">
+                <label className="modal-field">
+                  <span>Scale</span>
+                  <select
+                    className="palette-select"
+                    value={scale}
+                    onChange={(e) => setScale(Number(e.target.value))}
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                      <option key={n} value={n}>
+                        {n}x
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="modal-field">
+                  <span>Background</span>
+                  <select
+                    className="palette-select"
+                    value={bgMode}
+                    onChange={(e) =>
+                      setBgMode(e.target.value as "transparent" | "color")
+                    }
+                  >
+                    <option value="transparent">Transparent</option>
+                    <option value="color">Solid colour</option>
+                  </select>
+                </label>
+              </div>
+
+              {bgMode === "color" && (
+                <label className="modal-field">
+                  <span>Background colour</span>
+                  <input
+                    type="color"
+                    className="tag-form-input"
+                    value={bgColor}
+                    onChange={(e) => setBgColor(e.target.value)}
+                  />
+                </label>
+              )}
+
+              {mode === "gif" && (
+                <>
+                  <label className="modal-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={loop}
+                      onChange={(e) => setLoop(e.target.checked)}
+                    />
+                    <span>Loop forever (off = play once)</span>
+                  </label>
+                  <div
+                    className="modal-field"
+                    title={GIF_RULE_TIP}
+                    data-testid="gif-transparency-note"
+                  >
+                    <span>
+                      GIF transparency is on/off: alpha below 128 is
+                      transparent, otherwise opaque. Over 256 colours are
+                      reduced per frame.
+                    </span>
+                  </div>
+                </>
+              )}
+              {mode === "png_sequence" && (
+                <div className="modal-field">
+                  <span>
+                    {desktop
+                      ? "Pick a folder; one PNG per frame is written as name_0000.png."
+                      : "Downloads one .zip containing name_0000.png, name_0001.png, ..."}
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+
+          {mode === "sheet" && (
+          <>
           <label className="modal-field">
             <span>Format</span>
             <select
@@ -92,9 +274,18 @@ export function ExportModal() {
             >
               <option value="json">Generic PNG + JSON (Aseprite schema)</option>
               <option value="godot">Godot 4 SpriteFrames (.tres + PNG)</option>
-              <option value="godot_tileset">Godot 4 TileSet (.tres + Atlas PNG)</option>
-              <option value="tiled">Tiled Map &amp; Tileset (.tmj + .tsj + PNG)</option>
+              <option value="godot_tileset" disabled={!desktop}>
+                Godot 4 TileSet (.tres + Atlas PNG){desktop ? "" : " - Desktop app only"}
+              </option>
+              <option value="tiled" disabled={!desktop}>
+                Tiled Map &amp; Tileset (.tmj + .tsj + PNG){desktop ? "" : " - Desktop app only"}
+              </option>
             </select>
+            {!desktop && (
+              <span data-testid="desktop-only-note">
+                Desktop app only: Godot TileSet and Tiled exports.
+              </span>
+            )}
           </label>
 
           <label className="modal-field">
@@ -153,6 +344,8 @@ export function ExportModal() {
             />
             <span>Trim transparent whitespace</span>
           </label>
+          </>
+          )}
 
           <div className="modal-footer">
             <button

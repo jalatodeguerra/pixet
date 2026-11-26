@@ -178,7 +178,9 @@ export function TopBar() {
       },
       { label: "Save", shortcut: "Ctrl+S", action: () => { setOpenMenu(null); void saveProjectAction(false); } },
       { label: "Save As...", shortcut: "Ctrl+Shift+S", action: () => { setOpenMenu(null); void saveProjectAction(true); } },
-      { label: "Export Spritesheet...", shortcut: "Ctrl+E", action: () => { setOpenMenu(null); setExportModalOpen(true); } },
+      { label: "Export Spritesheet...", shortcut: "Ctrl+E", action: () => { setOpenMenu(null); setExportModalOpen(true, "sheet"); } },
+      { label: "Export GIF...", action: () => { setOpenMenu(null); setExportModalOpen(true, "gif"); } },
+      { label: "Export PNG Sequence...", action: () => { setOpenMenu(null); setExportModalOpen(true, "png_sequence"); } },
     ],
     Edit: [
       { label: "Undo", shortcut: "Ctrl+Z", action: () => { performUndo(); setOpenMenu(null); } },

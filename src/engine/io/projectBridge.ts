@@ -42,6 +42,7 @@ import {
 } from "./documentState.ts";
 import { clearRecoveryEntry } from "./recovery.ts";
 import { confirmDiscardChanges } from "./unsavedChanges.ts";
+import { exportBrowserSpritesheet } from "../export/exportActions.ts";
 
 export type ExportFormat = "json" | "godot" | "godot_tileset" | "tiled";
 export type PackMode = "grid" | "tight";
@@ -821,55 +822,21 @@ export async function exportSpritesheetAction(
   const payload = serializeProjectTransfer();
 
   if (!isTauriRuntime()) {
-    // Browser fallback: render horizontal spritesheet PNG + JSON/TRES
-    const w = state.canvasWidth;
-    const h = state.canvasHeight;
-    const n = state.frames.length;
-    const sheetCanvas = document.createElement("canvas");
-    sheetCanvas.width = w * n;
-    sheetCanvas.height = h;
-    const ctx = sheetCanvas.getContext("2d");
-    if (!ctx) return false;
-
-    for (let i = 0; i < n; i++) {
-      const rgba = pixelEngine.compositeFrame(state.layers, i);
-      const img = new ImageData(new Uint8ClampedArray(rgba), w, h);
-      ctx.putImageData(img, i * w, 0);
-    }
-
-    const pngName = `${options.sheetName}.png`;
-    sheetCanvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, pngName);
-    }, "image/png");
-
-    if (options.format === "json") {
-      const jsonMeta = {
-        frames: state.frames.map((f, idx) => ({
-          filename: `${options.sheetName}_${idx}.png`,
-          frame: { x: idx * w, y: 0, w, h },
-          rotated: false,
-          trimmed: false,
-          spriteSourceSize: { x: 0, y: 0, w, h },
-          sourceSize: { w, h },
-          duration: f.durationMs,
-        })),
-        meta: {
-          app: "pixet",
-          image: pngName,
-          format: "RGBA8888",
-          size: { w: w * n, h },
-          scale: "1",
-        },
-      };
-      downloadBlob(
-        new Blob([JSON.stringify(jsonMeta, null, 2)], {
-          type: "application/json",
-        }),
-        `${options.sheetName}.json`
+    // Browser: the TS port of the Rust packer handles json + godot formats.
+    if (options.format !== "json" && options.format !== "godot") {
+      state.setStatusMessage(
+        "Godot TileSet and Tiled exports are available in the desktop app only"
       );
+      return false;
     }
-    state.setStatusMessage(`Downloaded ${pngName} (browser preview export)`);
-    return true;
+    return exportBrowserSpritesheet({
+      format: options.format,
+      pack: options.pack,
+      trim: options.trim,
+      extrude: options.extrude,
+      padding: options.padding,
+      sheetName: options.sheetName,
+    });
   }
 
   const outDir = await open({
