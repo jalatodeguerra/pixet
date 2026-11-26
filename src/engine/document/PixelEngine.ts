@@ -62,6 +62,12 @@ import type {
   FloatingSelection,
   SelectionMask,
 } from "../tools/selection.ts";
+import {
+  cloneObjectLayers,
+  objectLayersEqual,
+  type ObjectLayerMap,
+  type TileObject,
+} from "../tiles/objects.ts";
 import { resolveOnionSkinFrames } from "../tools/animationHelpers.ts";
 import {
   mat3ExtractEulerDeg,
@@ -193,6 +199,8 @@ export class PixelEngine {
   autoTileRuleset: AutoTileRuleset | null = null;
   terrainSets: TerrainSet[] = [];
   autoMapRules: AutoMapRule[] = [];
+  /** Object layers (T5): layer id -> objects in pixel coordinates. */
+  objectLayers: ObjectLayerMap = new Map();
   tileProjection: "orthogonal" | "isometric" = "orthogonal";
   tileAnimationElapsedMs: number | undefined = undefined;
 
@@ -230,6 +238,7 @@ export class PixelEngine {
     this.autoTileRuleset = null;
     this.terrainSets = [];
     this.autoMapRules = [];
+    this.objectLayers = new Map();
     this.rig.reset();
     this.gameData.reset();
     this.model3d.reset();
@@ -565,6 +574,25 @@ export class PixelEngine {
     remapTerrainSets(this.terrainSets, tilesetIndex, remap);
     this.emitChange();
     return true;
+  }
+
+  getObjects(layerId: string): TileObject[] {
+    return this.objectLayers.get(layerId) ?? [];
+  }
+
+  /** Run an object-layer edit as one undoable step (Ctrl+Z via tilemapHistory). */
+  recordObjectOp<T>(label: string, fn: () => T): T {
+    const before = cloneObjectLayers(this.objectLayers);
+    const result = fn();
+    this.pushObjectHistory(label, before);
+    return result;
+  }
+
+  /** Push an undo entry for edits already applied since `before` was captured. */
+  pushObjectHistory(label: string, before: ObjectLayerMap): void {
+    if (objectLayersEqual(before, this.objectLayers)) return;
+    this.tilemapHistory.pushObjectSnapshot(label, before, this.objectLayers);
+    this.emitChange();
   }
 
   recordTilesetOp<T>(label: string, fn: () => T): T {

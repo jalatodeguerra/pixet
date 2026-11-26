@@ -116,6 +116,10 @@ export function TileToolOptionsBar() {
   const setTileSelection = useEditorStore((s) => s.setTileSelection);
   const showTileGrid = useEditorStore((s) => s.showTileGrid);
   const toggleShowTileGrid = useEditorStore((s) => s.toggleShowTileGrid);
+  const showCollisionOverlay = useEditorStore((s) => s.showCollisionOverlay);
+  const toggleShowCollisionOverlay = useEditorStore(
+    (s) => s.toggleShowCollisionOverlay
+  );
   const showIsoGrid = useEditorStore((s) => s.showIsoGrid);
   const toggleShowIsoGrid = useEditorStore((s) => s.toggleShowIsoGrid);
 
@@ -198,6 +202,18 @@ export function TileToolOptionsBar() {
         </>
       )}
 
+      {tileTool === "object" && (
+        <>
+          <div className="options-sep" />
+          <div className="options-group">
+            <span className="options-label">
+              Click = point, drag = rect. Grid snap on; hold Alt for pixel.
+              Del removes.
+            </span>
+          </div>
+        </>
+      )}
+
       {tileTool === "random" && (
         <>
           <div className="options-sep" />
@@ -269,6 +285,14 @@ export function TileToolOptionsBar() {
         >
           <Grid2x2 size={11} />
           <span>Tile Grid</span>
+        </button>
+        <button
+          type="button"
+          className={`toggle-chip ${showCollisionOverlay ? "active" : ""}`}
+          title="Show collision shapes of every tile in the map"
+          onClick={toggleShowCollisionOverlay}
+        >
+          <span>Collision</span>
         </button>
         <button
           type="button"

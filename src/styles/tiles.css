@@ -262,3 +262,128 @@
   opacity: 0.55;
   z-index: 5;
 }
+
+.tiles-collision-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.tiles-collision-body {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.tiles-collision-preview {
+  position: relative;
+  flex: none;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  box-sizing: content-box;
+}
+
+.tiles-collision-preview canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+.tiles-collision-preview svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.tiles-collision-shape {
+  fill: rgba(76, 139, 245, 0.35);
+  stroke: #4c8bf5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.tiles-collision-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tiles-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.tiles-collision-overlay-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.tiles-object-label {
+  fill: #e8e8e8;
+  paint-order: stroke;
+  stroke: #141414;
+  stroke-linejoin: miter;
+}
+
+.tiles-object-shape {
+  fill: rgba(234, 179, 8, 0.12);
+  stroke: #eab308;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.tiles-object-shape.selected {
+  fill: rgba(76, 139, 245, 0.2);
+  stroke: #4c8bf5;
+}
+
+.tiles-object-point {
+  fill: #eab308;
+  stroke: #141414;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.tiles-object-point.selected {
+  fill: #4c8bf5;
+}
+
+.tiles-object-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.tiles-object-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tiles-object-grid label {
+  display: flex;
+  flex-direction: column;
+  font-size: 9px;
+  color: var(--text-muted);
+  gap: 2px;
+}
+
+.tiles-kv-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-top: 4px;
+}

@@ -18,6 +18,18 @@ import {
   type TileBrush,
   type WeightedCell,
 } from "../../engine/tiles/mapTools";
+import { addObject, getActiveObjectLayerId } from "../../engine/document/objectActions";
+import {
+  cloneObject,
+  cloneObjectLayers,
+  createPointObject,
+  createRectObject,
+  hitTestObjects,
+  isRectDrag,
+  type ObjectLayerMap,
+  rectFromDrag,
+  snapToGrid,
+} from "../../engine/tiles/objects";
 import { screenToTileCell } from "../../engine/tiles/overlayGeometry";
 import { paintTerrainCell } from "../../engine/tiles/terrain";
 import { useEditorStore } from "../../store/editorStore";
@@ -53,6 +65,18 @@ interface TileStrokeState {
   altKey: boolean;
   brush: TileBrush;
   randomPool: WeightedCell[];
+}
+
+interface ObjectStrokeState {
+  mode: "create" | "move";
+  layerId: string;
+  startX: number;
+  startY: number;
+  objectId: string | null;
+  origX: number;
+  origY: number;
+  before: ObjectLayerMap | null;
+  moved: boolean;
 }
 
 export function isTilePointerModeActive(): boolean {
@@ -114,6 +138,127 @@ function buildRandomPool(): WeightedCell[] {
 
 export function useTilePointer({ getPixelCoords }: UseTilePointerOptions) {
   const strokeRef = useRef<TileStrokeState | null>(null);
+  const objectStrokeRef = useRef<ObjectStrokeState | null>(null);
+
+  const objectPointerDown = (
+    e: React.PointerEvent<HTMLCanvasElement>,
+    px: number,
+    py: number
+  ): boolean => {
+    const state = useEditorStore.getState();
+    const layerId = getActiveObjectLayerId();
+    if (!layerId) {
+      state.setStatusMessage("Select an Object layer to place objects");
+      return true;
+    }
+    const layer = state.layers.find((l) => l.id === layerId);
+    if (layer?.locked) {
+      state.setStatusMessage("Object layer is locked");
+      return true;
+    }
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const objects = pixelEngine.getObjects(layerId);
+    const radius = Math.max(2, Math.ceil(6 / Math.max(0.1, state.zoom)));
+    const hit = hitTestObjects(objects, px + 0.5, py + 0.5, radius);
+    if (hit) {
+      state.setSelectedObjectId(hit.id);
+      objectStrokeRef.current = {
+        mode: "move",
+        layerId,
+        startX: px,
+        startY: py,
+        objectId: hit.id,
+        origX: hit.x,
+        origY: hit.y,
+        before: cloneObjectLayers(pixelEngine.objectLayers),
+        moved: false,
+      };
+    } else {
+      state.setSelectedObjectId(null);
+      objectStrokeRef.current = {
+        mode: "create",
+        layerId,
+        startX: px,
+        startY: py,
+        objectId: null,
+        origX: 0,
+        origY: 0,
+        before: null,
+        moved: false,
+      };
+    }
+    return true;
+  };
+
+  const objectPointerMove = (
+    e: React.PointerEvent<HTMLCanvasElement>,
+    px: number,
+    py: number
+  ): void => {
+    const stroke = objectStrokeRef.current;
+    if (!stroke) return;
+    const state = useEditorStore.getState();
+    const snap = e.altKey
+      ? null
+      : { tileW: state.tileWidth, tileH: state.tileHeight };
+    if (stroke.mode === "create") {
+      state.setObjectDraft(
+        isRectDrag(stroke.startX, stroke.startY, px, py, snap)
+          ? rectFromDrag(stroke.startX, stroke.startY, px, py, snap)
+          : null
+      );
+      return;
+    }
+    const nx = stroke.origX + (px - stroke.startX);
+    const ny = stroke.origY + (py - stroke.startY);
+    const x = snap ? snapToGrid(nx, snap.tileW) : nx;
+    const y = snap ? snapToGrid(ny, snap.tileH) : ny;
+    const list = pixelEngine.getObjects(stroke.layerId);
+    const cur = list.find((o) => o.id === stroke.objectId);
+    if (!cur || (cur.x === x && cur.y === y)) return;
+    pixelEngine.objectLayers.set(
+      stroke.layerId,
+      list.map((o) => (o.id === stroke.objectId ? { ...cloneObject(o), x, y } : o))
+    );
+    stroke.moved = true;
+    pixelEngine.emitChange();
+  };
+
+  const objectPointerUp = (
+    e: React.PointerEvent<HTMLCanvasElement>,
+    px: number,
+    py: number
+  ): void => {
+    const stroke = objectStrokeRef.current;
+    objectStrokeRef.current = null;
+    if (!stroke) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    const state = useEditorStore.getState();
+    state.setObjectDraft(null);
+    if (stroke.mode === "move") {
+      if (stroke.moved && stroke.before) {
+        pixelEngine.pushObjectHistory("Move Object", stroke.before);
+      }
+      return;
+    }
+    const snap = e.altKey
+      ? null
+      : { tileW: state.tileWidth, tileH: state.tileHeight };
+    const existing = pixelEngine.getObjects(stroke.layerId);
+    let obj;
+    if (isRectDrag(stroke.startX, stroke.startY, px, py, snap)) {
+      const r = rectFromDrag(stroke.startX, stroke.startY, px, py, snap);
+      obj = createRectObject(existing, r.x, r.y, r.w, r.h);
+    } else {
+      const x = snap ? snapToGrid(px + 0.5, snap.tileW) : px;
+      const y = snap ? snapToGrid(py + 0.5, snap.tileH) : py;
+      obj = createPointObject(existing, x, y);
+    }
+    addObject(stroke.layerId, obj);
+    state.setSelectedObjectId(obj.id);
+  };
 
   const paintTerrainAt = (
     layerId: string,
@@ -188,6 +333,10 @@ export function useTilePointer({ getPixelCoords }: UseTilePointerOptions) {
       state.tileProjection
     );
     state.setHoveredTileCell({ col, row });
+
+    if (state.workspaceMode === "tiles" && state.tileTool === "object") {
+      return objectPointerDown(e, px, py);
+    }
 
     const activeLayer = state.layers.find((l) => l.id === state.activeLayerId);
     if (!activeLayer || activeLayer.kind !== "tilemap") {
@@ -479,6 +628,11 @@ export function useTilePointer({ getPixelCoords }: UseTilePointerOptions) {
     );
     state.setHoveredTileCell({ col, row });
 
+    if (objectStrokeRef.current) {
+      objectPointerMove(e, px, py);
+      return true;
+    }
+
     const stroke = strokeRef.current;
     if (!stroke) return true;
 
@@ -618,6 +772,11 @@ export function useTilePointer({ getPixelCoords }: UseTilePointerOptions) {
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>): boolean => {
+    if (objectStrokeRef.current) {
+      const { x: ux, y: uy } = getPixelCoords(e);
+      objectPointerUp(e, ux, uy);
+      return true;
+    }
     const stroke = strokeRef.current;
     if (!stroke) return isTilePointerModeActive();
     strokeRef.current = null;

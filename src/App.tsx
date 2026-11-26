@@ -73,6 +73,7 @@ import {
   copyTileSelectionToClipboard,
   deleteTileSelectionCells,
 } from "./components/tiles/TileToolOptionsBar";
+import { deleteSelectedObject } from "./engine/document/objectActions";
 import { TILE_TOOL_SHORTCUTS } from "./components/tiles/tileTools";
 import { packCell, rotateCellCW, unpackCell } from "./engine/tiles/cell";
 import {
@@ -950,6 +951,15 @@ export function App() {
 
       if (e.key === "Delete" || e.key === "Backspace") {
         const st = useEditorStore.getState();
+        if (
+          st.workspaceMode === "tiles" &&
+          st.tilesMode === "map" &&
+          st.tileTool === "object" &&
+          deleteSelectedObject()
+        ) {
+          e.preventDefault();
+          return;
+        }
         if (
           st.workspaceMode === "tiles" &&
           st.tilesMode === "map" &&

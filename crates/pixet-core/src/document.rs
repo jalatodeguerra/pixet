@@ -47,6 +47,9 @@ pub enum LayerKind {
     Tilemap,
     Rig,
     Data,
+    /// Object layer (points/rects). Objects live in `tiles_ext.objectLayers`
+    /// keyed by layer id; the layer itself carries no cels.
+    Object,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,6 +275,7 @@ mod tests {
             LayerKind::Tilemap,
             LayerKind::Rig,
             LayerKind::Data,
+            LayerKind::Object,
         ];
         for kind in kinds {
             let serialized = serde_json::to_string(&kind).expect("serialize layer kind");
@@ -335,6 +339,57 @@ mod tests {
             vec![1, 0x8000_0002]
         );
         assert!(parsed_v2.tiles_ext.is_some());
+    }
+
+    #[test]
+    fn object_layer_round_trips_and_old_files_still_load() {
+        let mut doc = Document::new_default(32, 32);
+        doc.layers.push(Layer {
+            id: "object-1".to_string(),
+            name: "Objects 1".to_string(),
+            kind: LayerKind::Object,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            alpha_lock: false,
+            blend_mode: BlendMode::Normal,
+            parent_id: None,
+            clipped: false,
+            color_tag: None,
+            cels: Vec::new(),
+            tilemaps: BTreeMap::new(),
+            map_role: None,
+        });
+        doc.tiles_version = 2;
+        doc.tiles_ext = Some(serde_json::json!({
+            "objectLayers": {
+                "object-1": [
+                    { "id": "a", "name": "Spawn", "type": "player_start",
+                      "x": 16, "y": 32, "properties": { "hp": 3, "boss": false } },
+                    { "id": "b", "name": "Door", "type": "door",
+                      "x": 0, "y": 0, "w": 16, "h": 32, "properties": {} }
+                ]
+            }
+        }));
+        let json = doc.to_json_pretty().expect("serialize");
+        assert!(json.contains("\"kind\": \"object\""));
+        let parsed = Document::from_json(&json).expect("parse");
+        assert_eq!(parsed, doc);
+        let layer = parsed.layers.last().unwrap();
+        assert_eq!(layer.kind, LayerKind::Object);
+        let objs = &parsed.tiles_ext.as_ref().unwrap()["objectLayers"]["object-1"];
+        assert_eq!(objs[0]["properties"]["hp"], 3);
+        assert_eq!(objs[1]["w"], 16);
+
+        // A document saved before object layers existed has no objectLayers
+        // key and no object layer; it must load unchanged.
+        let mut old = Document::new_default(32, 32);
+        old.tiles_version = 2;
+        old.tiles_ext = Some(serde_json::json!({ "extraTilesets": [] }));
+        let old_json = old.to_json_pretty().expect("serialize old");
+        let parsed_old = Document::from_json(&old_json).expect("parse old");
+        assert_eq!(parsed_old, old);
+        assert!(parsed_old.tiles_ext.as_ref().unwrap().get("objectLayers").is_none());
     }
 
     #[test]

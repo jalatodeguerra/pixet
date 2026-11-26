@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   FlipHorizontal2,
   FlipVertical2,
@@ -9,10 +10,68 @@ import { DockablePanelSection } from "../DockablePanelSection";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import { packCell, rotateCellCW, unpackCell } from "../../engine/tiles/cell";
 import {
+  COLLISION_PRESETS,
+  collisionFromPreset,
+  getCollisionPreset,
+  shapeToPolygon,
+} from "../../engine/tiles/collision";
+import type { Tileset } from "../../engine/tiles/Tileset";
+import {
   getVariantBaseUid,
   setTileVariantOf,
 } from "../../engine/tiles/tileAuthoring";
 import { useEditorStore } from "../../store/editorStore";
+
+/** Tile thumbnail with its collision shape drawn on top. */
+function CollisionPreview({ ts, tileId }: { ts: Tileset; tileId: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const tw = ts.tileWidth;
+  const th = ts.tileHeight;
+  const scale = Math.max(1, Math.floor(64 / Math.max(tw, th)));
+  const meta = ts.getMeta(tileId);
+  const polys = (meta?.collision ?? []).map((s) => shapeToPolygon(s, tw, th));
+
+  useEffect(() => {
+    const canvas = ref.current;
+    const buf = ts.getTile(tileId);
+    if (!canvas || !buf) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, tw, th);
+    ctx.putImageData(
+      new ImageData(new Uint8ClampedArray(buf.data), tw, th),
+      0,
+      0
+    );
+  });
+
+  return (
+    <div
+      className="tiles-collision-preview"
+      style={{ width: tw * scale, height: th * scale }}
+    >
+      <canvas
+        ref={ref}
+        width={tw}
+        height={th}
+        style={{ width: tw * scale, height: th * scale }}
+      />
+      <svg
+        viewBox={`0 0 ${tw} ${th}`}
+        preserveAspectRatio="none"
+        data-testid="collision-preview-svg"
+      >
+        {polys.map((pts, i) => (
+          <polygon
+            key={i}
+            className="tiles-collision-shape"
+            points={pts.map(([x, y]) => `${x},${y}`).join(" ")}
+          />
+        ))}
+      </svg>
+    </div>
+  );
+}
 
 export function TilePropertiesPanel() {
   const activeTileId = useEditorStore((s) => s.activeTileId);
@@ -37,6 +96,18 @@ export function TilePropertiesPanel() {
       ? ts.meta.findIndex((m, idx) => idx > 0 && m.uid === variantBaseUid)
       : 0;
   const animFrames = meta?.animation?.frames ?? [];
+  const collisionPreset = getCollisionPreset(meta?.collision);
+  const hasCollision = (meta?.collision?.length ?? 0) > 0;
+
+  const setCollision = (preset: (typeof COLLISION_PRESETS)[number]["preset"] | null) => {
+    pixelEngine.recordTilesetOp("Edit Tile Collision", () => {
+      ts.setMeta(activeTileId, {
+        collision: collisionFromPreset(preset),
+        ...(preset === null ? { oneWay: undefined } : {}),
+      });
+    });
+    bumpTilesetVersion();
+  };
 
   const rotateFlagsCW = () => {
     const packed = packCell(0, 1, tileBrushFlags);
@@ -132,6 +203,48 @@ export function TilePropertiesPanel() {
                     bumpTilesetVersion();
                   }}
                 />
+              </div>
+
+              <div className="tiles-collision-block">
+                <span className="tiles-prop-label">Collision</span>
+                <div className="tiles-collision-body">
+                  <CollisionPreview ts={ts} tileId={activeTileId} />
+                  <div className="tiles-collision-presets">
+                    <button
+                      type="button"
+                      className={`toggle-chip ${!hasCollision ? "active" : ""}`}
+                      onClick={() => setCollision(null)}
+                    >
+                      None
+                    </button>
+                    {COLLISION_PRESETS.map((p) => (
+                      <button
+                        key={p.preset}
+                        type="button"
+                        className={`toggle-chip ${collisionPreset === p.preset ? "active" : ""}`}
+                        onClick={() => setCollision(p.preset)}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="tiles-check">
+                  <input
+                    type="checkbox"
+                    checked={meta.oneWay === true}
+                    disabled={!hasCollision}
+                    onChange={(e) => {
+                      pixelEngine.recordTilesetOp("Edit Tile Collision", () => {
+                        ts.setMeta(activeTileId, {
+                          oneWay: e.target.checked ? true : undefined,
+                        });
+                      });
+                      bumpTilesetVersion();
+                    }}
+                  />
+                  <span>One-way platform</span>
+                </label>
               </div>
 
               <div className="tiles-anim-row">

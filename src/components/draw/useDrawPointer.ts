@@ -1220,6 +1220,13 @@ export function useDrawPointer({
     );
     const symCfg = getSymmetryConfigFromState(state);
 
+    if (activeLayer.kind === "object") {
+      state.setStatusMessage(
+        "Object layers hold objects: use the Object tool (O) in the Tiles workspace"
+      );
+      return true;
+    }
+
     if (activeLayer.kind === "tilemap") {
       if (tool !== "pencil" && tool !== "eraser") {
         state.setStatusMessage(

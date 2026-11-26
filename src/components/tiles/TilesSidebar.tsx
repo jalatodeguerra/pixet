@@ -1,5 +1,6 @@
 import { useEditorStore } from "../../store/editorStore";
 import { MapPropertiesPanel } from "./MapPropertiesPanel";
+import { ObjectsPanel } from "./ObjectsPanel";
 import { TerrainPanel } from "./TerrainPanel";
 import { TileLayersPanel } from "./TileLayersPanel";
 import { TilePropertiesPanel } from "./TilePropertiesPanel";
@@ -14,6 +15,7 @@ export function TilesSidebar() {
       <TilePropertiesPanel />
       <TerrainPanel />
       <TileLayersPanel />
+      <ObjectsPanel />
       <MapPropertiesPanel />
     </>
   );

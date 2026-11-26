@@ -1116,6 +1116,41 @@ mod tests {
         assert!(tres.contains("margin = Rect2("));
     }
 
+    /// Golden string shared with `GOLDEN_TILESET` in
+    /// tests/tilesCollisionObjects.test.ts: the TypeScript port in
+    /// src/engine/export/godotTilemap.ts must stay byte-identical for a
+    /// tileset without collision shapes.
+    #[test]
+    fn godot_tileset_matches_typescript_port_golden() {
+        use crate::document::TilesetMeta;
+
+        let mut project = make_sample_project();
+        project.document.tile_projection = TileProjection::Orthogonal;
+        project.document.tileset = Some(TilesetMeta {
+            id: "ts-1".to_string(),
+            name: "Terrain".to_string(),
+            tile_width: 8,
+            tile_height: 8,
+            tile_count: 2,
+        });
+        project.tiles = vec![vec![255, 0, 0, 255].repeat(64), vec![0, 255, 0, 255].repeat(64)];
+        let atlas = build_tileset_atlas(&project, 0, 0).expect("atlas");
+        let out = generate_godot_tileset(&project, &atlas, "terrain_tileset.png");
+        let golden = concat!(
+            "[gd_resource type=\"TileSet\" load_steps=3 format=3]\n\n",
+            "[ext_resource type=\"Texture2D\" path=\"res://terrain_tileset.png\" id=\"1_tex\"]\n\n",
+            "[sub_resource type=\"TileSetAtlasSource\" id=\"TileSetAtlasSource_1\"]\n",
+            "texture = ExtResource(\"1_tex\")\n",
+            "texture_region_size = Vector2i(8, 8)\n",
+            "0:0/0 = 0\n",
+            "1:0/0 = 0\n\n",
+            "[resource]\n",
+            "tile_size = Vector2i(8, 8)\n",
+            "sources/0 = SubResource(\"TileSetAtlasSource_1\")\n",
+        );
+        assert_eq!(out, golden);
+    }
+
     #[test]
     fn tileset_zip_round_trip_and_godot_tiled_exports() {
         use crate::document::{Layer, TilemapGrid, TilesetMeta};
