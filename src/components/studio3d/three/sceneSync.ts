@@ -810,14 +810,17 @@ export function syncModel3DScene(
         node.id === engine.activeNodeId;
       const cage =
         isEvaluated && (editCage || (opts.pickBaseMesh && modifierContext === "viewport"))
-          ? buildCageObjects(node, ppu, opts, editCage)
+          ? buildCageObjects(node, ppu, opts, false) // the viewport overlay draws the base wire
           : null;
 
       if (cage) {
         mesh.add(cage.pick);
         if (cage.wire) mesh.add(cage.wire);
       }
-      if (selectedSet.has(node.id)) {
+      const drawnByEditOverlay = inEditMode && node.id === engine.activeNodeId;
+      if (drawnByEditOverlay) {
+        // Edit Mode: the viewport overlay draws the wire + dots for this node.
+      } else if (selectedSet.has(node.id)) {
         const edgesGeo = new THREE.EdgesGeometry(built.geometry, 1);
         const edgesMat = new THREE.LineBasicMaterial({
           color: node.id === engine.activeNodeId ? 0x4c8bf5 : 0x7aa7f7,

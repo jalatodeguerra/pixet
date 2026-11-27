@@ -7,7 +7,8 @@ export type Quat = [number, number, number, number]; // [x, y, z, w]
 export type Studio3DWorkspaceKind = "sprite25d" | "lowpoly3d";
 export type Model3DSubMode = "model" | "tile" | "uv" | "paint" | "animate" | "bake";
 export type SelectionGranularity = "object" | "vertex" | "edge" | "face";
-export type ShadingMode = "unlit" | "flat" | "ps1" | "pbr";
+/** "solid" is the untextured Blender-style modeling view; the rest preview materials. */
+export type ShadingMode = "solid" | "unlit" | "flat" | "ps1" | "pbr";
 export type ColliderKind = "none" | "box" | "convex" | "trimesh";
 export type GizmoMode = "select" | "move" | "rotate" | "scale";
 

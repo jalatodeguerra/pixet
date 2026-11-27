@@ -382,7 +382,7 @@ const DEFAULT_STUDIO3D_STATE: Studio3DState = {
   subMode: "model",
   gizmoMode: "move",
   snapPx: 1,
-  shadingMode: "flat",
+  shadingMode: "solid",
   wireframeOverlay: false,
   cullBackfacesInView: false,
   uvDrawerOpen: false,
@@ -1609,7 +1609,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return { workspaceMode: mode, dataToolActive: false };
     }),
   patchStudio3D: (patch) =>
-    set((s) => ({ studio3d: { ...s.studio3d, ...patch } })),
+    set((s) => {
+      const next = { ...s.studio3d, ...patch };
+      // Painting needs a textured view: Solid would hide every stroke.
+      if (
+        next.workspaceKind === "lowpoly3d" &&
+        next.subMode === "paint" &&
+        next.shadingMode === "solid"
+      ) {
+        next.shadingMode = "flat";
+      }
+      return { studio3d: next };
+    }),
   bumpModel3DVersion: () =>
     set((s) => ({ model3dVersion: s.model3dVersion + 1 })),
   patchNodesUi: (patch) =>

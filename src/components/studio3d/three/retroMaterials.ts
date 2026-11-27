@@ -288,14 +288,18 @@ export function resolveModelMaterialBuffer(
   return createPlaceholderPixelBuffer(16, 16);
 }
 
-type MaterialCacheKind = "basic" | "lambert" | "ps1" | "standard";
+type MaterialCacheKind = "basic" | "lambert" | "ps1" | "standard" | "solid";
 
 type ThreeMeshMaterial =
   | THREE.MeshBasicMaterial
   | THREE.MeshLambertMaterial
   | THREE.MeshStandardMaterial;
 
+/** Blender-style neutral grey of the Solid viewport shading mode. */
+const SOLID_VIEW_COLOR = 0xb8b8b8;
+
 function expectedMaterialKind(shadingMode: ShadingMode): MaterialCacheKind {
+  if (shadingMode === "solid") return "solid";
   if (shadingMode === "unlit") return "basic";
   if (shadingMode === "flat") return "lambert";
   if (shadingMode === "ps1") return "ps1";
@@ -582,7 +586,13 @@ export class RetroMaterialCache {
           cached.instance.dispose();
         }
         let instance: ThreeMeshMaterial;
-        if (desiredKind === "basic") {
+        if (desiredKind === "solid") {
+          instance = new THREE.MeshLambertMaterial({
+            color: SOLID_VIEW_COLOR,
+            flatShading: true,
+            side: THREE.DoubleSide,
+          });
+        } else if (desiredKind === "basic") {
           instance = new THREE.MeshBasicMaterial({
             vertexColors: true,
           });
@@ -611,6 +621,20 @@ export class RetroMaterialCache {
       }
 
       const m = cached.instance;
+      // Push faces back a hair so Edit Mode wire/dots drawn on them stay visible.
+      m.polygonOffset = true;
+      m.polygonOffsetFactor = 1;
+      m.polygonOffsetUnits = 1;
+      if (desiredKind === "solid") {
+        // Untextured, opaque, double-sided: faces always read, whatever the Draw canvas holds.
+        m.side = THREE.DoubleSide;
+        m.alphaTest = 0;
+        m.transparent = false;
+        m.vertexColors = false;
+        m.map = null;
+        materialById.set(matDef.id, m);
+        continue;
+      }
       m.side = side;
       m.alphaTest = alphaTest;
       m.transparent = false;
