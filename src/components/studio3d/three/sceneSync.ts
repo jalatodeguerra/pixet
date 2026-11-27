@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { DEFAULT_MODEL3D_MATERIAL_ID, type Model3DEngine } from "../../../engine/model3d/Model3DEngine";
 import type { EvaluatedNodePose } from "../../../engine/model3d/animEval";
+import { getEvaluatedMesh, type ModifierContext } from "../../../engine/model3d/modifiers";
 import {
   buildPaddedTilesetAtlas,
   getTileQuadPixelUvs,
@@ -46,6 +47,102 @@ export interface SyncSceneOptions {
   tileElapsedMs?: number;
   tilesets?: ReadonlyArray<Tileset>;
   activeTileset?: Tileset;
+  /** Which modifier context to evaluate meshes with. Default "viewport". */
+  modifierContext?: ModifierContext;
+  /**
+   * When true, meshes that have an active modifier stack get an invisible base-mesh (cage) proxy
+   * that is used for picking instead of the evaluated mesh (Paint/UV modes address base faces).
+   * The active node in Edit Mode always gets one (plus a visible wire cage).
+   */
+  pickBaseMesh?: boolean;
+}
+
+/** Marks the invisible base-mesh picking proxy that is a child of a modifier-evaluated mesh. */
+export const CAGE_PICK_FLAG = "isModifierCagePick";
+/** Marks the visible wire cage drawn over a modifier-evaluated mesh in Edit Mode. */
+const CAGE_WIRE_FLAG = "isModifierCageWire";
+
+// Shared, never disposed (disposeSyncedObjectTree only disposes overlay-helper materials).
+const CAGE_PICK_MATERIAL = new THREE.MeshBasicMaterial({
+  side: THREE.DoubleSide,
+  colorWrite: false,
+  depthWrite: false,
+});
+
+function buildCageWireGeometry(
+  mesh: PolyMeshData,
+  pivot: Vec3,
+  ppu: number
+): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const seen = new Set<string>();
+  for (const f of mesh.faces) {
+    const n = f.verts.length;
+    if (n < 2) continue;
+    for (let i = 0; i < n; i++) {
+      const a = f.verts[i];
+      const b = f.verts[(i + 1) % n];
+      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const va = mesh.vertices[a];
+      const vb = mesh.vertices[b];
+      if (!va || !vb) continue;
+      pos.push(
+        (va[0] - pivot[0]) / ppu,
+        (va[1] - pivot[1]) / ppu,
+        (va[2] - pivot[2]) / ppu,
+        (vb[0] - pivot[0]) / ppu,
+        (vb[1] - pivot[1]) / ppu,
+        (vb[2] - pivot[2]) / ppu
+      );
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  return geo;
+}
+
+/**
+ * Builds the base-mesh (cage) picking proxy (+ optional visible wire) for a node whose displayed
+ * mesh is a modifier-evaluated result. Face ids / tri mapping refer to `node.mesh`.
+ */
+function buildCageObjects(
+  node: ModelNode,
+  ppu: number,
+  opts: SyncSceneOptions,
+  withWire: boolean
+): { pick: THREE.Mesh; wire: THREE.LineSegments | null; triangleCount: number } | null {
+  if (!node.mesh) return null;
+  const base = buildPolyMeshGeometry(node.mesh, node.transform.pivot, ppu, opts);
+  if (base.triangleCount <= 0) {
+    base.geometry.dispose();
+    return null;
+  }
+  const pick = new THREE.Mesh(base.geometry, CAGE_PICK_MATERIAL);
+  pick.visible = false; // Raycaster still tests invisible meshes
+  const ud: MeshLookupUserData & Record<string, unknown> = {
+    nodeId: node.id,
+    triToFaceIndex: base.triToFaceIndex,
+    faceIds: base.faceIds,
+    [CAGE_PICK_FLAG]: true,
+  };
+  pick.userData = ud;
+  let wire: THREE.LineSegments | null = null;
+  if (withWire) {
+    wire = new THREE.LineSegments(
+      buildCageWireGeometry(node.mesh, node.transform.pivot, ppu),
+      new THREE.LineBasicMaterial({
+        color: 0xf5b041,
+        transparent: true,
+        opacity: 0.85,
+        depthTest: false,
+      })
+    );
+    wire.userData = { isOverlayHelper: true, [CAGE_WIRE_FLAG]: true };
+    wire.renderOrder = 3;
+  }
+  return { pick, wire, triangleCount: base.triangleCount };
 }
 
 interface BuiltGeometryResult {
@@ -636,6 +733,8 @@ export function syncModel3DScene(
   const nodeObjectById = new Map<string, THREE.Object3D>();
   const pickableMeshes: THREE.Mesh[] = [];
   let triangleCount = 0;
+  const modifierContext: ModifierContext = opts.modifierContext ?? "viewport";
+  const inEditMode = engine.selectionGranularity !== "object";
 
   const fallbackMaterial =
     opts.materialById.values().next().value ??
@@ -668,12 +767,14 @@ export function syncModel3DScene(
   for (const node of engine.nodes) {
     let obj: THREE.Object3D;
     let built: BuiltGeometryResult | null = null;
+    let displayMesh: PolyMeshData | undefined;
 
     if (node.kind === "cuboid" && node.cuboid) {
       built = buildCuboidGeometry(node.cuboid, node.transform.pivot, ppu, opts);
     } else if (node.kind === "mesh" && node.mesh) {
+      displayMesh = getEvaluatedMesh(node, modifierContext) ?? node.mesh;
       built = buildPolyMeshGeometry(
-        node.mesh,
+        displayMesh,
         node.transform.pivot,
         ppu,
         opts,
@@ -699,6 +800,23 @@ export function syncModel3DScene(
       mesh.userData = userData;
       triangleCount += built.triangleCount;
 
+      // Modifier-evaluated meshes: picking + sub-element editing address the base mesh (cage).
+      const isEvaluated =
+        node.kind === "mesh" && displayMesh !== undefined && displayMesh !== node.mesh;
+      const editCage =
+        isEvaluated &&
+        modifierContext === "viewport" &&
+        inEditMode &&
+        node.id === engine.activeNodeId;
+      const cage =
+        isEvaluated && (editCage || (opts.pickBaseMesh && modifierContext === "viewport"))
+          ? buildCageObjects(node, ppu, opts, editCage)
+          : null;
+
+      if (cage) {
+        mesh.add(cage.pick);
+        if (cage.wire) mesh.add(cage.wire);
+      }
       if (selectedSet.has(node.id)) {
         const edgesGeo = new THREE.EdgesGeometry(built.geometry, 1);
         const edgesMat = new THREE.LineBasicMaterial({
@@ -723,7 +841,7 @@ export function syncModel3DScene(
       }
 
       if (node.visible) {
-        pickableMeshes.push(mesh);
+        pickableMeshes.push(cage ? cage.pick : mesh);
       }
       obj = mesh;
     } else {
@@ -828,12 +946,10 @@ export function updateMeshNodeGeometryInPlace(
     defaultTextureHeight: opts.defaultTextureHeight,
     wireframeOverlay: false,
   };
-  const built = buildPolyMeshGeometry(
-    node.mesh,
-    node.transform.pivot,
-    Math.max(1, ppu),
-    syncOpts
-  );
+  const safePpu = Math.max(1, ppu);
+  // Displayed geometry is the modifier-evaluated mesh (cached; fingerprint tracks vertex edits).
+  const displayMesh = getEvaluatedMesh(node, "viewport") ?? node.mesh;
+  const built = buildPolyMeshGeometry(displayMesh, node.transform.pivot, safePpu, syncOpts);
   if (built.triangleCount <= 0) {
     built.geometry.dispose();
     return;
@@ -847,7 +963,20 @@ export function updateMeshNodeGeometryInPlace(
   ud.faceIds = built.faceIds;
 
   for (const child of nodeObj.children) {
-    if (child instanceof THREE.LineSegments && child.userData?.isOverlayHelper) {
+    if (child.userData?.[CAGE_PICK_FLAG] && child instanceof THREE.Mesh) {
+      // Rebuild the base-mesh picking proxy.
+      const base = buildPolyMeshGeometry(node.mesh, node.transform.pivot, safePpu, syncOpts);
+      const oldCage = child.geometry;
+      child.geometry = base.geometry;
+      oldCage?.dispose();
+      const cud = child.userData as MeshLookupUserData;
+      cud.triToFaceIndex = base.triToFaceIndex;
+      cud.faceIds = base.faceIds;
+    } else if (child instanceof THREE.LineSegments && child.userData?.[CAGE_WIRE_FLAG]) {
+      const oldWire = child.geometry;
+      child.geometry = buildCageWireGeometry(node.mesh, node.transform.pivot, safePpu);
+      oldWire?.dispose();
+    } else if (child instanceof THREE.LineSegments && child.userData?.isOverlayHelper) {
       const oldEdges = child.geometry;
       child.geometry = new THREE.EdgesGeometry(built.geometry, 1);
       oldEdges?.dispose();
@@ -995,7 +1124,7 @@ export function collectWorldSnapVertices(
         }
       }
     } else if (node.kind === "mesh" && node.mesh) {
-      for (const v of node.mesh.vertices) {
+      for (const v of (getEvaluatedMesh(node, "viewport") ?? node.mesh).vertices) {
         out.push(
           new THREE.Vector3(
             (v[0] - pivot[0]) / ppu,

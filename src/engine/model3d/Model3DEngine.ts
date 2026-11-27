@@ -1,3 +1,4 @@
+import { cloneModifiers } from "./modifierTypes.ts";
 import type {
   ColliderKind,
   CuboidData,
@@ -156,6 +157,9 @@ export function cloneModelNode(n: ModelNode): ModelNode {
     transform: createDefaultTransform(n.transform),
     cuboid: n.cuboid ? cloneCuboidData(n.cuboid) : undefined,
     mesh: n.mesh ? clonePolyMeshData(n.mesh) : undefined,
+    ...(n.modifiers && n.modifiers.length > 0
+      ? { modifiers: cloneModifiers(n.modifiers) }
+      : {}),
   };
 }
 
@@ -404,6 +408,10 @@ export class Model3DEngine {
     }
     if (patch.mesh !== undefined && node.kind === "mesh") {
       node.mesh = clonePolyMeshData(patch.mesh);
+    }
+    if (patch.modifiers !== undefined && node.kind === "mesh") {
+      if (patch.modifiers.length > 0) node.modifiers = cloneModifiers(patch.modifiers);
+      else delete node.modifiers;
     }
 
     this.bumpVersion();

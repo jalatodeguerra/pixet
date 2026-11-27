@@ -9,6 +9,7 @@ import {
   createDefaultTransform,
   DEFAULT_MODEL3D_MATERIAL_ID,
 } from "./Model3DEngine.ts";
+import { sanitizeModifiers } from "./modifierTypes.ts";
 import type {
   ColliderKind,
   CuboidData,
@@ -259,6 +260,9 @@ function parseNode(raw: unknown, idx: number): ModelNode | null {
     transform,
     cuboid: kind === "cuboid" ? parseCuboid(raw.cuboid) : undefined,
     mesh: kind === "mesh" ? parsePolyMesh(raw.mesh) : undefined,
+    ...(kind === "mesh" && sanitizeModifiers(raw.modifiers).length > 0
+      ? { modifiers: sanitizeModifiers(raw.modifiers) }
+      : {}),
   };
 }
 

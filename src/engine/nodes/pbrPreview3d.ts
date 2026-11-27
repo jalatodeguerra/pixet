@@ -1,3 +1,4 @@
+import { getEvaluatedMesh } from "../model3d/modifiers.ts";
 import type { ModelNode } from "../model3d/types.ts";
 
 export type Preview3DMeshKind = "quad" | "cube" | "sphere" | "cylinder" | "active3d";
@@ -132,11 +133,12 @@ export function buildPreviewMesh(
         pushQuad(out, h, g, c, d);
         pushQuad(out, a, b, f, e);
       } else if (node.kind === "mesh" && node.mesh) {
-        const verts = node.mesh.vertices;
+        const evalMesh = getEvaluatedMesh(node, "export") ?? node.mesh;
+        const verts = evalMesh.vertices;
         const ox = node.transform.position[0];
         const oy = node.transform.position[1];
         const oz = node.transform.position[2];
-        for (const face of node.mesh.faces) {
+        for (const face of evalMesh.faces) {
           if (face.verts.length < 3) continue;
           const getP = (vi: number): [number, number, number] => {
             const v = verts[vi] ?? [0, 0, 0];

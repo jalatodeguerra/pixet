@@ -636,3 +636,105 @@
   pointer-events: none;
   z-index: 5;
 }
+
+/* Modifier stack panel */
+.m3d-mod-add {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+.m3d-mod-add .m3d-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.m3d-mod-card {
+  gap: 6px;
+}
+
+.m3d-mod-card.m3d-mod-off .m3d-mod-name {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.m3d-mod-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.m3d-mod-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.m3d-mod-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0px;
+  color: var(--text-secondary);
+}
+
+.m3d-mod-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.m3d-mod-icon-btn.on {
+  color: var(--accent);
+}
+
+.m3d-mod-icon-btn:disabled {
+  opacity: 0.35;
+}
+
+.m3d-mod-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.m3d-mod-axes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+}
+
+.m3d-mod-vec {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.m3d-mod-vec-label {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.m3d-mod-vec-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+}
+
+.m3d-mod-warning {
+  padding: 4px 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid #c9822b;
+}
