@@ -755,6 +755,8 @@ function renderSingleViewWithResources(
     textureSizeByMaterialId,
     defaultTextureWidth: Math.max(1, storeState.canvasWidth),
     defaultTextureHeight: Math.max(1, storeState.canvasHeight),
+    // Baked sprites show the final (export) result of the modifier stack.
+    modifierContext: "export",
   });
 
   const scene = buildBakeSceneAndLighting(synced.rootGroup, pass);

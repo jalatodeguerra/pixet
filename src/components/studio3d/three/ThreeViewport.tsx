@@ -21,6 +21,7 @@ import {
   selectEdgeLoop,
   transformMeshVertices,
 } from "../../../engine/model3d/meshOps";
+import { getEvaluatedMesh } from "../../../engine/model3d/modifiers";
 import { snapToGrid } from "../../../engine/model3d/quatMath";
 import {
   buildPaddedTilesetAtlas,
@@ -53,6 +54,7 @@ import {
   objectTransformToNodeTransform,
   syncModel3DScene,
   updateMeshNodeGeometryInPlace,
+  CAGE_PICK_FLAG,
   type MeshLookupUserData,
 } from "./sceneSync";
 import { threeStudioRuntime } from "./ThreeStudioRuntime";
@@ -404,12 +406,13 @@ function buildOnionSkinGhostGroup(
         ((minZ + maxZ) * 0.5 - pivot[2]) / safePpu
       );
     } else if (node.kind === "mesh" && node.mesh && node.mesh.faces.length > 0) {
+      const em = getEvaluatedMesh(node, "viewport") ?? node.mesh;
       const pos: number[] = [];
-      for (const f of node.mesh.faces) {
+      for (const f of em.faces) {
         if (f.verts.length < 3) continue;
-        const v0 = node.mesh.vertices[f.verts[0]];
-        const v1 = node.mesh.vertices[f.verts[1]];
-        const v2 = node.mesh.vertices[f.verts[2]];
+        const v0 = em.vertices[f.verts[0]];
+        const v1 = em.vertices[f.verts[1]];
+        const v2 = em.vertices[f.verts[2]];
         if (!v0 || !v1 || !v2) continue;
         const pushV = (v: Vec3) => {
           pos.push(
@@ -423,7 +426,7 @@ function buildOnionSkinGhostGroup(
           pushV(v1);
           pushV(v2);
         } else {
-          const v3 = node.mesh.vertices[f.verts[3]];
+          const v3 = em.vertices[f.verts[3]];
           if (!v3) continue;
           if (f.triSplit === "13") {
             pushV(v0);
@@ -1510,6 +1513,8 @@ export function ThreeViewport() {
       poses: evaluatedPoses,
       tilesets: pixelEngine.tilesetRegistry.tilesets,
       activeTileset: pixelEngine.tileset,
+      // Paint/UV/etc. address base faces: pick the base mesh behind modifier-evaluated geometry.
+      pickBaseMesh: studio3d.subMode !== "model",
     });
 
     scene.add(synced.rootGroup);
@@ -2046,6 +2051,9 @@ export function ThreeViewport() {
       hitNode &&
       hitNode.kind === "mesh" &&
       hitNode.mesh &&
+      // An evaluated (modifier) mesh has no base-face mapping; only the cage proxy does.
+      (hit.object.userData?.[CAGE_PICK_FLAG] ||
+        getEvaluatedMesh(hitNode, "viewport") === hitNode.mesh) &&
       hit.faceIndex != null &&
       hit.faceIndex >= 0 &&
       hit.faceIndex < ud.triToFaceIndex.length

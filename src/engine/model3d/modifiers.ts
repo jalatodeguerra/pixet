@@ -657,6 +657,7 @@ function bakePrefix(node: ModelNode, count: number): ModelNode {
 interface CacheEntry {
   key: string;
   mesh: PolyMeshData;
+  truncated: boolean;
 }
 const evalCache = new WeakMap<PolyMeshData, Partial<Record<ModifierContext, CacheEntry>>>();
 
@@ -686,13 +687,55 @@ export function getEvaluatedMesh(node: ModelNode, context: ModifierContext): Pol
   const mesh = node.mesh;
   const mods = node.modifiers;
   if (!mesh || !mods || mods.length === 0) return mesh;
-  if (!mods.some((m) => isModifierActive(m, context))) return mesh;
+  return getCachedEntry(node, mesh, mods, context)?.mesh ?? mesh;
+}
+
+function getCachedEntry(
+  node: ModelNode,
+  mesh: PolyMeshData,
+  mods: ReadonlyArray<ModelModifier>,
+  context: ModifierContext
+): CacheEntry | null {
+  if (!mods.some((m) => isModifierActive(m, context))) return null;
   const key = `${meshFingerprint(mesh)}|${node.transform.pivot.join(",")}|${JSON.stringify(mods)}`;
   const bucket = evalCache.get(mesh) ?? {};
   const hit = bucket[context];
-  if (hit && hit.key === key) return hit.mesh;
-  const evaluated = evaluateModifierStack(mesh, mods, { context, pivot: node.transform.pivot });
-  bucket[context] = { key, mesh: evaluated };
+  if (hit && hit.key === key) return hit;
+  const res = evaluateModifierStackDetailed(mesh, mods, { context, pivot: node.transform.pivot });
+  const entry: CacheEntry = { key, mesh: res.mesh, truncated: res.truncated };
+  bucket[context] = entry;
   evalCache.set(mesh, bucket);
-  return evaluated;
+  return entry;
+}
+
+/** True when the cached evaluation of the node's stack hit the face cap and skipped modifiers. */
+export function isEvaluationTruncated(node: ModelNode, context: ModifierContext): boolean {
+  const mesh = node.mesh;
+  const mods = node.modifiers;
+  if (!mesh || !mods || mods.length === 0) return false;
+  return getCachedEntry(node, mesh, mods, context)?.truncated ?? false;
+}
+
+/**
+ * Number of triangles a poly mesh renders as (quads = 2, triangles = 1, n-gons fan).
+ * Pure helper used for stats.
+ */
+export function countMeshTriangles(mesh: PolyMeshData | undefined): number {
+  if (!mesh) return 0;
+  let n = 0;
+  for (const f of mesh.faces) if (f.verts.length >= 3) n += f.verts.length - 2;
+  return n;
+}
+
+/**
+ * Returns a node whose `mesh` is the export-context evaluated mesh and which has no modifiers,
+ * suitable for feeding code that only understands plain meshes. Nodes without active modifiers
+ * are returned as-is (same reference). The mesh in the result is shared/read-only.
+ */
+export function evaluatedNodeForExport(node: ModelNode): ModelNode {
+  if (!node.mesh || !node.modifiers || node.modifiers.length === 0) return node;
+  const evaluated = getEvaluatedMesh(node, "export");
+  const next: ModelNode = { ...node, mesh: evaluated };
+  delete next.modifiers;
+  return next;
 }

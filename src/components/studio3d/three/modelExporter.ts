@@ -26,6 +26,7 @@ import {
   resolveModelMaterialBuffer,
   type MaterialTextureInfo,
 } from "./retroMaterials";
+import { getEvaluatedMesh } from "../../../engine/model3d/modifiers";
 import { disposeSyncedObjectTree, syncModel3DScene } from "./sceneSync";
 
 export type ExportScalePreset = "16px_1m" | "1px_1m" | "custom";
@@ -573,6 +574,8 @@ export async function exportModelToGltf(
       textureSizeByMaterialId,
       defaultTextureWidth: Math.max(1, ctx.canvasWidth),
       defaultTextureHeight: Math.max(1, ctx.canvasHeight),
+      // Modifiers with "enabled" (render/export) on are baked into the exported geometry.
+      modifierContext: "export",
     });
   } finally {
     engine.pixelsPerUnit = originalPpu;
@@ -975,7 +978,7 @@ export async function exportModelToObj(
         rawFaces.push(cf);
       }
     } else if (node.kind === "mesh" && node.mesh) {
-      for (const mf of buildObjMeshFaces(node.mesh)) {
+      for (const mf of buildObjMeshFaces(getEvaluatedMesh(node, "export") ?? node.mesh)) {
         rawFaces.push(mf);
       }
     }

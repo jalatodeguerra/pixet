@@ -95,6 +95,7 @@ import {
 } from "../../engine/model3d/uvOps";
 import type { Tileset } from "../../engine/tiles/Tileset";
 import { useEditorStore } from "../../store/editorStore";
+import { ModifierPanel } from "./ModifierPanel";
 import { ColorPalettePanel } from "../draw/ColorPalettePanel";
 import { downloadExportedModelAction, type ExportScalePreset } from "./three/modelExporter";
 import {
@@ -1183,6 +1184,8 @@ export function Model3DSidebar() {
       </div>
 
       {/* SECTION 3: Context Sub-Mode Panel */}
+      {studio3d.subMode === "model" && <ModifierPanel node={activeNode} />}
+
       {studio3d.subMode === "model" && (
         <div className="m3d-section">
           <div className="m3d-section-header">
