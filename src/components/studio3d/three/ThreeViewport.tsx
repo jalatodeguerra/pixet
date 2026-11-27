@@ -134,7 +134,7 @@ function disposeGroupGeometriesAndMaterials(group: THREE.Object3D): void {
 }
 
 const EDIT_ORANGE = 0xf5a623;
-const EDIT_WIRE = 0x0a0a0a;
+const EDIT_WIRE = 0x000000;
 
 function pushTriangles(
   out: number[],
@@ -288,8 +288,12 @@ function buildSubObjectOverlay(
   }
   addLines(darkEdges, EDIT_WIRE, 11);
   addLines(hotEdges, EDIT_ORANGE, 12);
-  addPoints(darkVerts, 0x050505, 7, 13);
-  addPoints(hotVerts, EDIT_ORANGE, 10, 14);
+  // Sizes are CSS px (three multiplies by the renderer pixel ratio). A light halo under the
+  // dark dots and a black ring under the orange ones keep them readable on any face shade.
+  addPoints(darkVerts, 0xd8d8d8, 10, 13);
+  addPoints(darkVerts, 0x000000, 7, 14);
+  addPoints(hotVerts, 0x000000, 14, 15);
+  addPoints(hotVerts, EDIT_ORANGE, 10, 16);
 
   return overlay;
 }

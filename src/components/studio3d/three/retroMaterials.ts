@@ -623,8 +623,8 @@ export class RetroMaterialCache {
       const m = cached.instance;
       // Push faces back a hair so Edit Mode wire/dots drawn on them stay visible.
       m.polygonOffset = true;
-      m.polygonOffsetFactor = 1;
-      m.polygonOffsetUnits = 1;
+      m.polygonOffsetFactor = 2;
+      m.polygonOffsetUnits = 2;
       if (desiredKind === "solid") {
         // Untextured, opaque, double-sided: faces always read, whatever the Draw canvas holds.
         m.side = THREE.DoubleSide;
