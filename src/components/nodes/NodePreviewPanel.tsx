@@ -5,6 +5,7 @@ import { nodeRegistry } from "../../engine/nodes/NodeRegistry";
 import { getNodeEvaluator } from "../../engine/nodes/nodeActions";
 import type { Preview3DMeshKind } from "../../engine/nodes/pbrPreview3d";
 import { useEditorStore, type NodesUiState } from "../../store/editorStore";
+import { DockablePanelSection } from "../DockablePanelSection";
 
 const MODES_2D: Array<{ id: NodesUiState["preview2dMode"]; label: string }> = [
   { id: "rgba", label: "RGBA" },
@@ -34,6 +35,15 @@ export function NodePreviewPanel() {
   const previewTab = useEditorStore((s) => s.nodesUi.previewTab);
   const preview2dMode = useEditorStore((s) => s.nodesUi.preview2dMode);
   const patchNodesUi = useEditorStore((s) => s.patchNodesUi);
+  // The canvas remounts when the panel moves docks, floats, or is shown again.
+  const mountKey = useEditorStore(
+    (s) =>
+      `${s.panelSides["nodes-preview"] ?? "right"}|${
+        s.detachedPanels["nodes-preview"]?.collapsed ? "c" : ""
+      }${s.detachedPanels["nodes-preview"] ? "f" : ""}|${
+        s.hiddenPanels["nodes-preview"] ? "h" : ""
+      }`
+  );
 
   const [meshKind, setMeshKind] = useState<Preview3DMeshKind>("cube");
   const [yawDeg, setYawDeg] = useState(32);
@@ -98,6 +108,7 @@ export function NodePreviewPanel() {
       });
     }
   }, [
+    mountKey,
     previewTab,
     targetNode,
     targetDef,
@@ -114,11 +125,10 @@ export function NodePreviewPanel() {
   ]);
 
   return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <span>
-          Preview {targetDef ? `· ${targetDef.label}` : ""}
-        </span>
+    <DockablePanelSection
+      id="nodes-preview"
+      title={`Preview${targetDef ? ` · ${targetDef.label}` : ""}`}
+      actions={
         <div className="nodes-param-inline">
           {targetNode && (
             <button
@@ -149,8 +159,8 @@ export function NodePreviewPanel() {
             3D
           </button>
         </div>
-      </div>
-
+      }
+    >
       <div className="nodes-preview-box">
         {previewTab === "2d" ? (
           <div className="nodes-preview-toolbar">
@@ -224,7 +234,7 @@ export function NodePreviewPanel() {
           )}
         </div>
       </div>
-    </section>
+    </DockablePanelSection>
   );
 }
 

@@ -1,4 +1,5 @@
 import { Dices, Plus, Upload, X } from "lucide-react";
+import { DockablePanelSection } from "../DockablePanelSection";
 import { pixelEngine } from "../../engine/document/PixelEngine";
 import { nodeRegistry } from "../../engine/nodes/NodeRegistry";
 import {
@@ -319,11 +320,8 @@ export function NodeInspectorPanel() {
 
   if (!selectedNode || !def) {
     return (
-      <section className="panel-section">
-        <div className="panel-header">
-          <span>Graph Parameters</span>
-        </div>
-        <div className="panel-body">
+      <DockablePanelSection id="nodes-inspector" title="Graph Parameters">
+        <div>
           {graph.exposedParams.length === 0 ? (
             <div style={{ fontSize: 11, color: "#888888" }}>
               Select a node to edit its parameters, or press Shift+A to add nodes.
@@ -367,17 +365,17 @@ export function NodeInspectorPanel() {
             })
           )}
         </div>
-      </section>
+      </DockablePanelSection>
     );
   }
 
   return (
-    <section className="panel-section">
-      <div className="panel-header">
-        <span>{def.label}</span>
-        <span style={{ fontSize: 10, color: "#888888" }}>{def.category}</span>
-      </div>
-      <div className="panel-body">
+    <DockablePanelSection
+      id="nodes-inspector"
+      title={def.label}
+      actions={<span style={{ fontSize: 10, color: "#888888" }}>{def.category}</span>}
+    >
+      <div>
         {def.params.map((param) =>
           renderParamControl(
             selectedNode,
@@ -584,6 +582,6 @@ export function NodeInspectorPanel() {
           </div>
         )}
       </div>
-    </section>
+    </DockablePanelSection>
   );
 }

@@ -3,6 +3,7 @@ import { Upload } from "lucide-react";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CanvasSizeModal } from "./components/CanvasSizeModal";
 import { CommandPalette } from "./components/CommandPalette";
+import { SaveLayoutModal } from "./components/SaveLayoutModal";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportModal } from "./components/ExportModal";
 import { FilterModal } from "./components/draw/FilterModal";
@@ -117,6 +118,8 @@ export function App() {
     );
   const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
   const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
+  const setLeftPanelWidth = useEditorStore((s) => s.setLeftPanelWidth);
+  const leftPanelWidth = useEditorStore((s) => s.leftPanelWidth);
   const setTimelineHeight = useEditorStore((s) => s.setTimelineHeight);
   const isPlaying = useEditorStore((s) => s.isPlaying);
   const fps = useEditorStore((s) => s.fps);
@@ -127,6 +130,7 @@ export function App() {
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
   const [draggingRight, setDraggingRight] = useState(false);
+  const [draggingLeft, setDraggingLeft] = useState(false);
   const [draggingTimeline, setDraggingTimeline] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const dragDepthRef = useRef(0);
@@ -960,11 +964,15 @@ export function App() {
 
   // Drag resize handlers
   useEffect(() => {
-    if (!draggingRight && !draggingTimeline) return;
+    if (!draggingRight && !draggingLeft && !draggingTimeline) return;
 
     const onMouseMove = (e: MouseEvent) => {
       if (draggingRight) {
         setRightPanelWidth(window.innerWidth - e.clientX);
+      }
+      if (draggingLeft) {
+        const left = document.querySelector(".left-sidebar")?.getBoundingClientRect().left ?? 0;
+        setLeftPanelWidth(e.clientX - left);
       }
       if (draggingTimeline) {
         // Status bar is 24px at bottom
@@ -974,6 +982,7 @@ export function App() {
 
     const onMouseUp = () => {
       setDraggingRight(false);
+      setDraggingLeft(false);
       setDraggingTimeline(false);
     };
 
@@ -983,7 +992,14 @@ export function App() {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [draggingRight, draggingTimeline, setRightPanelWidth, setTimelineHeight]);
+  }, [
+    draggingRight,
+    draggingLeft,
+    draggingTimeline,
+    setRightPanelWidth,
+    setLeftPanelWidth,
+    setTimelineHeight,
+  ]);
 
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     if (!Array.from(e.dataTransfer.types).includes("Files")) return;
@@ -1051,6 +1067,27 @@ export function App() {
               <ToolRail />
             </ErrorBoundary>
           )}
+          {!panelsCollapsed && (
+            <>
+              {/* Left dock: panels portal into #left-dock-root; the whole
+                  column (and its resizer) hides itself while it is empty. */}
+              <div className="left-dock">
+                <aside
+                  id="left-dock-root"
+                  className="left-sidebar"
+                  style={{ width: leftPanelWidth }}
+                  aria-label="Left Dock"
+                />
+                <div
+                  className={`resizer-vertical ${draggingLeft ? "dragging" : ""}`}
+                  onMouseDown={() => setDraggingLeft(true)}
+                />
+              </div>
+              <div className="left-dock-dropzone" aria-hidden="true">
+                <span>Dock left</span>
+              </div>
+            </>
+          )}
           <ErrorBoundary key={workspaceMode} name="Viewport" fallback="region">
             {workspaceMode === "nodes" ? (
               <NodesWorkspaceAsync />
@@ -1110,6 +1147,7 @@ export function App() {
         <FilterModal />
         <ImportTilesetModal />
         <CommandPalette />
+        <SaveLayoutModal />
         <KeybindingsModal />
         <ContextMenu />
       </ErrorBoundary>

@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   Bone,
   Box,
+  Check,
   Download,
   LayoutGrid,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
+  Trash2,
   Workflow,
 } from "lucide-react";
 import {
@@ -24,6 +26,7 @@ import { pickImageFileForImport } from "../engine/io/imageImport";
 import { commandRegistry } from "../engine/config/commands";
 import { ensureCommandsRegistered, runCommandById } from "./commands/appCommands";
 import { syncRigHistoryFlags } from "../engine/rig/rigActions";
+import { DEFAULT_DOCKED_ORDER, PANEL_TITLES } from "../engine/ui/panelLayout";
 import {
   useEditorStore,
   WorkspaceMode,
@@ -31,7 +34,7 @@ import {
   TileMode,
 } from "../store/editorStore";
 
-type MenuKey = "File" | "Edit" | "View" | "Sprite" | "Help";
+type MenuKey = "File" | "Edit" | "View" | "Window" | "Sprite" | "Help";
 
 /** Menu entry that runs a registered command (shows its current chord). */
 function menuCommand(
@@ -55,7 +58,18 @@ interface MenuItem {
   label: string;
   shortcut?: string;
   action: () => void;
+  /** Renders a checkbox-style entry (checked state shown as a tick). */
+  checked?: boolean;
+  disabled?: boolean;
+  /** When set, a small delete button is shown beside the entry. */
+  onDelete?: () => void;
+  separator?: boolean;
+  heading?: boolean;
+  /** Keep the menu open after activation (for toggles). */
+  keepOpen?: boolean;
 }
+
+const SEPARATOR: MenuItem = { label: "", action: () => {}, separator: true };
 
 const MODES: { id: WorkspaceMode; label: string; icon: typeof Pencil; }[] = [
   { id: "draw", label: "Draw", icon: Pencil },
@@ -106,7 +120,13 @@ export function TopBar() {
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
   const setNewSpriteModalOpen = useEditorStore((s) => s.setNewSpriteModalOpen);
   const dockAllPanels = useEditorStore((s) => s.dockAllPanels);
-  const resetPanelLayout = useEditorStore((s) => s.resetPanelLayout);
+  const resetWorkspaceLayout = useEditorStore((s) => s.resetWorkspaceLayout);
+  const hiddenPanels = useEditorStore((s) => s.hiddenPanels);
+  const togglePanelHidden = useEditorStore((s) => s.togglePanelHidden);
+  const savedLayouts = useEditorStore((s) => s.savedLayouts);
+  const applySavedLayout = useEditorStore((s) => s.applySavedLayout);
+  const deleteSavedLayoutByName = useEditorStore((s) => s.deleteSavedLayoutByName);
+  const setSaveLayoutModalOpen = useEditorStore((s) => s.setSaveLayoutModalOpen);
   const setFilterModalOpen = useEditorStore((s) => s.setFilterModalOpen);
 
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
@@ -121,6 +141,44 @@ export function TopBar() {
     window.addEventListener("mousedown", onPointerDown);
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, []);
+
+  const wsPanels = [...DEFAULT_DOCKED_ORDER[workspaceMode]];
+  const windowMenu: MenuItem[] = [
+    { label: "Panels", action: () => {}, heading: true },
+    ...(wsPanels.length === 0
+      ? [
+          {
+            label: "No dockable panels in this workspace",
+            action: () => {},
+            disabled: true,
+          },
+        ]
+      : wsPanels.map<MenuItem>((id) => ({
+          label: PANEL_TITLES[id],
+          checked: hiddenPanels[id] !== true,
+          keepOpen: true,
+          action: () => togglePanelHidden(id),
+        }))),
+    SEPARATOR,
+    { label: "Dock All Panels", action: () => dockAllPanels() },
+    {
+      label: "Reset Layout (this workspace)",
+      action: () => resetWorkspaceLayout(workspaceMode),
+    },
+    SEPARATOR,
+    { label: "Saved Layouts", action: () => {}, heading: true },
+    ...(savedLayouts.length === 0
+      ? [{ label: "None yet", action: () => {}, disabled: true }]
+      : savedLayouts.map<MenuItem>((l) => ({
+          label: l.name,
+          action: () => {
+            applySavedLayout(l.name);
+            setStatusMessage(`Applied layout "${l.name}"`);
+          },
+          onDelete: () => deleteSavedLayoutByName(l.name),
+        }))),
+    { label: "Save Layout As...", action: () => setSaveLayoutModalOpen(true) },
+  ];
 
   const menus: Record<MenuKey, MenuItem[]> = {
     File: [
@@ -191,8 +249,6 @@ export function TopBar() {
       menuCommand("Toggle Custom Grid", "view.customGrid"),
       menuCommand("Clear Guides", "view.clearGuides"),
       { label: "Toggle Side Panels", shortcut: "Tab", action: () => { togglePanelsCollapsed(); setOpenMenu(null); } },
-      { label: "Dock All Panels", action: () => { dockAllPanels(); setOpenMenu(null); } },
-      { label: "Reset Panel Layout", action: () => { resetPanelLayout(); setOpenMenu(null); } },
       { label: "Toggle Timeline", action: () => { toggleTimelineCollapsed(); setOpenMenu(null); } },
       menuCommand("Toggle Floating Preview", "view.floatingPreview"),
       menuCommand("Zoom In", "view.zoomIn", "+"),
@@ -200,6 +256,7 @@ export function TopBar() {
       menuCommand("Fit to Window", "view.zoomFit", "Ctrl+0"),
       menuCommand("Actual Size (1:1)", "view.zoomActual", "Ctrl+1"),
     ],
+    Window: windowMenu,
     Sprite: [
       menuCommand("New Layer", "sprite.newLayer"),
       menuCommand("Merge Down", "layer.mergeDown", "Ctrl+M"),
@@ -256,23 +313,62 @@ export function TopBar() {
               </button>
               {openMenu === key && (
                 <div className="menu-dropdown" role="menu">
-                  {menus[key].map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      className="menu-dropdown-item"
-                      role="menuitem"
-                      onClick={() => {
-                        setOpenMenu(null);
-                        item.action();
-                      }}
-                    >
-                      <span>{item.label}</span>
-                      {item.shortcut && (
-                        <span className="menu-shortcut">{item.shortcut}</span>
-                      )}
-                    </button>
-                  ))}
+                  {menus[key].map((item, idx) => {
+                    if (item.separator) {
+                      return <div key={`sep-${idx}`} className="menu-dropdown-sep" />;
+                    }
+                    if (item.heading) {
+                      return (
+                        <div key={`h-${item.label}`} className="menu-dropdown-label">
+                          {item.label}
+                        </div>
+                      );
+                    }
+                    const button = (
+                      <button
+                        key={item.label}
+                        type="button"
+                        className="menu-dropdown-item"
+                        role={item.checked !== undefined ? "menuitemcheckbox" : "menuitem"}
+                        aria-checked={item.checked}
+                        disabled={item.disabled}
+                        onClick={() => {
+                          if (!item.keepOpen) setOpenMenu(null);
+                          item.action();
+                        }}
+                      >
+                        {item.checked !== undefined ? (
+                          <span className="menu-check">
+                            <span className="menu-check-box">
+                              {item.checked && <Check size={11} />}
+                            </span>
+                            <span>{item.label}</span>
+                          </span>
+                        ) : (
+                          <span>{item.label}</span>
+                        )}
+                        {item.shortcut && (
+                          <span className="menu-shortcut">{item.shortcut}</span>
+                        )}
+                      </button>
+                    );
+                    if (!item.onDelete) return button;
+                    return (
+                      <div key={item.label} className="menu-dropdown-row">
+                        {button}
+                        <button
+                          type="button"
+                          className="icon-action-btn"
+                          style={{ width: 20, height: 20 }}
+                          title={`Delete layout "${item.label}"`}
+                          aria-label={`Delete layout ${item.label}`}
+                          onClick={() => item.onDelete?.()}
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
