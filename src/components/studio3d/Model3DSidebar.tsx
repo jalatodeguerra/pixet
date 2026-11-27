@@ -1190,6 +1190,12 @@ export function Model3DSidebar() {
             <span className="m3d-badge-mono">{engine.selectionGranularity}</span>
           </div>
 
+          <span className="mode-hint">
+            {engine.selectionGranularity === "object"
+              ? "Object Mode — Tab enters Edit Mode. G / R / S grab, rotate, scale; B box select."
+              : "Edit Mode — 1/2/3 vertex/edge/face · G/R/S transform · E extrude · I inset · Ctrl+B bevel · Ctrl+R loop cut · M merge · A all · X delete · Tab exits."}
+          </span>
+
           {activeNode?.kind === "cuboid" && (
             <div className="m3d-list-card">
               <span className="mode-hint">

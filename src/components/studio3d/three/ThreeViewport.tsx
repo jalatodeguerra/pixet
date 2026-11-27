@@ -3,6 +3,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { Maximize2, Magnet } from "lucide-react";
+import type { ScreenRect } from "../../../engine/model3d/boxSelect";
+import { describeSelectionCount } from "../../../engine/model3d/editMode";
 import { pixelEngine } from "../../../engine/document/PixelEngine";
 import { syncHistoryAndCelState } from "../../../engine/document/historyActions";
 import {
@@ -40,6 +42,8 @@ import type {
   Vec3,
 } from "../../../engine/model3d/types";
 import { useEditorStore } from "../../../store/editorStore";
+import { ModalOperatorController } from "./modalController";
+import { registerModalBridge } from "./modalBridge";
 import { Paint3DStrokeController } from "./paintRaycaster";
 import { RetroMaterialCache, type MaterialTextureInfo } from "./retroMaterials";
 import {
@@ -596,6 +600,10 @@ export function ThreeViewport() {
     requestRenderRef.current();
   }, []);
   const [webglError, setWebglError] = useState<string | null>(null);
+  // Modal operator hint line and box-select rectangle (DOM overlays)
+  const [modalHud, setModalHud] = useState<string | null>(null);
+  const [boxRect, setBoxRect] = useState<ScreenRect | null>(null);
+  const modalControllerRef = useRef<ModalOperatorController | null>(null);
 
   // Three.js scene objects owned by this component
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -1258,6 +1266,48 @@ export function ThreeViewport() {
     };
   }, [syncOrthoFrustum]);
 
+  const rebuildSubObjectOverlay = useCallback(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (subObjectOverlayRef.current) {
+      disposeGroupGeometriesAndMaterials(subObjectOverlayRef.current);
+      scene.remove(subObjectOverlayRef.current);
+      subObjectOverlayRef.current = null;
+    }
+    const next = buildSubObjectOverlay(
+      nodeObjectByIdRef.current,
+      Math.max(1, pixelEngine.model3d.pixelsPerUnit)
+    );
+    scene.add(next);
+    subObjectOverlayRef.current = next;
+  }, []);
+
+  // Blender-style modal operators (G/R/S, E, I, Ctrl+B) and box select (B).
+  // App.tsx requests them through the modal bridge; the controller owns the
+  // keyboard/pointer while one is active.
+  useEffect(() => {
+    const controller = new ModalOperatorController({
+      getHost: () => stageRef.current,
+      getCamera: () => activeCameraRef.current,
+      getOrbit: () => orbitRef.current,
+      getTransform: () => transformRef.current,
+      getScene: () => sceneRef.current,
+      getNodeObjects: () => nodeObjectByIdRef.current,
+      getTextureInfo: () => textureSizeByMatRef.current,
+      rebuildOverlay: rebuildSubObjectOverlay,
+      requestRender: () => requestRenderRef.current(),
+      setHud: setModalHud,
+      setBoxRect,
+    });
+    modalControllerRef.current = controller;
+    const unregister = registerModalBridge(controller);
+    return () => {
+      unregister();
+      controller.dispose();
+      modalControllerRef.current = null;
+    };
+  }, [rebuildSubObjectOverlay]);
+
   // Adjust OrbitControls mouse button bindings so Paint/Tile left-drag doesn't rotate camera (Alt+Left, Middle, Right still work)
   useEffect(() => {
     const orbit = orbitRef.current;
@@ -1394,6 +1444,8 @@ export function ThreeViewport() {
 
     // Avoid rebuilding scene objects mid-gizmo-drag
     if (isGizmoDraggingRef.current) return;
+    // Live modal operators (G/R/S, E, I, Ctrl+B, box select) edit geometry in place
+    if (modalControllerRef.current?.isActive()) return;
 
     const engine = pixelEngine.model3d;
     const { materialById, textureSizeByMaterialId } = materialCache.sync({
@@ -1748,6 +1800,7 @@ export function ThreeViewport() {
 
   // Pointer interactions: Paint strokes, Tile cursor snap & stamp, or Object/Sub-object picking
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    modalControllerRef.current?.trackPointer(e.clientX, e.clientY);
     const orbit = orbitRef.current;
     // Alt+Left-drag always orbits camera cleanly in Paint/Tile sub-modes
     if (
@@ -1837,6 +1890,7 @@ export function ThreeViewport() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    modalControllerRef.current?.trackPointer(e.clientX, e.clientY);
     const host = stageRef.current;
     const cam = activeCameraRef.current;
     if (!host || !cam) return;
@@ -2094,9 +2148,28 @@ export function ThreeViewport() {
         <span className="m3d-badge m3d-badge-mono">
           {sceneStats.triangleCount} Tri{sceneStats.triangleCount === 1 ? "" : "s"}
         </span>
-        <span className="m3d-badge">
-          {studio3d.subMode.toUpperCase()} / {pixelEngine.model3d.selectionGranularity.toUpperCase()}
-        </span>
+        {studio3d.subMode === "model" ? (
+          <>
+            <span className="m3d-badge" data-testid="m3d-mode-badge">
+              {pixelEngine.model3d.selectionGranularity === "object"
+                ? "Object Mode"
+                : `Edit Mode · ${
+                    pixelEngine.model3d.selectionGranularity.charAt(0).toUpperCase() +
+                    pixelEngine.model3d.selectionGranularity.slice(1)
+                  }`}
+            </span>
+            <span className="m3d-badge m3d-badge-mono" data-testid="m3d-selection-count">
+              {describeSelectionCount()}
+            </span>
+          </>
+        ) : (
+          <span className="m3d-badge">
+            {studio3d.subMode.toUpperCase()}
+            {pixelEngine.model3d.selectionGranularity !== "object"
+              ? ` / ${pixelEngine.model3d.selectionGranularity.toUpperCase()}`
+              : ""}
+          </span>
+        )}
         {vKeyHeld && (
           <span className="m3d-badge m3d-badge-accent">
             <Magnet size={11} />
@@ -2104,6 +2177,24 @@ export function ThreeViewport() {
           </span>
         )}
       </div>
+
+      {modalHud && (
+        <div className="m3d-modal-hint" role="status" data-testid="m3d-modal-hint">
+          {modalHud}
+        </div>
+      )}
+      {boxRect && (
+        <div
+          className="m3d-box-select"
+          data-testid="m3d-box-select"
+          style={{
+            left: boxRect.x0,
+            top: boxRect.y0,
+            width: boxRect.x1 - boxRect.x0,
+            height: boxRect.y1 - boxRect.y0,
+          }}
+        />
+      )}
 
       {/* Compact Bottom-Left HUD */}
       <div
