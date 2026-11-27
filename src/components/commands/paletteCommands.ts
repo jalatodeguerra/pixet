@@ -191,6 +191,27 @@ export function buildPaletteCommands(): LegacyPaletteCommand[] {
         run: () => st().toggleFloatingPreview(),
       },
       {
+        id: "window.resetLayout",
+        label: "Window: Reset Layout (this workspace)",
+        category: "Window",
+        keywords: ["panels", "dock", "default", "layout", "reset"],
+        run: () => st().resetWorkspaceLayout(st().workspaceMode),
+      },
+      {
+        id: "window.dockAll",
+        label: "Window: Dock All Panels",
+        category: "Window",
+        keywords: ["panels", "floating", "dock", "attach"],
+        run: () => st().dockAllPanels(),
+      },
+      {
+        id: "window.saveLayout",
+        label: "Window: Save Layout As...",
+        category: "Window",
+        keywords: ["panels", "layout", "workspace", "save"],
+        run: () => st().setSaveLayoutModalOpen(true),
+      },
+      {
         id: "view.backdrop.checkerDark",
         label: "Backdrop: Checker Dark",
         category: "View",

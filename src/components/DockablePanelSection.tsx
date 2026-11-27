@@ -1,4 +1,10 @@
-import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronDown,
@@ -10,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   clampFloatingRect,
+  type DockSide,
   getMaxZOrder,
   PANEL_WORKSPACE_MAP,
   type PanelId,
@@ -28,27 +35,78 @@ export interface DockablePanelSectionProps {
   children: ReactNode;
 }
 
+const COLUMN_SELECTOR: Record<DockSide, string> = {
+  right: ".right-sidebar",
+  left: ".left-sidebar",
+};
+
+function getColumn(side: DockSide): HTMLElement | null {
+  const el = document.querySelector<HTMLElement>(COLUMN_SELECTOR[side]);
+  return el && el.offsetParent !== null ? el : null;
+}
+
+/** Resolve a React-safe portal host that may mount after this component. */
+function usePortalHost(hostId: string): HTMLElement | null {
+  const [host, setHost] = useState<HTMLElement | null>(() =>
+    typeof document !== "undefined" ? document.getElementById(hostId) : null
+  );
+  useLayoutEffect(() => {
+    const el = document.getElementById(hostId);
+    if (el !== host) setHost(el);
+  });
+  return host;
+}
+
 function findDockedDropTarget(
   clientY: number,
-  excludeId: PanelId
-): { targetId: PanelId | null; index: number } {
-  const sidebar = document.querySelector(".right-sidebar");
-  if (!sidebar) return { targetId: null, index: 0 };
+  excludeId: PanelId,
+  column: HTMLElement | null
+): { targetId: PanelId | null } {
+  if (!column) return { targetId: null };
   const rows = Array.from(
-    sidebar.querySelectorAll<HTMLElement>("[data-panel-id]")
+    column.querySelectorAll<HTMLElement>("[data-panel-id]")
   ).filter((el) => el.offsetParent !== null);
 
-  let idx = 0;
   for (const row of rows) {
     const rowId = row.dataset.panelId as PanelId | undefined;
     if (!rowId || rowId === excludeId) continue;
     const rect = row.getBoundingClientRect();
     if (clientY < rect.top + rect.height / 2) {
-      return { targetId: rowId, index: idx };
+      return { targetId: rowId };
     }
-    idx++;
   }
-  return { targetId: null, index: idx };
+  return { targetId: null };
+}
+
+interface DockHit {
+  side: DockSide;
+  /** Element that gets the highlight (column, or the empty-left drop zone). */
+  highlight: HTMLElement;
+  /** Column whose rows are used to find the drop position (null if empty). */
+  column: HTMLElement | null;
+}
+
+/** Which dock column (if any) is under the pointer. */
+function hitDockColumn(x: number, y: number): DockHit | null {
+  const right = getColumn("right");
+  if (right && x >= right.getBoundingClientRect().left - 12) {
+    return { side: "right", highlight: right, column: right };
+  }
+  const left = getColumn("left");
+  if (left) {
+    if (x <= left.getBoundingClientRect().right + 12) {
+      return { side: "left", highlight: left, column: left };
+    }
+    return null;
+  }
+  const zone = document.querySelector<HTMLElement>(".left-dock-dropzone");
+  if (zone && zone.offsetParent !== null) {
+    const r = zone.getBoundingClientRect();
+    if (x <= r.right && y >= r.top && y <= r.bottom) {
+      return { side: "left", highlight: zone, column: null };
+    }
+  }
+  return null;
 }
 
 function clearDropHighlights(): void {
@@ -56,8 +114,21 @@ function clearDropHighlights(): void {
     .querySelectorAll(".panel-section.is-drop-before")
     .forEach((el) => el.classList.remove("is-drop-before"));
   document
-    .querySelector(".right-sidebar.is-dock-target")
-    ?.classList.remove("is-dock-target");
+    .querySelectorAll(".is-dock-target")
+    .forEach((el) => el.classList.remove("is-dock-target"));
+}
+
+function highlightDrop(hit: DockHit, targetId: PanelId | null): void {
+  hit.highlight.classList.add("is-dock-target");
+  if (targetId) {
+    hit.column
+      ?.querySelector(`[data-panel-id="${targetId}"]`)
+      ?.classList.add("is-drop-before");
+  }
+}
+
+function setDragActive(active: boolean): void {
+  document.body.classList.toggle("is-panel-dragging", active);
 }
 
 export function DockablePanelSection({
@@ -92,13 +163,27 @@ export function DockablePanelSection({
   const bringFloatingPanelToFront = useEditorStore(
     (s) => s.bringFloatingPanelToFront
   );
-  const reorderDockedPanel = useEditorStore((s) => s.reorderDockedPanel);
+  const placePanel = useEditorStore((s) => s.placePanel);
+  const setPanelSide = useEditorStore((s) => s.setPanelSide);
+  const setPanelHidden = useEditorStore((s) => s.setPanelHidden);
+  const openContextMenu = useEditorStore((s) => s.openContextMenu);
+  const panelSides = useEditorStore((s) => s.panelSides);
+  const hiddenPanels = useEditorStore((s) => s.hiddenPanels);
+  const floatingHost = usePortalHost("floating-panels-root");
+  const leftHost = usePortalHost("left-dock-root");
 
   const panelWorkspace = PANEL_WORKSPACE_MAP[id];
   const detachedRect = detachedPanels[id];
   const maxZOrder = getMaxZOrder(detachedPanels);
   const orderList = dockedPanelOrder[panelWorkspace] ?? [];
   const dockedOrderIdx = orderList.indexOf(id);
+  const hidden = hiddenPanels[id] === true;
+  // A side only applies inside the panel's own workspace (draw panels also
+  // appear in the Tiles sidebar and stay on the right there).
+  const dockSide: DockSide =
+    panelSides[id] === "left" && panelWorkspace === workspaceMode
+      ? "left"
+      : "right";
 
   const startFloatingDrag = (
     startX: number,
@@ -106,21 +191,16 @@ export function DockablePanelSection({
     origX: number,
     origY: number
   ) => {
-    const host = document.getElementById("floating-panels-root");
-    const hostRect = host?.getBoundingClientRect();
-    const sidebar = document.querySelector<HTMLElement>(".right-sidebar");
+    const hostRect = document
+      .getElementById("floating-panels-root")
+      ?.getBoundingClientRect();
+    setDragActive(true);
 
     const onMove = (ev: MouseEvent) => {
       clearDropHighlights();
-      const sidebarRect = sidebar?.getBoundingClientRect();
-      if (sidebarRect && ev.clientX >= sidebarRect.left - 12) {
-        sidebar?.classList.add("is-dock-target");
-        const drop = findDockedDropTarget(ev.clientY, id);
-        if (drop.targetId) {
-          sidebar
-            ?.querySelector(`[data-panel-id="${drop.targetId}"]`)
-            ?.classList.add("is-drop-before");
-        }
+      const hit = hitDockColumn(ev.clientX, ev.clientY);
+      if (hit) {
+        highlightDrop(hit, findDockedDropTarget(ev.clientY, id, hit.column).targetId);
       }
 
       const curRect = useEditorStore.getState().detachedPanels[id];
@@ -143,11 +223,12 @@ export function DockablePanelSection({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       clearDropHighlights();
-
-      const sidebarRect = sidebar?.getBoundingClientRect();
-      if (sidebarRect && ev.clientX >= sidebarRect.left - 12) {
-        const drop = findDockedDropTarget(ev.clientY, id);
-        dockPanel(id, drop.index);
+      // Hit-test while the empty-left drop zone is still displayed.
+      const hit = hitDockColumn(ev.clientX, ev.clientY);
+      setDragActive(false);
+      if (hit) {
+        const drop = findDockedDropTarget(ev.clientY, id, hit.column);
+        placePanel(id, hit.side, drop.targetId);
       }
     };
 
@@ -162,23 +243,38 @@ export function DockablePanelSection({
 
     const startX = e.clientX;
     const startY = e.clientY;
-    const sidebar = document.querySelector<HTMLElement>(".right-sidebar");
-    const sidebarRect = sidebar?.getBoundingClientRect();
-    const host = document.getElementById("floating-panels-root");
-    const hostRect = host?.getBoundingClientRect();
+    const ownColumn = getColumn(dockSide);
+    const ownRect = ownColumn?.getBoundingClientRect();
+    const hostRect = document
+      .getElementById("floating-panels-root")
+      ?.getBoundingClientRect();
     let detachedDuringDrag = false;
+    setDragActive(true);
+
+    const outsideOwn = (x: number) =>
+      ownRect
+        ? dockSide === "right"
+          ? x < ownRect.left - 24
+          : x > ownRect.right + 24
+        : false;
 
     const onMove = (ev: MouseEvent) => {
       if (detachedDuringDrag) return;
       clearDropHighlights();
 
-      // Dragging horizontally left out of the sidebar detaches into a live floating window
-      if (sidebarRect && ev.clientX < sidebarRect.left - 24) {
+      const hit = hitDockColumn(ev.clientX, ev.clientY);
+      if (hit) {
+        highlightDrop(hit, findDockedDropTarget(ev.clientY, id, hit.column).targetId);
+        return;
+      }
+
+      // Pulling out of the column detaches into a live floating window
+      if (outsideOwn(ev.clientX)) {
         detachedDuringDrag = true;
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
 
-        const width = Math.max(240, Math.min(360, sidebarRect.width));
+        const width = Math.max(240, Math.min(360, ownRect?.width ?? 270));
         const initX = hostRect
           ? Math.max(0, ev.clientX - hostRect.left - width / 2)
           : 40;
@@ -187,16 +283,6 @@ export function DockablePanelSection({
           : 40;
         detachPanel(id, { x: initX, y: initY, width });
         startFloatingDrag(ev.clientX, ev.clientY, initX, initY);
-        return;
-      }
-
-      if (sidebar) {
-        const drop = findDockedDropTarget(ev.clientY, id);
-        if (drop.targetId) {
-          sidebar
-            .querySelector(`[data-panel-id="${drop.targetId}"]`)
-            ?.classList.add("is-drop-before");
-        }
       }
     };
 
@@ -205,17 +291,15 @@ export function DockablePanelSection({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       clearDropHighlights();
+      const hit = hitDockColumn(ev.clientX, ev.clientY);
+      setDragActive(false);
 
       if (Math.abs(ev.clientY - startY) < 6 && Math.abs(ev.clientX - startX) < 6) {
         return;
       }
-      const drop = findDockedDropTarget(ev.clientY, id);
-      const curList =
-        useEditorStore.getState().dockedPanelOrder[panelWorkspace] ?? [];
-      const fromIdx = curList.indexOf(id);
-      const targetIdx =
-        drop.index > fromIdx ? Math.max(0, drop.index - 1) : drop.index;
-      reorderDockedPanel(panelWorkspace, id, targetIdx);
+      if (!hit) return;
+      const drop = findDockedDropTarget(ev.clientY, id, hit.column);
+      placePanel(id, hit.side, drop.targetId);
     };
 
     window.addEventListener("mousemove", onMove);
@@ -225,12 +309,14 @@ export function DockablePanelSection({
   const handleDetachClick = () => {
     const host = document.getElementById("floating-panels-root");
     const hostRect = host?.getBoundingClientRect();
-    const sidebar = document.querySelector<HTMLElement>(".right-sidebar");
+    const sidebar = getColumn(dockSide);
     const sidebarWidth = sidebar?.getBoundingClientRect().width ?? 270;
     const width = Math.max(240, Math.min(360, sidebarWidth));
     const count = Object.keys(detachedPanels).length;
     const x = hostRect
-      ? Math.max(12, hostRect.width - width - (sidebarWidth + 16) - (count % 4) * 18)
+      ? dockSide === "left"
+        ? Math.max(12, sidebarWidth + 16 + (count % 4) * 18)
+        : Math.max(12, hostRect.width - width - (sidebarWidth + 16) - (count % 4) * 18)
       : 40;
     const y = 16 + (count % 5) * 24;
     detachPanel(id, { x, y, width });
@@ -278,13 +364,45 @@ export function DockablePanelSection({
     window.addEventListener("mouseup", onUp);
   };
 
+  if (hidden) return null;
+
+  const openPanelMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const otherSide: DockSide = dockSide === "left" ? "right" : "left";
+    openContextMenu(e.clientX, e.clientY, [
+      detachedRect
+        ? {
+            kind: "item",
+            label: "Dock Back to Sidebar",
+            action: () => dockPanel(id),
+          }
+        : {
+            kind: "item",
+            label: "Detach Panel",
+            action: handleDetachClick,
+          },
+      {
+        kind: "item",
+        label: `Move to ${otherSide === "left" ? "Left" : "Right"} Dock`,
+        action: () => {
+          if (detachedRect) placePanel(id, otherSide);
+          else setPanelSide(id, otherSide);
+        },
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        label: "Hide Panel",
+        action: () => setPanelHidden(id, true),
+      },
+    ]);
+  };
+
   if (detachedRect) {
     const visible = panelWorkspace === workspaceMode || detachedRect.pinned;
     if (!visible) return null;
-    const host =
-      typeof document !== "undefined"
-        ? document.getElementById("floating-panels-root")
-        : null;
+    const host = floatingHost;
     if (!host) return null;
 
     const isFocused = detachedRect.zOrder === maxZOrder;
@@ -313,6 +431,7 @@ export function DockablePanelSection({
       >
         <div
           className="floating-panel-header"
+          onContextMenu={openPanelMenu}
           onMouseDown={(e) => {
             if (e.button !== 0) return;
             if ((e.target as HTMLElement).closest("button")) return;
@@ -364,7 +483,7 @@ export function DockablePanelSection({
               type="button"
               className="icon-action-btn"
               style={{ width: 18, height: 18 }}
-              title="Dock back to sidebar"
+              title="Dock back to sidebar (right-click header for more)"
               onClick={() => dockPanel(id)}
             >
               <PanelRightClose size={11} />
@@ -399,7 +518,7 @@ export function DockablePanelSection({
     );
   }
 
-  return (
+  const section = (
     <section
       className="panel-section"
       data-panel-id={id}
@@ -408,10 +527,10 @@ export function DockablePanelSection({
         ...style,
       }}
     >
-      <div className="panel-header">
+      <div className="panel-header" onContextMenu={openPanelMenu}>
         <span
           className="panel-drag-handle"
-          title="Drag to reorder or pull left to detach"
+          title="Drag to reorder, move between docks, or pull out to detach"
           onMouseDown={handleDockedDragStart}
         >
           <GripVertical size={11} />
@@ -432,7 +551,7 @@ export function DockablePanelSection({
             type="button"
             className="icon-action-btn"
             style={{ width: 18, height: 18 }}
-            title="Detach panel"
+            title="Detach panel (right-click header for more)"
             onClick={handleDetachClick}
           >
             <PictureInPicture2 size={11} />
@@ -442,4 +561,10 @@ export function DockablePanelSection({
       {open && <div className="panel-body">{children}</div>}
     </section>
   );
+
+  if (dockSide === "left") {
+    // Until the left dock mounts, keep the panel in place (right column).
+    return leftHost ? createPortal(section, leftHost) : section;
+  }
+  return section;
 }

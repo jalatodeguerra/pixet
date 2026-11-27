@@ -8,17 +8,34 @@ import type { LayerMapRole } from "../engine/gamedev/shaderPreview";
 import type { AutoWeightMethod } from "../engine/rig/autoWeights";
 import type { WeightBrushMode, WeightFalloff } from "../engine/rig/skinning";
 import {
+  applyLayoutSnapshot,
   bringPanelToFrontState,
+  clampDockWidth,
+  clampTimelineHeight,
   createDefaultPanelLayout,
+  createLayoutSnapshot,
+  DEFAULT_LEFT_PANEL_WIDTH,
+  DEFAULT_RIGHT_PANEL_WIDTH,
+  deleteSavedLayout,
   deserializePanelLayout,
+  deserializeSavedLayouts,
   detachPanelState,
   dockAllPanelsState,
   dockPanelState,
+  type DockSide,
   type FloatingPanelRect,
   type PanelId,
   type PanelLayoutState,
+  placePanelState,
   reorderDockedPanelState,
+  resetWorkspaceLayoutState,
+  type SavedLayout,
   serializePanelLayout,
+  serializeSavedLayouts,
+  setPanelHiddenState,
+  setPanelSideState,
+  togglePanelHiddenState,
+  upsertSavedLayout,
 } from "../engine/ui/panelLayout.ts";
 import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
 import type { DitherPattern } from "../engine/tools/dither";
@@ -105,6 +122,88 @@ function savePanelLayout(state: PanelLayoutState): void {
 }
 
 const initialPanelLayout = loadPanelLayout();
+
+function layoutOf(s: {
+  detachedPanels: PanelLayoutState["detachedPanels"];
+  dockedPanelOrder: PanelLayoutState["dockedPanelOrder"];
+  panelSides: PanelLayoutState["panelSides"];
+  hiddenPanels: PanelLayoutState["hiddenPanels"];
+}): PanelLayoutState {
+  return {
+    detachedPanels: s.detachedPanels,
+    dockedPanelOrder: s.dockedPanelOrder,
+    panelSides: s.panelSides,
+    hiddenPanels: s.hiddenPanels,
+  };
+}
+
+const PANEL_WIDTHS_STORAGE_KEY = "pixet.panelWidths.v1";
+const SAVED_LAYOUTS_STORAGE_KEY = "pixet.savedLayouts.v1";
+
+function loadPanelWidths(): { right: number; left: number } {
+  const fallback = {
+    right: DEFAULT_RIGHT_PANEL_WIDTH,
+    left: DEFAULT_LEFT_PANEL_WIDTH,
+  };
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return fallback;
+  }
+  try {
+    const raw = window.localStorage.getItem(PANEL_WIDTHS_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as { right?: unknown; left?: unknown };
+    return {
+      right:
+        typeof parsed.right === "number" ? clampDockWidth(parsed.right) : fallback.right,
+      left: typeof parsed.left === "number" ? clampDockWidth(parsed.left) : fallback.left,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function savePanelWidths(right: number, left: number): void {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(
+      PANEL_WIDTHS_STORAGE_KEY,
+      JSON.stringify({ right, left })
+    );
+  } catch {
+    // Ignore quota/private-mode errors
+  }
+}
+
+function loadSavedLayouts(): SavedLayout[] {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return [];
+  }
+  try {
+    return deserializeSavedLayouts(
+      window.localStorage.getItem(SAVED_LAYOUTS_STORAGE_KEY)
+    );
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedLayouts(list: SavedLayout[]): void {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(
+      SAVED_LAYOUTS_STORAGE_KEY,
+      serializeSavedLayouts(list)
+    );
+  } catch {
+    // Ignore quota/private-mode errors
+  }
+}
+
+const initialPanelWidths = loadPanelWidths();
 
 export type RightClickMode = "secondaryColor" | "erase" | "eyedropper";
 export type CanvasBackdrop =
@@ -720,6 +819,7 @@ interface EditorState {
   activeTagId: string | null;
 
   rightPanelWidth: number;
+  leftPanelWidth: number;
   timelineHeight: number;
   /** True once the user dragged the timeline; otherwise it sizes to content. */
   timelineHeightManual: boolean;
@@ -729,6 +829,10 @@ interface EditorState {
   statusMessage: string | null;
   detachedPanels: Partial<Record<PanelId, FloatingPanelRect>>;
   dockedPanelOrder: Record<WorkspaceMode, PanelId[]>;
+  panelSides: Partial<Record<PanelId, DockSide>>;
+  hiddenPanels: Partial<Record<PanelId, boolean>>;
+  savedLayouts: SavedLayout[];
+  saveLayoutModalOpen: boolean;
   studio3d: Studio3DState;
   model3dVersion: number;
   nodesUi: NodesUiState;
@@ -943,6 +1047,7 @@ interface EditorState {
   toggleCel: (layerId: string, frameIndex: number) => void;
 
   setRightPanelWidth: (width: number) => void;
+  setLeftPanelWidth: (width: number) => void;
   setTimelineHeight: (height: number) => void;
   toggleTimelineCollapsed: () => void;
   togglePanelsCollapsed: () => void;
@@ -1032,6 +1137,16 @@ interface EditorState {
     initial?: Partial<Pick<FloatingPanelRect, "x" | "y" | "width">>
   ) => void;
   dockPanel: (id: PanelId, targetIndex?: number) => void;
+  /** Dock (or re-order) a panel into a column, before `beforeId` or at its end. */
+  placePanel: (id: PanelId, side: DockSide, beforeId?: PanelId | null) => void;
+  setPanelSide: (id: PanelId, side: DockSide) => void;
+  togglePanelHidden: (id: PanelId) => void;
+  setPanelHidden: (id: PanelId, hidden: boolean) => void;
+  resetWorkspaceLayout: (mode: WorkspaceMode) => void;
+  saveCurrentLayout: (name: string) => void;
+  applySavedLayout: (name: string) => void;
+  deleteSavedLayoutByName: (name: string) => void;
+  setSaveLayoutModalOpen: (open: boolean) => void;
   dockAllPanels: () => void;
   updateFloatingPanelRect: (
     id: PanelId,
@@ -1428,7 +1543,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   ],
   activeTagId: null,
 
-  rightPanelWidth: 276,
+  rightPanelWidth: initialPanelWidths.right,
+  leftPanelWidth: initialPanelWidths.left,
   timelineHeight: 204,
   timelineHeightManual: false,
   timelineCollapsed: false,
@@ -1437,6 +1553,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   statusMessage: null,
   detachedPanels: initialPanelLayout.detachedPanels,
   dockedPanelOrder: initialPanelLayout.dockedPanelOrder,
+  panelSides: initialPanelLayout.panelSides,
+  hiddenPanels: initialPanelLayout.hiddenPanels,
+  savedLayouts: loadSavedLayouts(),
+  saveLayoutModalOpen: false,
   studio3d: { ...DEFAULT_STUDIO3D_STATE },
   model3dVersion: 0,
   nodesUi: { ...DEFAULT_NODES_UI_STATE },
@@ -2556,10 +2676,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
 
   setRightPanelWidth: (width) =>
-    set({ rightPanelWidth: Math.max(230, Math.min(420, width)) }),
+    set((s) => {
+      const right = clampDockWidth(width);
+      savePanelWidths(right, s.leftPanelWidth);
+      return { rightPanelWidth: right };
+    }),
+  setLeftPanelWidth: (width) =>
+    set((s) => {
+      const left = clampDockWidth(width);
+      savePanelWidths(s.rightPanelWidth, left);
+      return { leftPanelWidth: left };
+    }),
   setTimelineHeight: (height) =>
     set({
-      timelineHeight: Math.max(120, Math.min(360, height)),
+      timelineHeight: clampTimelineHeight(height),
       timelineHeightManual: true,
     }),
   toggleTimelineCollapsed: () =>
@@ -2729,36 +2859,51 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ paletteLutPresetName }),
   detachPanel: (id, initial) =>
     set((s) => {
-      const next = detachPanelState(
-        {
-          detachedPanels: s.detachedPanels,
-          dockedPanelOrder: s.dockedPanelOrder,
-        },
-        id,
-        initial
-      );
+      const next = detachPanelState(layoutOf(s), id, initial);
       savePanelLayout(next);
       return next;
     }),
   dockPanel: (id, targetIndex) =>
     set((s) => {
-      const next = dockPanelState(
-        {
-          detachedPanels: s.detachedPanels,
-          dockedPanelOrder: s.dockedPanelOrder,
-        },
-        id,
-        targetIndex
-      );
+      const next = dockPanelState(layoutOf(s), id, targetIndex);
+      savePanelLayout(next);
+      return next;
+    }),
+  placePanel: (id, side, beforeId) =>
+    set((s) => {
+      const next = placePanelState(layoutOf(s), id, side, beforeId);
+      savePanelLayout(next);
+      return next;
+    }),
+  setPanelSide: (id, side) =>
+    set((s) => {
+      const next = setPanelSideState(layoutOf(s), id, side);
+      if (next.panelSides === s.panelSides) return s;
+      savePanelLayout(next);
+      return { panelSides: next.panelSides };
+    }),
+  togglePanelHidden: (id) =>
+    set((s) => {
+      const next = togglePanelHiddenState(layoutOf(s), id);
+      savePanelLayout(next);
+      return { hiddenPanels: next.hiddenPanels };
+    }),
+  setPanelHidden: (id, hidden) =>
+    set((s) => {
+      const next = setPanelHiddenState(layoutOf(s), id, hidden);
+      if (next.hiddenPanels === s.hiddenPanels) return s;
+      savePanelLayout(next);
+      return { hiddenPanels: next.hiddenPanels };
+    }),
+  resetWorkspaceLayout: (mode) =>
+    set((s) => {
+      const next = resetWorkspaceLayoutState(layoutOf(s), mode);
       savePanelLayout(next);
       return next;
     }),
   dockAllPanels: () =>
     set((s) => {
-      const next = dockAllPanelsState({
-        detachedPanels: s.detachedPanels,
-        dockedPanelOrder: s.dockedPanelOrder,
-      });
+      const next = dockAllPanelsState(layoutOf(s));
       savePanelLayout(next);
       return next;
     }),
@@ -2767,11 +2912,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const cur = s.detachedPanels[id];
       if (!cur) return s;
       const next: PanelLayoutState = {
-        detachedPanels: {
-          ...s.detachedPanels,
-          [id]: { ...cur, ...patch },
-        },
-        dockedPanelOrder: s.dockedPanelOrder,
+        ...layoutOf(s),
+        detachedPanels: { ...s.detachedPanels, [id]: { ...cur, ...patch } },
       };
       savePanelLayout(next);
       return { detachedPanels: next.detachedPanels };
@@ -2781,11 +2923,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const cur = s.detachedPanels[id];
       if (!cur) return s;
       const next: PanelLayoutState = {
+        ...layoutOf(s),
         detachedPanels: {
           ...s.detachedPanels,
           [id]: { ...cur, collapsed: !cur.collapsed },
         },
-        dockedPanelOrder: s.dockedPanelOrder,
       };
       savePanelLayout(next);
       return { detachedPanels: next.detachedPanels };
@@ -2795,39 +2937,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const cur = s.detachedPanels[id];
       if (!cur) return s;
       const next: PanelLayoutState = {
+        ...layoutOf(s),
         detachedPanels: {
           ...s.detachedPanels,
           [id]: { ...cur, pinned: !cur.pinned },
         },
-        dockedPanelOrder: s.dockedPanelOrder,
       };
       savePanelLayout(next);
       return { detachedPanels: next.detachedPanels };
     }),
   bringFloatingPanelToFront: (id) =>
     set((s) => {
-      const next = bringPanelToFrontState(
-        {
-          detachedPanels: s.detachedPanels,
-          dockedPanelOrder: s.dockedPanelOrder,
-        },
-        id
-      );
+      const next = bringPanelToFrontState(layoutOf(s), id);
       if (next.detachedPanels === s.detachedPanels) return s;
       savePanelLayout(next);
       return { detachedPanels: next.detachedPanels };
     }),
   reorderDockedPanel: (mode, id, toIndex) =>
     set((s) => {
-      const next = reorderDockedPanelState(
-        {
-          detachedPanels: s.detachedPanels,
-          dockedPanelOrder: s.dockedPanelOrder,
-        },
-        mode,
-        id,
-        toIndex
-      );
+      const next = reorderDockedPanelState(layoutOf(s), mode, id, toIndex);
       savePanelLayout(next);
       return { dockedPanelOrder: next.dockedPanelOrder };
     }),
@@ -2837,6 +2965,42 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       savePanelLayout(next);
       return next;
     }),
+  saveCurrentLayout: (name) =>
+    set((s) => {
+      const snapshot = createLayoutSnapshot(layoutOf(s), {
+        rightPanelWidth: s.rightPanelWidth,
+        leftPanelWidth: s.leftPanelWidth,
+        timelineHeight: s.timelineHeight,
+      });
+      const list = upsertSavedLayout(s.savedLayouts, name, snapshot);
+      if (list === s.savedLayouts) return s;
+      persistSavedLayouts(list);
+      return { savedLayouts: list };
+    }),
+  applySavedLayout: (name) =>
+    set((s) => {
+      const entry = s.savedLayouts.find(
+        (l) => l.name.toLowerCase() === name.toLowerCase()
+      );
+      if (!entry) return s;
+      const snap = applyLayoutSnapshot(entry.snapshot);
+      savePanelLayout(snap.panelLayout);
+      savePanelWidths(snap.rightPanelWidth, snap.leftPanelWidth);
+      return {
+        ...snap.panelLayout,
+        rightPanelWidth: snap.rightPanelWidth,
+        leftPanelWidth: snap.leftPanelWidth,
+        timelineHeight: snap.timelineHeight,
+        timelineHeightManual: true,
+      };
+    }),
+  deleteSavedLayoutByName: (name) =>
+    set((s) => {
+      const list = deleteSavedLayout(s.savedLayouts, name);
+      persistSavedLayouts(list);
+      return { savedLayouts: list };
+    }),
+  setSaveLayoutModalOpen: (open) => set({ saveLayoutModalOpen: open }),
   loadProjectState: (payload) =>
     set({
       zoomIsFit: true,
