@@ -101,7 +101,8 @@ test("syncModel3DScene: viewport vs export context and base-mesh cage picking", 
   assert.ok(pick.userData.isModifierCagePick);
   assert.equal(pick.userData.faceIds.length, 6);
   const parent = edit.nodeObjectById.get(nodeId)!;
-  assert.ok(parent.children.some((c) => c.userData.isModifierCageWire));
+  // The viewport's Edit Mode overlay draws the base-mesh wire, not sceneSync.
+  assert.ok(!parent.children.some((c) => c.userData.isModifierCageWire));
 
   // Export never produces a cage even if a node were active.
   const exp = syncModel3DScene(engine, mk({ modifierContext: "export" }));

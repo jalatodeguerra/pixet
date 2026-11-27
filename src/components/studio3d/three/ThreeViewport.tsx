@@ -3,7 +3,16 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { Maximize2, Magnet } from "lucide-react";
-import type { ScreenRect } from "../../../engine/model3d/boxSelect";
+import { collectUniqueEdges, edgeKey, type ScreenRect } from "../../../engine/model3d/boxSelect";
+import {
+  EDGE_PICK_RADIUS_PX,
+  VERTEX_PICK_RADIUS_PX,
+  isDepthVisible,
+  pickNearestSegment,
+  pickNearestVertex,
+  toggleInList,
+  type MaybeScreenPoint,
+} from "../../../engine/model3d/pickSubElements";
 import { describeSelectionCount } from "../../../engine/model3d/editMode";
 import { pixelEngine } from "../../../engine/document/PixelEngine";
 import { syncHistoryAndCelState } from "../../../engine/document/historyActions";
@@ -37,6 +46,7 @@ import {
 import type {
   ModelAnimationClip,
   ModelNode,
+  PolyFace,
   PolyMeshData,
   Quat,
   TileCursor3D,
@@ -123,6 +133,41 @@ function disposeGroupGeometriesAndMaterials(group: THREE.Object3D): void {
   });
 }
 
+const EDIT_ORANGE = 0xf5a623;
+const EDIT_WIRE = 0x000000;
+
+function pushTriangles(
+  out: number[],
+  f: PolyFace,
+  vertices: THREE.Vector3[]
+): void {
+  if (f.verts.length < 3) return;
+  const v0 = vertices[f.verts[0]];
+  const v1 = vertices[f.verts[1]];
+  const v2 = vertices[f.verts[2]];
+  if (!v0 || !v1 || !v2) return;
+  const tri = (p: THREE.Vector3, q: THREE.Vector3, r: THREE.Vector3) =>
+    out.push(p.x, p.y, p.z, q.x, q.y, q.z, r.x, r.y, r.z);
+  if (f.verts.length === 3) {
+    tri(v0, v1, v2);
+    return;
+  }
+  const v3 = vertices[f.verts[3]];
+  if (!v3) return;
+  if ((f.triSplit ?? "02") === "02") {
+    tri(v0, v1, v2);
+    tri(v0, v2, v3);
+  } else {
+    tri(v0, v1, v3);
+    tri(v1, v2, v3);
+  }
+}
+
+/**
+ * Blender-style Edit Mode overlay for the active mesh node: full base-mesh wire,
+ * every vertex as a dot, selection in orange, selected faces tinted. Depth-tested
+ * (faces are polygon-offset back) so wire and dots hide behind the surface.
+ */
 function buildSubObjectOverlay(
   nodeObjectById: Map<string, THREE.Object3D>,
   ppu: number
@@ -130,115 +175,125 @@ function buildSubObjectOverlay(
   const overlay = new THREE.Group();
   overlay.name = "__m3d_subobject_overlay__";
   const engine = pixelEngine.model3d;
-  if (engine.selectionGranularity === "object") return overlay;
+  const granularity = engine.selectionGranularity;
+  if (granularity === "object") return overlay;
 
-  const vertPositions: number[] = [];
-  const edgePositions: number[] = [];
-  const faceTriPositions: number[] = [];
+  const node = engine.activeNodeId ? engine.getNode(engine.activeNodeId) : undefined;
+  if (!node || !node.visible || node.kind !== "mesh" || !node.mesh) return overlay;
+  const obj = nodeObjectById.get(node.id);
+  if (!obj) return overlay;
 
-  for (const node of engine.nodes) {
-    if (!node.visible || node.kind !== "mesh" || !node.mesh) continue;
-    const obj = nodeObjectById.get(node.id);
-    if (!obj) continue;
+  const { vertices, facesById } = collectSelectedSubObjectPositions(node, obj, ppu);
+  if (vertices.length === 0) return overlay;
 
-    const { vertices, facesById } = collectSelectedSubObjectPositions(
-      node,
-      obj,
-      ppu
-    );
-    if (vertices.length === 0) continue;
+  const selVerts = new Set(engine.selectedVertices[node.id] ?? []);
+  const selEdgeKeys = new Set(
+    (engine.selectedEdges[node.id] ?? []).map(([a, b]) => edgeKey(a, b))
+  );
+  const selFaces = engine.selectedFaces[node.id] ?? [];
 
-    if (engine.selectionGranularity === "vertex") {
-      const selVerts = engine.selectedVertices[node.id] ?? [];
-      for (const vi of selVerts) {
-        const v = vertices[vi];
-        if (v) vertPositions.push(v.x, v.y, v.z);
-      }
-    } else if (engine.selectionGranularity === "edge") {
-      const selEdges = engine.selectedEdges[node.id] ?? [];
-      for (const [a, b] of selEdges) {
-        const va = vertices[a];
-        const vb = vertices[b];
-        if (va && vb) {
-          edgePositions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
-        }
-      }
-    } else if (engine.selectionGranularity === "face") {
-      const selFaces = engine.selectedFaces[node.id] ?? [];
-      for (const fId of selFaces) {
-        const f = facesById.get(fId);
-        if (!f || f.verts.length < 3) continue;
-        const v0 = vertices[f.verts[0]];
-        const v1 = vertices[f.verts[1]];
-        const v2 = vertices[f.verts[2]];
-        if (!v0 || !v1 || !v2) continue;
-        if (f.verts.length === 3) {
-          faceTriPositions.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-        } else {
-          const v3 = vertices[f.verts[3]];
-          if (!v3) continue;
-          const split = f.triSplit ?? "02";
-          if (split === "02") {
-            faceTriPositions.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-            faceTriPositions.push(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v3.x, v3.y, v3.z);
-          } else {
-            faceTriPositions.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v3.x, v3.y, v3.z);
-            faceTriPositions.push(v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, v3.x, v3.y, v3.z);
-          }
-        }
+  // Derive highlighted edges / verts from the active granularity like Blender does.
+  const faceVerts = new Set<number>();
+  const faceEdgeKeys = new Set<string>();
+  const faceTris: number[] = [];
+  if (granularity === "face") {
+    for (const fId of selFaces) {
+      const f = facesById.get(fId);
+      if (!f) continue;
+      pushTriangles(faceTris, f, vertices);
+      for (let i = 0; i < f.verts.length; i++) {
+        faceVerts.add(f.verts[i]);
+        faceEdgeKeys.add(edgeKey(f.verts[i], f.verts[(i + 1) % f.verts.length]));
       }
     }
   }
+  const edgeVerts = new Set<number>();
+  for (const [a, b] of engine.selectedEdges[node.id] ?? []) {
+    edgeVerts.add(a);
+    edgeVerts.add(b);
+  }
+  const isVertSel = (vi: number) =>
+    granularity === "vertex"
+      ? selVerts.has(vi)
+      : granularity === "edge"
+        ? edgeVerts.has(vi)
+        : faceVerts.has(vi);
+  const isEdgeSel = (a: number, b: number) => {
+    const k = edgeKey(a, b);
+    if (granularity === "vertex") return selVerts.has(a) && selVerts.has(b);
+    if (granularity === "edge") return selEdgeKeys.has(k);
+    return faceEdgeKeys.has(k);
+  };
 
-  if (vertPositions.length > 0) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(vertPositions, 3)
-    );
-    const mat = new THREE.PointsMaterial({
-      color: 0xf5b041,
-      size: 7,
-      sizeAttenuation: false,
-      depthTest: false,
-    });
-    const pts = new THREE.Points(geo, mat);
-    pts.renderOrder = 12;
-    overlay.add(pts);
+  const darkEdges: number[] = [];
+  const hotEdges: number[] = [];
+  for (const [a, b] of collectUniqueEdges(node.mesh)) {
+    const va = vertices[a];
+    const vb = vertices[b];
+    if (!va || !vb) continue;
+    (isEdgeSel(a, b) ? hotEdges : darkEdges).push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
+  }
+  const darkVerts: number[] = [];
+  const hotVerts: number[] = [];
+  for (let vi = 0; vi < vertices.length; vi++) {
+    const v = vertices[vi];
+    (isVertSel(vi) ? hotVerts : darkVerts).push(v.x, v.y, v.z);
   }
 
-  if (edgePositions.length > 0) {
+  const addLines = (positions: number[], color: number, order: number) => {
+    if (positions.length === 0) return;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(edgePositions, 3)
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    const lines = new THREE.LineSegments(
+      geo,
+      new THREE.LineBasicMaterial({ color, depthTest: true })
     );
-    const mat = new THREE.LineBasicMaterial({
-      color: 0xf5b041,
-      depthTest: false,
-    });
-    const lines = new THREE.LineSegments(geo, mat);
-    lines.renderOrder = 12;
+    lines.renderOrder = order;
+    lines.frustumCulled = false;
     overlay.add(lines);
-  }
-
-  if (faceTriPositions.length > 0) {
+  };
+  const addPoints = (positions: number[], color: number, size: number, order: number) => {
+    if (positions.length === 0) return;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(faceTriPositions, 3)
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    const pts = new THREE.Points(
+      geo,
+      new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: true })
     );
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0x4c8bf5,
-      transparent: true,
-      opacity: 0.28,
-      side: THREE.DoubleSide,
-      depthTest: false,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.renderOrder = 11;
+    pts.renderOrder = order;
+    pts.frustumCulled = false;
+    overlay.add(pts);
+  };
+
+  if (faceTris.length > 0) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(faceTris, 3));
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({
+        color: EDIT_ORANGE,
+        transparent: true,
+        opacity: 0.4,
+        side: THREE.DoubleSide,
+        depthTest: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      })
+    );
+    mesh.renderOrder = 10;
+    mesh.frustumCulled = false;
     overlay.add(mesh);
   }
+  addLines(darkEdges, EDIT_WIRE, 11);
+  addLines(hotEdges, EDIT_ORANGE, 12);
+  // Sizes are CSS px (three multiplies by the renderer pixel ratio). A light halo under the
+  // dark dots and a black ring under the orange ones keep them readable on any face shade.
+  addPoints(darkVerts, 0xd8d8d8, 10, 13);
+  addPoints(darkVerts, 0x000000, 7, 14);
+  addPoints(hotVerts, 0x000000, 14, 15);
+  addPoints(hotVerts, EDIT_ORANGE, 10, 16);
 
   return overlay;
 }
@@ -1451,9 +1506,15 @@ export function ThreeViewport() {
     if (modalControllerRef.current?.isActive()) return;
 
     const engine = pixelEngine.model3d;
+    // Edit Mode always shows solid faces: a textured preview whose sampled texels are
+    // transparent (alpha test) would make the mesh vanish while editing it.
+    const effectiveShading =
+      engine.selectionGranularity !== "object" && studio3d.subMode === "model"
+        ? "solid"
+        : studio3d.shadingMode;
     const { materialById, textureSizeByMaterialId } = materialCache.sync({
       materials: engine.materials,
-      shadingMode: studio3d.shadingMode,
+      shadingMode: effectiveShading,
       cullBackfacesInView: studio3d.cullBackfacesInView,
       layers,
       currentFrame,
@@ -1952,6 +2013,127 @@ export function ThreeViewport() {
     }
   };
 
+  /**
+   * Blender-style Edit Mode click on the active mesh: screen-space nearest vertex /
+   * edge (occlusion-tested), face-ray for faces. Shift toggles, plain click replaces,
+   * clicking empty space clears the element selection but keeps the node in Edit Mode.
+   */
+  const applyEditModeClick = (
+    e: React.PointerEvent<HTMLDivElement>,
+    node: ModelNode & { mesh: PolyMeshData },
+    obj: THREE.Object3D,
+    cam: THREE.Camera,
+    rect: DOMRect,
+    hits: THREE.Intersection[]
+  ): boolean => {
+    const engine = pixelEngine.model3d;
+    const granularity = engine.selectionGranularity;
+    const ppu = Math.max(1, engine.pixelsPerUnit);
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const { vertices } = collectSelectedSubObjectPositions(node, obj, ppu);
+
+    const clearAll = () => {
+      engine.selectedVertices[node.id] = [];
+      engine.selectedEdges[node.id] = [];
+      engine.selectedFaces[node.id] = [];
+    };
+
+    if (granularity === "face") {
+      const hit = hits[0];
+      const ud = hit?.object.userData as MeshLookupUserData | undefined;
+      const usable =
+        hit &&
+        ud?.nodeId === node.id &&
+        (hit.object.userData?.[CAGE_PICK_FLAG] ||
+          getEvaluatedMesh(node, "viewport") === node.mesh) &&
+        hit.faceIndex != null &&
+        hit.faceIndex >= 0 &&
+        hit.faceIndex < ud.triToFaceIndex.length;
+      const faceId = usable
+        ? ud!.faceIds[ud!.triToFaceIndex[hit.faceIndex as number]]
+        : undefined;
+      if (faceId === undefined) {
+        if (!e.shiftKey) clearAll();
+        return true;
+      }
+      const prev = engine.selectedFaces[node.id] ?? [];
+      engine.selectedFaces[node.id] = e.shiftKey ? toggleInList(prev, faceId) : [faceId];
+      return true;
+    }
+
+    const projected: MaybeScreenPoint[] = vertices.map((v) => {
+      const p = v.clone().project(cam);
+      if (p.z < -1 || p.z > 1) return null;
+      return {
+        x: ((p.x + 1) / 2) * rect.width,
+        y: ((1 - p.y) / 2) * rect.height,
+        depth: p.z,
+      };
+    });
+
+    const rc = new THREE.Raycaster();
+    const pickables = pickableMeshesRef.current;
+    const worldPointVisible = (w: THREE.Vector3): boolean => {
+      const n = w.clone().project(cam);
+      rc.setFromCamera(new THREE.Vector2(n.x, n.y), cam);
+      const first = rc.intersectObjects(pickables, false)[0];
+      return isDepthVisible(rc.ray.origin.distanceTo(w), first ? first.distance : null);
+    };
+
+    if (granularity === "vertex") {
+      const idx = pickNearestVertex(
+        projected,
+        cx,
+        cy,
+        VERTEX_PICK_RADIUS_PX,
+        (i) => worldPointVisible(vertices[i])
+      );
+      if (idx < 0) {
+        if (!e.shiftKey) clearAll();
+        return true;
+      }
+      const prev = engine.selectedVertices[node.id] ?? [];
+      engine.selectedVertices[node.id] = e.shiftKey ? toggleInList(prev, idx) : [idx];
+      return true;
+    }
+
+    // edge
+    const edges = collectUniqueEdges(node.mesh);
+    const idx = pickNearestSegment(
+      projected,
+      edges,
+      cx,
+      cy,
+      EDGE_PICK_RADIUS_PX,
+      (i) => {
+        const [a, b] = edges[i];
+        const mid = vertices[a].clone().add(vertices[b]).multiplyScalar(0.5);
+        return worldPointVisible(mid);
+      }
+    );
+    if (idx < 0) {
+      if (!e.shiftKey) clearAll();
+      return true;
+    }
+    const picked = edges[idx];
+    const group: Array<[number, number]> = e.altKey
+      ? selectEdgeLoop(node.mesh, picked)
+      : [picked];
+    const prev = engine.selectedEdges[node.id] ?? [];
+    const has = (list: ReadonlyArray<readonly [number, number]>, ed: readonly [number, number]) =>
+      list.some(([a, b]) => edgeKey(a, b) === edgeKey(ed[0], ed[1]));
+    if (e.shiftKey) {
+      const allIn = group.every((ed) => has(prev, ed));
+      engine.selectedEdges[node.id] = allIn
+        ? prev.filter((ed) => !has(group, ed))
+        : [...prev, ...group.filter((ed) => !has(prev, ed))];
+    } else {
+      engine.selectedEdges[node.id] = group;
+    }
+    return true;
+  };
+
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const orbit = orbitRef.current;
     if (
@@ -2018,6 +2200,31 @@ export function ThreeViewport() {
     const hits = raycaster.intersectObjects(pickableMeshesRef.current, false);
 
     const engine = pixelEngine.model3d;
+
+    // Edit Mode on a mesh: screen-space vertex / edge picking and face-ray picking
+    // on the active node. A click on another object falls through to node selection.
+    if (engine.selectionGranularity !== "object") {
+      const editNode = engine.activeNodeId ? engine.getNode(engine.activeNodeId) : undefined;
+      const editObj = editNode ? nodeObjectByIdRef.current.get(editNode.id) : undefined;
+      if (editNode && editNode.kind === "mesh" && editNode.mesh && editObj && !editNode.locked) {
+        const hitOther =
+          hits.length > 0 &&
+          (hits[0].object.userData as MeshLookupUserData | undefined)?.nodeId !== editNode.id;
+        const handled = !hitOther && applyEditModeClick(
+          e,
+          editNode as ModelNode & { mesh: PolyMeshData },
+          editObj,
+          cam,
+          rect,
+          hits
+        );
+        if (handled) {
+          bumpModel3DVersion();
+          return;
+        }
+      }
+    }
+
     if (hits.length === 0) {
       if (!e.shiftKey) {
         engine.clearSelection();

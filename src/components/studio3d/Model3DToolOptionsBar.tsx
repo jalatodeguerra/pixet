@@ -21,6 +21,7 @@ import { downloadExportedModelAction } from "./three/modelExporter";
 const SNAP_OPTIONS = [0.25, 0.5, 1, 4, 16] as const;
 
 const SHADING_OPTIONS: readonly { id: ShadingMode; label: string }[] = [
+  { id: "solid", label: "Solid" },
   { id: "unlit", label: "Unlit" },
   { id: "flat", label: "Flat" },
   { id: "ps1", label: "PS1" },
