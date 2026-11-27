@@ -60,6 +60,7 @@ import {
 import { mutateModel3D } from "../engine/model3d/model3dActions";
 import { useEditorStore } from "../store/editorStore";
 import { CurveEditorAsync } from "./lazyWorkspaces";
+import { useAreaChrome } from "./areas/AreaChrome";
 
 function CelThumbnail({
   layerId,
@@ -141,6 +142,7 @@ export function Timeline() {
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
   const timelineHeight = useEditorStore((s) => s.timelineHeight);
   const timelineHeightManual = useEditorStore((s) => s.timelineHeightManual);
+  const areaChrome = useAreaChrome();
   const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
   const rigMode = useEditorStore((s) => s.rigMode);
@@ -299,7 +301,9 @@ export function Timeline() {
       style={
         timelineCollapsed
           ? { height: 30 }
-          : timelineHeightManual
+          : areaChrome?.fill
+            ? { height: "100%" }
+            : timelineHeightManual
             ? { height: timelineHeight }
             : { height: "auto", minHeight: 96, maxHeight: "40vh" }
       }
@@ -307,6 +311,7 @@ export function Timeline() {
     >
       <div className="timeline-toolbar">
         <div className="timeline-controls">
+          {areaChrome?.leading}
           <button
             type="button"
             className="panel-collapse-btn"
@@ -831,6 +836,7 @@ export function Timeline() {
             </form>
           )}
 
+          {areaChrome?.trailing}
           <button
             type="button"
             className="icon-action-btn"

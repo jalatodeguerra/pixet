@@ -13,6 +13,9 @@ import {
   TilesSidebarAsync,
 } from "./lazyWorkspaces";
 import { TilesetBrowserPanel } from "./tiles/TilesetBrowserPanel";
+import { AreaHeader, AreaSwitcher } from "./areas/AreaChrome";
+import { AreaEditorBody } from "./areas/BottomAreas";
+import { getAreaEditorDef } from "../engine/ui/areaEditors";
 
 export function RightSidebar() {
   const rightPanelWidth = useEditorStore((s) => s.rightPanelWidth);
@@ -20,6 +23,9 @@ export function RightSidebar() {
   const tilesMode = useEditorStore((s) => s.tilesMode);
   const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
   const detachedPanels = useEditorStore((s) => s.detachedPanels);
+  const sidebarEditor = useEditorStore((s) => s.areas[s.workspaceMode].sidebarEditor);
+  const setSidebarAreaEditor = useEditorStore((s) => s.setSidebarAreaEditor);
+  const showPanels = sidebarEditor === "panels";
 
   const hideDefaultSidebar =
     workspaceMode === "rig" ||
@@ -42,6 +48,20 @@ export function RightSidebar() {
       style={{ width: rightPanelWidth }}
       aria-label="Inspector Sidebar"
     >
+      <AreaHeader
+        switcher={
+          <AreaSwitcher
+            workspace={workspaceMode}
+            slot="sidebar"
+            value={sidebarEditor}
+            onChange={(id) => setSidebarAreaEditor(workspaceMode, id)}
+          />
+        }
+        title={getAreaEditorDef(sidebarEditor).label}
+      />
+      {/* Panels stay mounted (hidden) while another editor is shown so that
+          left-docked and floating panels, which portal out of here, survive. */}
+      <div style={{ display: showPanels ? "contents" : "none" }}>
       <div
         className={`sidebar-section-stack ${hideDefaultSidebar ? "is-hidden" : ""}`}
       >
@@ -76,6 +96,12 @@ export function RightSidebar() {
 
       {/* Focused Nodes Preview & Inspector */}
       {workspaceMode === "nodes" && <NodesSidebarAsync />}
+      </div>
+      {!showPanels && (
+        <div className="area-frame-body area-sidebar-body">
+          <AreaEditorBody id={sidebarEditor} />
+        </div>
+      )}
     </aside>
   );
 }

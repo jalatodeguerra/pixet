@@ -14,6 +14,10 @@ import {
   strokeSelectionAction,
   transformSelectionOrCel,
 } from "../../engine/document/selectionActions";
+import {
+  getStudio3DFlatMode,
+  studio3DFlatModeShowsTimeline,
+} from "../../engine/model3d/studio3dModes";
 import { cullInternalCoplanarFaces } from "../../engine/model3d/meshOps";
 import { mutateModel3D } from "../../engine/model3d/model3dActions";
 import {
@@ -196,6 +200,31 @@ export function buildPaletteCommands(): LegacyPaletteCommand[] {
         category: "Window",
         keywords: ["panels", "dock", "default", "layout", "reset"],
         run: () => st().resetWorkspaceLayout(st().workspaceMode),
+      },
+      {
+        id: "window.toggleBottomArea",
+        label: "Window: Toggle Bottom Area",
+        category: "Window",
+        keywords: ["timeline", "preview", "bottom", "area", "editor"],
+        run: () => {
+          const s = st();
+          const flat = getStudio3DFlatMode({
+            workspaceKind: s.studio3d.workspaceKind,
+            mode: s.studio3d.mode,
+            subMode: s.studio3d.subMode,
+          });
+          const allowed =
+            s.workspaceMode !== "nodes" &&
+            !(s.workspaceMode === "studio3d" && !studio3DFlatModeShowsTimeline(flat));
+          s.toggleBottomAreaVisible(s.workspaceMode, allowed);
+        },
+      },
+      {
+        id: "window.splitBottomArea",
+        label: "Window: Split Bottom Area",
+        category: "Window",
+        keywords: ["timeline", "preview", "bottom", "area", "split"],
+        run: () => st().splitBottomArea(st().workspaceMode),
       },
       {
         id: "window.dockAll",

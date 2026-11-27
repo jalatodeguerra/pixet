@@ -26,6 +26,7 @@ import { pickImageFileForImport } from "../engine/io/imageImport";
 import { commandRegistry } from "../engine/config/commands";
 import { ensureCommandsRegistered, runCommandById } from "./commands/appCommands";
 import { syncRigHistoryFlags } from "../engine/rig/rigActions";
+import { useTimelineAllowed, useVisibleBottomEditors } from "./areas/useAreaLayout";
 import { DEFAULT_DOCKED_ORDER, PANEL_TITLES } from "../engine/ui/panelLayout";
 import {
   useEditorStore,
@@ -127,6 +128,9 @@ export function TopBar() {
   const applySavedLayout = useEditorStore((s) => s.applySavedLayout);
   const deleteSavedLayoutByName = useEditorStore((s) => s.deleteSavedLayoutByName);
   const setSaveLayoutModalOpen = useEditorStore((s) => s.setSaveLayoutModalOpen);
+  const toggleBottomAreaVisible = useEditorStore((s) => s.toggleBottomAreaVisible);
+  const bottomAreaShown = useVisibleBottomEditors().length > 0;
+  const timelineAllowed = useTimelineAllowed();
   const setFilterModalOpen = useEditorStore((s) => s.setFilterModalOpen);
 
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
@@ -159,6 +163,13 @@ export function TopBar() {
           keepOpen: true,
           action: () => togglePanelHidden(id),
         }))),
+    SEPARATOR,
+    {
+      label: "Show Bottom Area",
+      checked: bottomAreaShown,
+      keepOpen: true,
+      action: () => toggleBottomAreaVisible(workspaceMode, timelineAllowed),
+    },
     SEPARATOR,
     { label: "Dock All Panels", action: () => dockAllPanels() },
     {

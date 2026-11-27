@@ -37,6 +37,19 @@ import {
   togglePanelHiddenState,
   upsertSavedLayout,
 } from "../engine/ui/panelLayout.ts";
+import {
+  isTilesetDocked,
+  joinBottomArea,
+  setBottomEditor,
+  setBottomSplitRatio,
+  setBottomVisible,
+  setSidebarEditor,
+  setTilesetDocked,
+  splitBottomArea,
+  toggleBottomArea,
+  type AreaEditorId,
+  type AreasState,
+} from "../engine/ui/areaEditors.ts";
 import type { BrushShape, CustomBrushData } from "../engine/tools/brush";
 import type { DitherPattern } from "../engine/tools/dither";
 import type { GradientMode } from "../engine/tools/gradient";
@@ -128,13 +141,25 @@ function layoutOf(s: {
   dockedPanelOrder: PanelLayoutState["dockedPanelOrder"];
   panelSides: PanelLayoutState["panelSides"];
   hiddenPanels: PanelLayoutState["hiddenPanels"];
+  areas: PanelLayoutState["areas"];
 }): PanelLayoutState {
   return {
     detachedPanels: s.detachedPanels,
     dockedPanelOrder: s.dockedPanelOrder,
     panelSides: s.panelSides,
     hiddenPanels: s.hiddenPanels,
+    areas: s.areas,
   };
+}
+
+/** Persist a changed areas map and keep the legacy tileset-docked flag in sync. */
+function commitAreas(
+  s: Parameters<typeof layoutOf>[0],
+  areas: AreasState
+): Partial<{ areas: AreasState; tilesetBrowserDocked: boolean }> | typeof s {
+  if (areas === s.areas) return s;
+  savePanelLayout({ ...layoutOf(s), areas });
+  return { areas, tilesetBrowserDocked: isTilesetDocked(areas) };
 }
 
 const PANEL_WIDTHS_STORAGE_KEY = "pixet.panelWidths.v1";
@@ -831,6 +856,7 @@ interface EditorState {
   dockedPanelOrder: Record<WorkspaceMode, PanelId[]>;
   panelSides: Partial<Record<PanelId, DockSide>>;
   hiddenPanels: Partial<Record<PanelId, boolean>>;
+  areas: AreasState;
   savedLayouts: SavedLayout[];
   saveLayoutModalOpen: boolean;
   studio3d: Studio3DState;
@@ -1143,6 +1169,13 @@ interface EditorState {
   togglePanelHidden: (id: PanelId) => void;
   setPanelHidden: (id: PanelId, hidden: boolean) => void;
   resetWorkspaceLayout: (mode: WorkspaceMode) => void;
+  setSidebarAreaEditor: (mode: WorkspaceMode, id: AreaEditorId) => void;
+  setBottomAreaEditor: (mode: WorkspaceMode, index: number, id: AreaEditorId) => void;
+  splitBottomArea: (mode: WorkspaceMode) => void;
+  joinBottomArea: (mode: WorkspaceMode, closeIndex?: number) => void;
+  setBottomSplitRatio: (mode: WorkspaceMode, ratio: number) => void;
+  setBottomAreaVisible: (mode: WorkspaceMode, visible: boolean) => void;
+  toggleBottomAreaVisible: (mode: WorkspaceMode, timelineAllowed: boolean) => void;
   saveCurrentLayout: (name: string) => void;
   applySavedLayout: (name: string) => void;
   deleteSavedLayoutByName: (name: string) => void;
@@ -1347,7 +1380,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeTilesetIndex: 0,
   tileBrushFlags: { flipH: false, flipV: false, flipD: false },
   tilesetBrowserZoom: 2,
-  tilesetBrowserDocked: false,
+  tilesetBrowserDocked: isTilesetDocked(initialPanelLayout.areas),
   hoveredTileCell: null,
   tileBrush: null,
   tileBrushAnchor: "topLeft",
@@ -1555,6 +1588,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   dockedPanelOrder: initialPanelLayout.dockedPanelOrder,
   panelSides: initialPanelLayout.panelSides,
   hiddenPanels: initialPanelLayout.hiddenPanels,
+  areas: initialPanelLayout.areas,
   savedLayouts: loadSavedLayouts(),
   saveLayoutModalOpen: false,
   studio3d: { ...DEFAULT_STUDIO3D_STATE },
@@ -1756,7 +1790,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setTilesetBrowserZoom: (z) =>
     set({ tilesetBrowserZoom: Math.max(1, Math.min(4, Math.round(z))) }),
   toggleTilesetBrowserDocked: () =>
-    set((s) => ({ tilesetBrowserDocked: !s.tilesetBrowserDocked })),
+    set((s) => {
+      const areas = setTilesetDocked(s.areas, !s.tilesetBrowserDocked);
+      savePanelLayout({ ...layoutOf(s), areas });
+      return { areas, tilesetBrowserDocked: isTilesetDocked(areas) };
+    }),
   setHoveredTileCell: (hoveredTileCell) => set({ hoveredTileCell }),
   setTileBrush: (tileBrush) => set({ tileBrush }),
   setTileBrushAnchor: (tileBrushAnchor) => set({ tileBrushAnchor }),
@@ -2899,8 +2937,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((s) => {
       const next = resetWorkspaceLayoutState(layoutOf(s), mode);
       savePanelLayout(next);
-      return next;
+      return { ...next, tilesetBrowserDocked: isTilesetDocked(next.areas) };
     }),
+  setSidebarAreaEditor: (mode, id) =>
+    set((s) => commitAreas(s, setSidebarEditor(s.areas, mode, id))),
+  setBottomAreaEditor: (mode, index, id) =>
+    set((s) => commitAreas(s, setBottomEditor(s.areas, mode, index, id))),
+  splitBottomArea: (mode) =>
+    set((s) => commitAreas(s, splitBottomArea(s.areas, mode))),
+  joinBottomArea: (mode, closeIndex) =>
+    set((s) => commitAreas(s, joinBottomArea(s.areas, mode, closeIndex))),
+  setBottomSplitRatio: (mode, ratio) =>
+    set((s) => commitAreas(s, setBottomSplitRatio(s.areas, mode, ratio))),
+  setBottomAreaVisible: (mode, visible) =>
+    set((s) => commitAreas(s, setBottomVisible(s.areas, mode, visible))),
+  toggleBottomAreaVisible: (mode, timelineAllowed) =>
+    set((s) => commitAreas(s, toggleBottomArea(s.areas, mode, timelineAllowed))),
   dockAllPanels: () =>
     set((s) => {
       const next = dockAllPanelsState(layoutOf(s));
@@ -2963,7 +3015,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set(() => {
       const next = createDefaultPanelLayout();
       savePanelLayout(next);
-      return next;
+      return { ...next, tilesetBrowserDocked: isTilesetDocked(next.areas) };
     }),
   saveCurrentLayout: (name) =>
     set((s) => {
@@ -2992,6 +3044,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         leftPanelWidth: snap.leftPanelWidth,
         timelineHeight: snap.timelineHeight,
         timelineHeightManual: true,
+        tilesetBrowserDocked: isTilesetDocked(snap.panelLayout.areas),
       };
     }),
   deleteSavedLayoutByName: (name) =>
