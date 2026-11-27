@@ -17,7 +17,8 @@ import {
   Studio3DViewportAsync,
 } from "./components/lazyWorkspaces";
 import { StatusBar } from "./components/StatusBar";
-import { Timeline } from "./components/Timeline";
+import { BottomAreas } from "./components/areas/BottomAreas";
+import { useVisibleBottomEditors } from "./components/areas/useAreaLayout";
 import { ImportTilesetModal } from "./components/tiles/ImportTilesetModal";
 import { ToolOptionsBar } from "./components/ToolOptionsBar";
 import { ToolRail } from "./components/ToolRail";
@@ -58,7 +59,6 @@ import {
   pickImageFileForImport,
 } from "./engine/io/imageImport";
 import { useEditorStore } from "./store/editorStore";
-import { TilesetBrowserPanel } from "./components/tiles/TilesetBrowserPanel";
 import {
   deleteSelectedElements,
   extrudeFaces,
@@ -90,33 +90,12 @@ import {
   findRecoverableWork,
   initDocumentLifecycle,
 } from "./engine/io/documentLifecycle";
-import {
-  getStudio3DFlatMode,
-  studio3DFlatModeShowsTimeline,
-} from "./engine/model3d/studio3dModes";
 import { loadShowOnStartup } from "./engine/io/recentFiles";
 
 export function App() {
   const panelsCollapsed = useEditorStore((s) => s.panelsCollapsed);
-  const timelineCollapsed = useEditorStore((s) => s.timelineCollapsed);
-  const timelineHeight = useEditorStore((s) => s.timelineHeight);
   const workspaceMode = useEditorStore((s) => s.workspaceMode);
-  const studio3dFlatMode = useEditorStore((s) =>
-    getStudio3DFlatMode({
-      workspaceKind: s.studio3d.workspaceKind,
-      mode: s.studio3d.mode,
-      subMode: s.studio3d.subMode,
-    })
-  );
-  // The sprite timeline is irrelevant in Nodes and in the low-poly modeller
-  // (except its Animate sub-mode, which reuses this dock for 3D keyframes).
-  const showTimeline =
-    workspaceMode !== "nodes" &&
-    !(
-      workspaceMode === "studio3d" &&
-      !studio3DFlatModeShowsTimeline(studio3dFlatMode)
-    );
-  const tilesetBrowserDocked = useEditorStore((s) => s.tilesetBrowserDocked);
+  const bottomEditors = useVisibleBottomEditors();
   const setRightPanelWidth = useEditorStore((s) => s.setRightPanelWidth);
   const setLeftPanelWidth = useEditorStore((s) => s.setLeftPanelWidth);
   const leftPanelWidth = useEditorStore((s) => s.leftPanelWidth);
@@ -1111,27 +1090,15 @@ export function App() {
           <div id="floating-panels-root" className="floating-panels-root" />
         </div>
 
-        {!panelsCollapsed && showTimeline && (
-          <>
-            {!timelineCollapsed && (
+        {!panelsCollapsed && bottomEditors.length > 0 && (
+          <BottomAreas
+            resizer={
               <div
                 className={`resizer-horizontal ${draggingTimeline ? "dragging" : ""}`}
                 onMouseDown={() => setDraggingTimeline(true)}
               />
-            )}
-            {workspaceMode === "tiles" && tilesetBrowserDocked ? (
-              <div
-                className="tiles-docked-browser"
-                style={{ height: timelineHeight }}
-              >
-                <TilesetBrowserPanel docked />
-              </div>
-            ) : (
-              <ErrorBoundary name="Timeline" fallback="region">
-                <Timeline />
-              </ErrorBoundary>
-            )}
-          </>
+            }
+          />
         )}
       </main>
 

@@ -1,3 +1,10 @@
+import {
+  createDefaultAreas,
+  resetAreas,
+  sanitizeAreas,
+  type AreasState,
+} from "./areaEditors.ts";
+
 export type PanelWorkspace = "draw" | "tiles" | "rig" | "studio3d" | "nodes" | "data";
 
 export type PanelId =
@@ -120,6 +127,8 @@ export interface PanelLayoutState {
   panelSides: Partial<Record<PanelId, DockSide>>;
   /** Hidden panels render nothing. Only `true` entries are stored. */
   hiddenPanels: Partial<Record<PanelId, boolean>>;
+  /** Swappable area editors (bottom strip + sidebar) per workspace. */
+  areas: AreasState;
 }
 
 export const MIN_DOCK_WIDTH = 230;
@@ -165,6 +174,7 @@ export function createDefaultPanelLayout(): PanelLayoutState {
     },
     panelSides: {},
     hiddenPanels: {},
+    areas: createDefaultAreas(),
   };
 }
 
@@ -390,6 +400,7 @@ export function resetWorkspaceLayoutState(
     detachedPanels: keep(state.detachedPanels),
     panelSides: keep(state.panelSides),
     hiddenPanels: keep(state.hiddenPanels),
+    areas: resetAreas(state.areas, ws),
     dockedPanelOrder: {
       ...state.dockedPanelOrder,
       [ws]: [...DEFAULT_DOCKED_ORDER[ws]],
@@ -530,7 +541,13 @@ function parsePanelLayoutObject(parsed: unknown): PanelLayoutState {
     }
   }
 
-  return { detachedPanels, dockedPanelOrder, panelSides, hiddenPanels };
+  return {
+    detachedPanels,
+    dockedPanelOrder,
+    panelSides,
+    hiddenPanels,
+    areas: sanitizeAreas(src.areas),
+  };
 }
 
 /** Accepts the legacy format (no sides/hidden) and yields defaults for them. */
