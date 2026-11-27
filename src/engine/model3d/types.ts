@@ -1,3 +1,5 @@
+import type { ModelModifier } from "./modifierTypes.ts";
+
 export type Vec2 = [number, number];
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number]; // [x, y, z, w]
@@ -74,6 +76,8 @@ export interface ModelNode {
   transform: Transform3D;
   cuboid?: CuboidData;
   mesh?: PolyMeshData;
+  /** Non-destructive modifier stack (mesh nodes only). Evaluate via getEvaluatedMesh(). */
+  modifiers?: ModelModifier[];
 }
 
 export type ModelMaterialSource =
