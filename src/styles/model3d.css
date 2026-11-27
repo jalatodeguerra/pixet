@@ -609,3 +609,30 @@
   background: var(--bg-root);
   cursor: pointer;
 }
+
+.m3d-modal-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 4px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent-border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.m3d-box-select {
+  position: absolute;
+  border: 1px dashed var(--text-primary);
+  background: var(--accent-soft);
+  pointer-events: none;
+  z-index: 5;
+}

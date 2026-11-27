@@ -470,7 +470,7 @@ export function TopBar() {
         <button
           type="button"
           className={`icon-action-btn ${panelsCollapsed ? "active" : ""}`}
-          title="Toggle Panels (Tab)"
+          title="Toggle Panels (Tab; in 3D Model mode Tab switches Object/Edit Mode)"
           onClick={togglePanelsCollapsed}
         >
           {panelsCollapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}

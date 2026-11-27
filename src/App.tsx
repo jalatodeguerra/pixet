@@ -60,10 +60,11 @@ import {
 } from "./engine/io/imageImport";
 import { useEditorStore } from "./store/editorStore";
 import {
-  deleteSelectedElements,
   extrudeFaces,
   fillOrBridgeSelection,
 } from "./engine/model3d/meshOps";
+import { deleteSelectedMeshElements } from "./engine/model3d/editMode";
+import { handleModelModeKeyDown } from "./components/studio3d/modelModeKeys";
 import { DEFAULT_MODEL3D_MATERIAL_ID } from "./engine/model3d/Model3DEngine";
 import {
   copyTileSelectionToClipboard,
@@ -83,7 +84,6 @@ import {
   stepTileCursor,
   type TileCursorStepDir,
 } from "./engine/model3d/tileStamp";
-import type { SelectionGranularity } from "./engine/model3d/types";
 import { DocumentDialogs } from "./components/DocumentDialogs";
 import { StartScreen } from "./components/StartScreen";
 import {
@@ -280,6 +280,14 @@ export function App() {
         stNow.workspaceMode === "studio3d" &&
         stNow.studio3d.workspaceKind === "lowpoly3d"
       ) {
+        // Blender-style Object/Edit Mode keymap (Tab, G/R/S, E, I, B, 1-3, ...).
+        if (
+          stNow.studio3d.subMode === "model" &&
+          handleModelModeKeyDown(e)
+        ) {
+          return;
+        }
+
         if ((e.ctrlKey || e.metaKey) && !e.altKey) {
           const ctrlKey = e.key.toLowerCase();
           if (ctrlKey === "z") {
@@ -406,42 +414,7 @@ export function App() {
         if (e.key === "Delete" || e.key === "Backspace") {
           e.preventDefault();
           const eng = pixelEngine.model3d;
-          const gran = eng.selectionGranularity;
-          const activeNode = eng.activeNodeId ? eng.getNode(eng.activeNodeId) : undefined;
-          if (
-            gran !== "object" &&
-            activeNode &&
-            !activeNode.locked &&
-            activeNode.kind === "mesh" &&
-            activeNode.mesh
-          ) {
-            const selVerts = eng.selectedVertices[activeNode.id] ?? [];
-            const selEdges = eng.selectedEdges[activeNode.id] ?? [];
-            const selFaces = eng.selectedFaces[activeNode.id] ?? [];
-            const hasSubSel =
-              (gran === "vertex" && selVerts.length > 0) ||
-              (gran === "edge" && selEdges.length > 0) ||
-              (gran === "face" && selFaces.length > 0);
-            if (hasSubSel) {
-              let deletedCount = 0;
-              mutateModel3D("Delete Mesh Elements", (m) => {
-                const n = m.getNode(activeNode.id);
-                if (!n || n.kind !== "mesh" || !n.mesh) return;
-                const res = deleteSelectedElements(n.mesh, gran, selVerts, selEdges, selFaces);
-                deletedCount = res.deletedFaceCount;
-                m.updateNode(activeNode.id, { mesh: res.mesh });
-                m.selectedVertices[activeNode.id] = [];
-                m.selectedEdges[activeNode.id] = [];
-                m.selectedFaces[activeNode.id] = [];
-              });
-              stNow.setStatusMessage(
-                deletedCount > 0
-                  ? `Deleted ${deletedCount} face(s)`
-                  : "No faces deleted"
-              );
-              return;
-            }
-          }
+          if (deleteSelectedMeshElements()) return;
           const ids = [...eng.selectedNodeIds];
           if (ids.length > 0) {
             mutateModel3D("Delete Nodes", (m) => {
@@ -623,31 +596,17 @@ export function App() {
           stNow.patchStudio3D({ gizmoMode: "move" });
           return;
         }
-        if (key === "e") {
+        // In the Model sub-mode E/R are Edit Mode extrude / modal rotate (see modelModeKeys.ts);
+        // the rotate/scale gizmos stay available on the tool rail. Other sub-modes keep E/R.
+        if (key === "e" && stNow.studio3d.subMode !== "model") {
           e.preventDefault();
           stNow.patchStudio3D({ gizmoMode: "rotate" });
           return;
         }
-        if (key === "r") {
+        if (key === "r" && stNow.studio3d.subMode !== "model") {
           e.preventDefault();
           stNow.patchStudio3D({ gizmoMode: "scale" });
           return;
-        }
-
-        if (stNow.studio3d.subMode === "model") {
-          const granularityMap: Record<string, SelectionGranularity> = {
-            "1": "object",
-            "2": "vertex",
-            "3": "edge",
-            "4": "face",
-          };
-          const mappedGranularity = granularityMap[e.key];
-          if (mappedGranularity) {
-            e.preventDefault();
-            pixelEngine.model3d.setSelectionGranularity(mappedGranularity);
-            stNow.bumpModel3DVersion();
-            return;
-          }
         }
 
         // Do not allow B, E, G, M, V, Delete, etc. to fall through to Draw shortcuts

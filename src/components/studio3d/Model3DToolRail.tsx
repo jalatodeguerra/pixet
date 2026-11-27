@@ -41,7 +41,12 @@ import {
   flipTileCursor,
   rotateTileCursorCW,
 } from "../../engine/model3d/tileStamp";
-import type { GizmoMode, SelectionGranularity } from "../../engine/model3d/types";
+import {
+  setEditGranularity,
+  toggleEditMode,
+  type EditGranularity,
+} from "../../engine/model3d/editMode";
+import type { GizmoMode } from "../../engine/model3d/types";
 import { useEditorStore } from "../../store/editorStore";
 
 const GIZMO_TOOLS: readonly {
@@ -56,15 +61,23 @@ const GIZMO_TOOLS: readonly {
   { id: "scale", label: "Scale", shortcut: "R", icon: Expand },
 ];
 
-const GRANULARITY_MODES: readonly {
-  id: SelectionGranularity;
+/** In the Model sub-mode E/R/S are Edit Mode / modal keys, so the rotate/scale gizmos are click-only. */
+function gizmoTitle(tool: (typeof GIZMO_TOOLS)[number], subMode: string): string {
+  if (subMode !== "model") return `${tool.label} (${tool.shortcut})`;
+  if (tool.id === "rotate") return "Rotate Gizmo (click) — press R for modal Rotate";
+  if (tool.id === "scale") return "Scale Gizmo (click) — press S for modal Scale";
+  return `${tool.label} (${tool.shortcut})`;
+}
+
+const EDIT_GRANULARITIES: readonly {
+  id: EditGranularity;
   label: string;
+  name: string;
   shortcut: string;
 }[] = [
-  { id: "object", label: "Obj", shortcut: "1" },
-  { id: "vertex", label: "Vtx", shortcut: "2" },
-  { id: "edge", label: "Edg", shortcut: "3" },
-  { id: "face", label: "Fac", shortcut: "4" },
+  { id: "vertex", label: "Vert", name: "Vertex", shortcut: "1" },
+  { id: "edge", label: "Edge", name: "Edge", shortcut: "2" },
+  { id: "face", label: "Face", name: "Face", shortcut: "3" },
 ];
 
 const PAINT_TOOLS: readonly {
@@ -93,6 +106,7 @@ export function Model3DToolRail() {
 
   const engine = pixelEngine.model3d;
   const granularity = engine.selectionGranularity;
+  const isEdit = granularity !== "object";
   const hasSelected = engine.selectedNodeIds.length > 0;
   const activeNode = engine.activeNodeId
     ? engine.getNode(engine.activeNodeId) ?? null
@@ -165,8 +179,8 @@ export function Model3DToolRail() {
             key={tool.id}
             type="button"
             className={`tool-btn ${active ? "active" : ""}`}
-            title={`${tool.label} (${tool.shortcut})`}
-            aria-label={`${tool.label} (${tool.shortcut})`}
+            title={gizmoTitle(tool, studio3d.subMode)}
+            aria-label={gizmoTitle(tool, studio3d.subMode)}
             aria-pressed={active}
             onClick={() => patchStudio3D({ gizmoMode: tool.id })}
           >
@@ -179,25 +193,39 @@ export function Model3DToolRail() {
 
       {studio3d.subMode === "model" && (
         <>
-          {GRANULARITY_MODES.map((g) => {
-            const active = granularity === g.id;
-            return (
-              <button
-                key={g.id}
-                type="button"
-                className={`tool-btn ${active ? "active" : ""}`}
-                title={`${g.label} Selection (${g.shortcut})`}
-                aria-pressed={active}
-                style={{ fontSize: 9, fontFamily: "var(--font-mono)" }}
-                onClick={() => {
-                  pixelEngine.model3d.setSelectionGranularity(g.id);
-                  useEditorStore.getState().bumpModel3DVersion();
-                }}
-              >
-                {g.label}
-              </button>
-            );
-          })}
+          <button
+            type="button"
+            className={`tool-btn ${isEdit ? "active" : ""}`}
+            title={
+              isEdit
+                ? "Edit Mode — press Tab to return to Object Mode"
+                : "Object Mode — press Tab to enter Edit Mode"
+            }
+            aria-label={isEdit ? "Edit Mode (Tab)" : "Object Mode (Tab)"}
+            aria-pressed={isEdit}
+            style={{ fontSize: 9, fontFamily: "var(--font-mono)" }}
+            onClick={toggleEditMode}
+          >
+            {isEdit ? "Edit" : "Obj"}
+          </button>
+          {isEdit &&
+            EDIT_GRANULARITIES.map((g) => {
+              const active = granularity === g.id;
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  className={`tool-btn ${active ? "active" : ""}`}
+                  title={`${g.name} Select (${g.shortcut})`}
+                  aria-label={`${g.name} Select (${g.shortcut})`}
+                  aria-pressed={active}
+                  style={{ fontSize: 9, fontFamily: "var(--font-mono)" }}
+                  onClick={() => setEditGranularity(g.id)}
+                >
+                  {g.label}
+                </button>
+              );
+            })}
           <div className="tool-rail-sep" />
           <button
             type="button"
