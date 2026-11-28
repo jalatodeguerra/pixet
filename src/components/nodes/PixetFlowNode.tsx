@@ -15,7 +15,9 @@ import {
   mutateActiveNodeGraph,
   updateActiveNodeGraphLive,
 } from "../../engine/nodes/nodeActions";
-import type { NodeInstance, ParamDef } from "../../engine/nodes/types";
+import type { NodeInstance, ParamDef, SocketDef } from "../../engine/nodes/types";
+
+type OutputSocketDef = SocketDef;
 import { useEditorStore } from "../../store/editorStore";
 import { PALETTE_PRESETS } from "../../utils/paletteParser";
 
@@ -407,6 +409,21 @@ function renderInlineParam(
   return null;
 }
 
+/** True when an output carries the same kind of value as the parameter it shares a name with. */
+function exposesParam(out: OutputSocketDef, param: ParamDef): boolean {
+  switch (out.type) {
+    case "float":
+      return param.kind === "float" || param.kind === "int";
+    case "color":
+    case "rgba":
+      return param.kind === "color";
+    case "palette":
+      return param.kind === "palette";
+    default:
+      return false;
+  }
+}
+
 export function PixetFlowNode({ data, selected }: NodeProps<PixetFlowNodeType>) {
   const showThumbnails = useEditorStore((s) => s.nodesUi.showThumbnails);
   const documentPalette = useEditorStore((s) => s.palette);
@@ -429,6 +446,24 @@ export function PixetFlowNode({ data, selected }: NodeProps<PixetFlowNodeType>) 
   }
 
   const hasParams = def.params.length > 0;
+  const paramsVisible = hasParams && !instance.collapsed;
+
+  // Blender-style alignment: an output that exposes one of the node's parameters
+  // (same id or label, e.g. Macro 1..4, Value, Color) sits on that parameter's row,
+  // on the right edge, the same way a parameter's input socket sits on its left edge.
+  // Outputs without a matching parameter keep their own row at the top.
+  const outputForParam = new Map<string, OutputSocketDef>();
+  if (paramsVisible) {
+    for (const out of def.outputs) {
+      const param =
+        def.params.find((p) => p.id === out.id) ?? def.params.find((p) => p.label === out.label);
+      if (param && exposesParam(out, param) && !outputForParam.has(param.id)) {
+        outputForParam.set(param.id, out);
+      }
+    }
+  }
+  const alignedOutputIds = new Set(Array.from(outputForParam.values(), (o) => o.id));
+  const topOutputs = def.outputs.filter((o) => !alignedOutputIds.has(o.id));
 
   return (
     <div
@@ -464,9 +499,9 @@ export function PixetFlowNode({ data, selected }: NodeProps<PixetFlowNodeType>) 
         </span>
       </div>
 
-      {def.outputs.length > 0 && (
+      {topOutputs.length > 0 && (
         <div className="nodes-socket-list is-outputs">
-          {def.outputs.map((out) => (
+          {topOutputs.map((out) => (
             <div
               key={out.id}
               className="nodes-socket-row is-output"
@@ -519,9 +554,27 @@ export function PixetFlowNode({ data, selected }: NodeProps<PixetFlowNodeType>) 
 
       {!instance.collapsed && hasParams && (
         <div className="nodes-inline-params">
-          {def.params.map((p) =>
-            renderInlineParam(instance, p, drivenParams, drivenSet, documentPalette)
-          )}
+          {def.params.map((p) => {
+            const control = renderInlineParam(instance, p, drivenParams, drivenSet, documentPalette);
+            const out = outputForParam.get(p.id);
+            if (!out) return control;
+            return (
+              <div
+                key={p.id}
+                className={`nodes-param-out-row ${p.kind === "palette" ? "is-tall" : ""}`}
+                title={`${out.label} (${out.type})`}
+              >
+                {control}
+                <Handle
+                  type="source"
+                  position={Position.Right}
+                  id={out.id}
+                  className="nodes-handle nodes-param-out-handle"
+                  style={{ background: SOCKET_COLORS[out.type] }}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

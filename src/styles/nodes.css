@@ -509,6 +509,21 @@
   flex: 1;
 }
 
+/* A parameter row that also carries the output exposing that parameter's value. */
+.nodes-param-out-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.nodes-canvas-wrap .nodes-param-out-handle.react-flow__handle {
+  right: -9px;
+}
+
+.nodes-param-out-row.is-tall .nodes-param-out-handle.react-flow__handle {
+  top: 9px;
+}
+
 .nodes-canvas-wrap .nodes-param-handle.react-flow__handle {
   left: -9px;
   width: 7px;
