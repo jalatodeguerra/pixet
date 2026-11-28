@@ -18,7 +18,7 @@ import {
   wouldCreateCycle,
 } from "../src/engine/nodes/NodeGraph.ts";
 import { NodeHistory } from "../src/engine/nodes/NodeHistory.ts";
-import { NodeRegistry, canConnectSockets } from "../src/engine/nodes/NodeRegistry.ts";
+import { NodeRegistry, canConnectSockets, linkConversion } from "../src/engine/nodes/NodeRegistry.ts";
 import {
   CUSTOM_PALETTE_SOURCE,
   DOCUMENT_PALETTE_SOURCE,
@@ -104,6 +104,36 @@ test("Socket coercion matrix enforces strict material/palette rules and allows v
   assert.deepEqual(canConnectSockets("rgba", "material"), { allowed: false, coerced: false });
   assert.deepEqual(canConnectSockets("palette", "rgba"), { allowed: false, coerced: false });
   assert.deepEqual(canConnectSockets("material", "material"), { allowed: true, coerced: false });
+});
+
+test("Blender-style links: value sockets interconvert, palette/material stay strict", () => {
+  // Newly allowed, like Blender's implicit conversion.
+  assert.deepEqual(canConnectSockets("gray", "normal"), { allowed: true, coerced: true });
+  assert.deepEqual(canConnectSockets("gray", "vec2"), { allowed: true, coerced: true });
+  assert.deepEqual(canConnectSockets("rgba", "vec2"), { allowed: true, coerced: true });
+  assert.deepEqual(canConnectSockets("normal", "gray"), { allowed: true, coerced: true });
+  assert.deepEqual(canConnectSockets("float", "rgba"), { allowed: true, coerced: true });
+  assert.deepEqual(canConnectSockets("float", "normal"), { allowed: true, coerced: true });
+
+  // A per-pixel texture can't become a single CPU number.
+  assert.deepEqual(canConnectSockets("gray", "float"), { allowed: false, coerced: false });
+  assert.deepEqual(canConnectSockets("rgba", "float"), { allowed: false, coerced: false });
+  assert.deepEqual(canConnectSockets("float", "palette"), { allowed: false, coerced: false });
+  assert.deepEqual(canConnectSockets("gray", "material"), { allowed: false, coerced: false });
+});
+
+test("linkConversion picks the conversion the evaluator runs", () => {
+  assert.equal(linkConversion("rgba", "rgba"), "none");
+  assert.equal(linkConversion("gray", "rgba"), "broadcast");
+  assert.equal(linkConversion("gray", "normal"), "broadcast");
+  assert.equal(linkConversion("rgba", "gray"), "luminance");
+  assert.equal(linkConversion("normal", "gray"), "luminance");
+  assert.equal(linkConversion("normal", "rgba"), "passthrough");
+  assert.equal(linkConversion("rgba", "vec2"), "passthrough");
+  assert.equal(linkConversion("float", "gray"), "fillScalar");
+  assert.equal(linkConversion("float", "rgba"), "fillColor");
+  assert.equal(linkConversion("gray", "float"), "invalid");
+  assert.equal(linkConversion("palette", "rgba"), "invalid");
 });
 
 test("connectSockets rejects cycles and replaces existing input wire", () => {

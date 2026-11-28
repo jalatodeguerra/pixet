@@ -28,33 +28,72 @@ export const CATEGORY_COLORS: Record<NodeCategory, string> = {
   outputs: "#34d399",
 };
 
-const COERCION_PAIRS: ReadonlySet<string> = new Set([
-  "rgba->gray",
-  "gray->rgba",
-  "color->rgba",
-  "float->gray",
-  "color->float",
-  "float->vec2",
-  "normal->rgba",
-]);
+/**
+ * How a socket's data is physically carried during evaluation.
+ * - scalar: a single CPU number (control nodes: LFO, Macro, Math)
+ * - scalarTex: a single-channel texture (gray / height masks)
+ * - colorTex: an RGBA texture (rgba, color, normal and vec2 all share it)
+ * - palette / material: special bundles that only link to their own type
+ */
+export type SocketRepresentation = "scalar" | "scalarTex" | "colorTex" | "palette" | "material";
+
+export function socketRepresentation(type: SocketType): SocketRepresentation {
+  switch (type) {
+    case "float":
+      return "scalar";
+    case "gray":
+      return "scalarTex";
+    case "palette":
+      return "palette";
+    case "material":
+      return "material";
+    default:
+      return "colorTex";
+  }
+}
+
+/**
+ * What the evaluator does to the data on a link, Blender-style implicit conversion.
+ * - none: same socket type
+ * - passthrough: same storage, different meaning (e.g. normal -> rgba, rgba -> vec2), copied as-is
+ * - broadcast: gray texture -> RGBA (g, g, g, 1)
+ * - luminance: RGBA texture -> gray, Rec.709 luminance times alpha
+ * - fillScalar: CPU float -> solid gray texture
+ * - fillColor: CPU float -> solid RGBA texture (v, v, v, 1)
+ * - invalid: the link is refused
+ */
+export type LinkConversion =
+  | "none"
+  | "passthrough"
+  | "broadcast"
+  | "luminance"
+  | "fillScalar"
+  | "fillColor"
+  | "invalid";
+
+export function linkConversion(fromType: SocketType, toType: SocketType): LinkConversion {
+  if (fromType === toType) return "none";
+  const from = socketRepresentation(fromType);
+  const to = socketRepresentation(toType);
+  // Palettes and material bundles are like Blender's shader socket: same type only.
+  if (from === "palette" || from === "material" || to === "palette" || to === "material") {
+    return "invalid";
+  }
+  if (from === to) return "passthrough";
+  if (from === "scalar") return to === "scalarTex" ? "fillScalar" : "fillColor";
+  // A per-pixel texture can't collapse into one CPU number (like a field -> single value in Blender).
+  if (to === "scalar") return "invalid";
+  if (from === "scalarTex" && to === "colorTex") return "broadcast";
+  return "luminance";
+}
 
 export function canConnectSockets(
   fromType: SocketType,
   toType: SocketType
 ): { allowed: boolean; coerced: boolean } {
-  if (fromType === toType) {
-    return { allowed: true, coerced: false };
-  }
-  if (fromType === "material" || toType === "material") {
-    return { allowed: false, coerced: false };
-  }
-  if (fromType === "palette" || toType === "palette") {
-    return { allowed: false, coerced: false };
-  }
-  if (COERCION_PAIRS.has(`${fromType}->${toType}`)) {
-    return { allowed: true, coerced: true };
-  }
-  return { allowed: false, coerced: false };
+  const conv = linkConversion(fromType, toType);
+  if (conv === "invalid") return { allowed: false, coerced: false };
+  return { allowed: true, coerced: conv !== "none" };
 }
 
 function cloneParamDefault(param: ParamDef): unknown {

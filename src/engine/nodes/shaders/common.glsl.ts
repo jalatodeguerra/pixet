@@ -142,27 +142,55 @@ ${SCALAR_PACK_GLSL}
 ${HASH_AND_MATH_GLSL}
 
 uniform sampler2D u_src;
-uniform int u_mode; // 0=rgba, 1=gray->rgba, 2=rgba->gray, 3=channelR, 4=channelG, 5=channelB, 6=channelA, 7=tile3x3
+// Set through uniform1f like every other custom uniform, so it must be a float here.
+uniform float u_mode; // 0=rgba, 1=gray->rgba, 2=rgba->gray, 3=channelR, 4=channelG, 5=channelB, 6=channelA, 7=tile3x3
 
 void main() {
-  vec2 uv = u_mode == 7 ? fract(v_uv * 3.0) : v_uv;
+  int mode = int(u_mode + 0.5);
+  vec2 uv = mode == 7 ? fract(v_uv * 3.0) : v_uv;
   vec4 c = texture(u_src, uv);
-  if (u_mode == 0 || u_mode == 7) {
+  if (mode == 0 || mode == 7) {
     outColor = c;
-  } else if (u_mode == 1) {
+  } else if (mode == 1) {
     float g = sampleScalar(u_src, uv);
     outColor = vec4(g, g, g, 1.0);
-  } else if (u_mode == 2) {
+  } else if (mode == 2) {
     float lum = luminance709(c.rgb) * c.a;
     outColor = encodeScalar(lum);
-  } else if (u_mode == 3) {
+  } else if (mode == 3) {
     outColor = vec4(c.r, c.r, c.r, 1.0);
-  } else if (u_mode == 4) {
+  } else if (mode == 4) {
     outColor = vec4(c.g, c.g, c.g, 1.0);
-  } else if (u_mode == 5) {
+  } else if (mode == 5) {
     outColor = vec4(c.b, c.b, c.b, 1.0);
   } else {
     outColor = vec4(c.a, c.a, c.a, 1.0);
+  }
+}
+`;
+
+/** Implicit conversion on a link between different socket types (see linkConversion). */
+export const LINK_CONVERT_FS = `#version 300 es
+${COMMON_UNIFORMS_GLSL}
+${SCALAR_PACK_GLSL}
+${HASH_AND_MATH_GLSL}
+
+uniform sampler2D u_src;
+uniform float u_mode; // 1=broadcast gray->rgba, 2=luminance rgba->gray, 3=fill scalar, 4=fill color
+uniform float u_value;
+
+void main() {
+  int mode = int(u_mode + 0.5);
+  if (mode == 3) {
+    outColor = encodeScalar(clamp(u_value, 0.0, 1.0));
+  } else if (mode == 4) {
+    outColor = vec4(vec3(u_value), 1.0);
+  } else if (mode == 1) {
+    float g = sampleScalar(u_src, v_uv);
+    outColor = vec4(g, g, g, 1.0);
+  } else {
+    vec4 c = texture(u_src, v_uv);
+    outColor = encodeScalar(luminance709(c.rgb) * c.a);
   }
 }
 `;
