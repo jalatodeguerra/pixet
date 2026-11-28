@@ -122,34 +122,37 @@
   color: #eab308;
 }
 
-.nodes-card-body {
-  display: flex;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 6px 0;
-}
-
-.nodes-sockets-col {
+/* Blender-style rows: outputs first (label right, socket on the right edge),
+   then the preview, then inputs and parameters (socket on the left edge). */
+.nodes-socket-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 0;
+  padding: 5px 0;
 }
 
-.nodes-sockets-col.is-outputs {
-  align-items: flex-end;
+.nodes-socket-list.is-inputs {
+  padding-top: 5px;
 }
 
 .nodes-socket-row {
   position: relative;
   display: flex;
   align-items: center;
-  height: 16px;
-  padding: 0 8px;
+  height: 18px;
+  padding: 0 9px;
   font-size: var(--fs-badge);
-  color: #b8b8b8;
+  color: #c8c8c8;
   white-space: nowrap;
+}
+
+.nodes-socket-row.is-output {
+  justify-content: flex-end;
+}
+
+.nodes-socket-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nodes-canvas-wrap .nodes-handle.react-flow__handle {
@@ -165,8 +168,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 7px;
-  border-bottom: 1px solid #262626;
+  padding: 4px 7px;
 }
 
 .nodes-thumb-canvas {
@@ -337,9 +339,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 5px 7px;
-  border-top: 1px solid #2b2b2b;
-  background: #1b1b1b;
+  padding: 2px 9px 7px;
 }
 
 .nodes-blender-slider {
@@ -510,7 +510,7 @@
 }
 
 .nodes-canvas-wrap .nodes-param-handle.react-flow__handle {
-  left: -11px;
+  left: -9px;
   width: 7px;
   height: 7px;
   min-width: 7px;
