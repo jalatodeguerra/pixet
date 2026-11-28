@@ -1,10 +1,10 @@
 import { FboPool, type FboEntry } from "./FboPool.ts";
 import { computeDownstreamNodes, computeReachableNodes, isParamSocketId, topologicalSort } from "./NodeGraph.ts";
-import { canConnectSockets, type NodeRegistry } from "./NodeRegistry.ts";
+import { linkConversion, type LinkConversion, type NodeRegistry } from "./NodeRegistry.ts";
 import { buildPaletteLutBytes, uploadPaletteLut } from "./PaletteLut.ts";
 import { blitWebGLCanvasTo2D, readTextureToRgba, uploadRgbaToTexture } from "./blitBridge.ts";
 import { buildPreviewMesh, type Preview3DMeshKind } from "./pbrPreview3d.ts";
-import { COERCE_BLIT_FS, FULLSCREEN_TRIANGLE_VS } from "./shaders/common.glsl.ts";
+import { COERCE_BLIT_FS, FULLSCREEN_TRIANGLE_VS, LINK_CONVERT_FS } from "./shaders/common.glsl.ts";
 import { PBR_PREVIEW_3D_FS, PBR_PREVIEW_3D_VS } from "./shaders/pbr.glsl.ts";
 import type { ModelNode } from "../model3d/types.ts";
 import type {
@@ -446,6 +446,15 @@ export class WebGL2NodeEvaluator {
     const scalarInputs: Record<string, number> = {};
     const effectiveParams: Record<string, unknown> = { ...node.params };
 
+    // Texture links that need a Blender-style implicit conversion, resolved below
+    // once the node's resolution is known.
+    const pendingConversions: Array<{
+      inputId: string;
+      conv: LinkConversion;
+      src: FboEntry | null;
+      scalar: number | undefined;
+    }> = [];
+
     for (const edge of graph.edges) {
       if (edge.toNode !== node.id) continue;
       const srcKey = socketCacheKey(edge.fromNode, edge.fromSocket);
@@ -474,7 +483,18 @@ export class WebGL2NodeEvaluator {
       if (palCached) {
         incomingPalette = palCached;
       }
-      const cached = this.fboCache.get(srcKey);
+      const cached = this.fboCache.get(srcKey) ?? null;
+      const inDef = def.inputs.find((i) => i.id === edge.toSocket);
+      const fromNode = graph.nodes.find((n) => n.id === edge.fromNode);
+      const outDef = fromNode
+        ? registry.get(fromNode.type)?.outputs.find((o) => o.id === edge.fromSocket)
+        : undefined;
+      const conv = inDef && outDef ? linkConversion(outDef.type, inDef.type) : "none";
+      if (conv === "invalid") continue;
+      if (conv === "broadcast" || conv === "luminance" || conv === "fillScalar" || conv === "fillColor") {
+        pendingConversions.push({ inputId: edge.toSocket, conv, src: cached, scalar: scalarVal });
+        continue;
+      }
       if (cached) incoming.set(edge.toSocket, cached);
     }
     this.effectiveParamsCache.set(node.id, effectiveParams);
@@ -507,12 +527,25 @@ export class WebGL2NodeEvaluator {
       return;
     }
 
-    // Bypass short-circuit
+    if (pendingConversions.length > 0) {
+      const textureSrc = pendingConversions.find((p) => p.src)?.src ?? null;
+      const fallbackRes =
+        node.resolution !== "inherit"
+          ? node.resolution
+          : incoming.values().next().value?.width ?? textureSrc?.width ?? graph.baseResolution;
+      for (const pc of pendingConversions) {
+        const converted = this.convertLinkInput(node.id, pc.inputId, pc.conv, pc.src, pc.scalar, fallbackRes);
+        if (converted) incoming.set(pc.inputId, converted);
+      }
+    }
+
+    // Bypass short-circuit: only pass through an input stored the same way as the output.
     if (node.bypassed && def.outputs.length > 0 && def.inputs.length > 0) {
       const primaryOut = def.outputs[0];
       const compatibleIn = def.inputs.find((inp) => {
         const has = incoming.get(inp.id);
-        return has && canConnectSockets(inp.type, primaryOut.type).allowed;
+        const conv = linkConversion(inp.type, primaryOut.type);
+        return has && (conv === "none" || conv === "passthrough");
       });
       if (compatibleIn) {
         const srcEntry = incoming.get(compatibleIn.id)!;
@@ -587,6 +620,52 @@ export class WebGL2NodeEvaluator {
       }
     }
     void registry;
+  }
+
+  /**
+   * Render the converted texture for one link into a per-(node, input) cache slot.
+   * Returns null when there is nothing to convert yet (e.g. source not evaluated).
+   */
+  private convertLinkInput(
+    nodeId: string,
+    inputId: string,
+    conv: LinkConversion,
+    src: FboEntry | null,
+    scalar: number | undefined,
+    fallbackRes: number
+  ): FboEntry | null {
+    const pool = this.pool!;
+    const isFill = conv === "fillScalar" || conv === "fillColor";
+    if (isFill && scalar === undefined) return null;
+    if (!isFill && !src) return null;
+    const prog = this.getOrCompileProgram(LINK_CONVERT_FS);
+    if (!prog) return null;
+
+    const toGray = conv === "luminance" || conv === "fillScalar";
+    const kind = pool.resolveKind(toGray ? "gray" : "rgba");
+    const res = src?.width ?? fallbackRes;
+    const key = `conv:${nodeId}:${inputId}`;
+    let target = this.fboCache.get(key);
+    if (!target || target.width !== res || target.height !== res || target.kind !== kind) {
+      if (target) pool.release(target);
+      target = pool.acquire(res, res, kind, this.evalTick);
+      this.fboCache.set(key, target);
+    }
+    target.lastUsedTick = this.evalTick;
+    if (src) src.lastUsedTick = this.evalTick;
+
+    const mode = conv === "broadcast" ? 1 : conv === "luminance" ? 2 : conv === "fillScalar" ? 3 : 4;
+    this.drawFullscreenPass(
+      prog,
+      target,
+      [{ unitName: "u_src", tex: src?.texture ?? this.fallbackTextures.get("black")! }],
+      res,
+      res,
+      0,
+      {},
+      { u_mode: mode, u_value: scalar ?? 0 }
+    );
+    return target;
   }
 
   private runMultiPassNode(
