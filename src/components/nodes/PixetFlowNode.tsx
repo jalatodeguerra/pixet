@@ -464,6 +464,27 @@ export function PixetFlowNode({ data, selected }: NodeProps<PixetFlowNodeType>) 
         </span>
       </div>
 
+      {def.outputs.length > 0 && (
+        <div className="nodes-socket-list is-outputs">
+          {def.outputs.map((out) => (
+            <div
+              key={out.id}
+              className="nodes-socket-row is-output"
+              title={`${out.label} (${out.type})`}
+            >
+              <span className="nodes-socket-label">{out.label}</span>
+              <Handle
+                type="source"
+                position={Position.Right}
+                id={out.id}
+                className="nodes-handle"
+                style={{ background: SOCKET_COLORS[out.type] }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
       {showThumbnails && def.outputs.length > 0 && !def.scalarEvaluate && !def.paletteEvaluate && (
         <div className="nodes-thumb-wrap">
           <canvas
@@ -475,10 +496,14 @@ export function PixetFlowNode({ data, selected }: NodeProps<PixetFlowNodeType>) 
         </div>
       )}
 
-      <div className="nodes-card-body">
-        <div className="nodes-sockets-col">
+      {def.inputs.length > 0 && (
+        <div className="nodes-socket-list is-inputs">
           {def.inputs.map((inp) => (
-            <div key={inp.id} className="nodes-socket-row" title={`${inp.label} (${inp.type})`}>
+            <div
+              key={inp.id}
+              className="nodes-socket-row is-input"
+              title={`${inp.label} (${inp.type})`}
+            >
               <Handle
                 type="target"
                 position={Position.Left}
@@ -486,26 +511,11 @@ export function PixetFlowNode({ data, selected }: NodeProps<PixetFlowNodeType>) 
                 className="nodes-handle"
                 style={{ background: SOCKET_COLORS[inp.type] }}
               />
-              <span>{inp.label}</span>
+              <span className="nodes-socket-label">{inp.label}</span>
             </div>
           ))}
         </div>
-
-        <div className="nodes-sockets-col is-outputs">
-          {def.outputs.map((out) => (
-            <div key={out.id} className="nodes-socket-row" title={`${out.label} (${out.type})`}>
-              <span>{out.label}</span>
-              <Handle
-                type="source"
-                position={Position.Right}
-                id={out.id}
-                className="nodes-handle"
-                style={{ background: SOCKET_COLORS[out.type] }}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {!instance.collapsed && hasParams && (
         <div className="nodes-inline-params">
